@@ -11,6 +11,7 @@ const EMPTY_SNAPSHOT: OsintSnapshot = {
   news: [],
   launches: [],
   naturalEvents: [],
+  gpsInterference: [],
   errors: [],
 };
 

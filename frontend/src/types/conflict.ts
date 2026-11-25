@@ -149,6 +149,7 @@ export interface OsintSnapshot {
   news: OsintNewsArticle[];
   launches: OsintLaunch[];
   naturalEvents: OsintNaturalEvent[];
+  gpsInterference: GpsInterferenceCell[];
   errors: string[];
 }
 
@@ -163,4 +164,13 @@ export interface OsintNaturalEvent {
   magnitude: number | null;
   magnitudeUnit: string | null;
   url: string | null;
+}
+
+export interface GpsInterferenceCell {
+  hex: string;
+  goodAircraft: number;
+  badAircraft: number;
+  aircraftCount: number;
+  affectedShare: number;
+  level: "low" | "medium" | "high";
 }

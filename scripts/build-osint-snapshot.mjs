@@ -41,7 +41,7 @@ function parseRssItems(xml, limit = 30) {
   }).filter((article) => article.title && article.url);
 }
 
-const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], news: [], launches: [], naturalEvents: [], errors: [] };
+const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], errors: [] };
 
 try {
   const payload = await getJson('https://api.adsb.lol/v2/mil');
@@ -139,5 +139,26 @@ try {
   result.sources.naturalEvents = 'NASA EONET + USGS significant earthquakes';
 } catch (error) { result.errors.push(`Natural events: ${error.message}`); }
 
+
+try {
+  const manifest = await getText('https://gpsjam.org/data/manifest.csv', 20000);
+  const rows = manifest.trim().split(String.fromCharCode(10));
+  const latestDate = rows[rows.length - 1].split(',')[0];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(latestDate)) throw new Error('Unexpected gpsjam manifest');
+  const csv = await getText(`https://gpsjam.org/data/${latestDate}-h3_4.csv`, 24000);
+  result.gpsInterference = csv.trim().split(String.fromCharCode(10)).slice(1).map((line) => {
+    const [hex, goodRaw, badRaw] = line.split(',');
+    const good = Number(goodRaw), bad = Number(badRaw), total = good + bad;
+    if (!hex || !Number.isFinite(total) || total < 3 || bad <= 0) return null;
+    const affectedShare = bad / total;
+    if (affectedShare < 0.02) return null;
+    return {
+      hex, goodAircraft: good, badAircraft: bad, aircraftCount: total, affectedShare,
+      level: affectedShare > 0.1 ? 'high' : affectedShare > 0.04 ? 'medium' : 'low',
+    };
+  }).filter(Boolean).sort((a, b) => b.affectedShare - a.affectedShare).slice(0, 500);
+  result.sources.gpsInterference = `gpsjam.org daily H3 interference (${latestDate})`;
+} catch (error) { result.errors.push(`gpsjam.org: ${error.message}`); }
+
 writeFileSync(outFile, JSON.stringify(result));
-console.log(`osint snapshot: ${result.militaryAircraft.length} aircraft, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events`);
+console.log(`osint snapshot: ${result.militaryAircraft.length} aircraft, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells`);

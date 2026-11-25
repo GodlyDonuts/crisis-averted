@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Globe, { type GlobeInstance } from "globe.gl";
+import { cellToBoundary } from "h3-js";
 import {
   ACESFilmicToneMapping,
   AdditiveBlending,
@@ -25,7 +26,7 @@ import {
 } from "three";
 import { assetPath } from "@/lib/assets";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import type { ConflictEvent, ConflictTheater, MilitaryAircraft, OsintLaunch, OsintNaturalEvent, SeverityKey } from "@/types/conflict";
+import type { ConflictEvent, ConflictTheater, MilitaryAircraft, OsintLaunch, OsintNaturalEvent, GpsInterferenceCell, SeverityKey } from "@/types/conflict";
 import { escapeHtml, formatRelativeTime, normalizeCategory, normalizeTheaterName, SEVERITY_META } from "@/lib/conflictData";
 
 export type GodEyeVisualMode = "cinematic" | "satellite";
@@ -40,6 +41,7 @@ export interface GodEyeLayerToggles {
   orbitalAssets: boolean;
   aircraft: boolean;
   environmental: boolean;
+  gpsInterference: boolean;
 }
 
 export interface GodEyeFocusTarget {
@@ -55,6 +57,7 @@ interface GodEyeGlobeProps {
   militaryAircraft: MilitaryAircraft[];
   launches: OsintLaunch[];
   naturalEvents: OsintNaturalEvent[];
+  gpsInterference: GpsInterferenceCell[];
   selectedEvent: ConflictEvent | null;
   selectedTheater: ConflictTheater | null;
   focusTarget: GodEyeFocusTarget | null;
@@ -96,7 +99,7 @@ interface SignalArc {
 interface BorderPath {
   points: [number, number, number][];
   intensity: number;
-  kind?: "border" | "aircraft";
+  kind?: "border" | "aircraft" | "gps";
 }
 
 type GeoJsonPosition = [number, number];
@@ -334,6 +337,7 @@ export default function GodEyeGlobe({
   militaryAircraft,
   launches,
   naturalEvents,
+  gpsInterference,
   selectedEvent,
   selectedTheater,
   focusTarget,
@@ -389,6 +393,17 @@ export default function GodEyeGlobe({
   }, [events]);
 
   const aircraftTracks = useMemo(() => aircraftTrackPaths(militaryAircraft), [militaryAircraft]);
+  const gpsInterferencePaths = useMemo((): BorderPath[] => {
+    return gpsInterference.map((cell) => {
+      const boundary = cellToBoundary(cell.hex);
+      const ring = [...boundary, boundary[0]];
+      return {
+        points: ring.map(([lat, lng]) => [lat, lng, 0.0065] as [number, number, number]),
+        intensity: cell.affectedShare,
+        kind: "gps" as const,
+      };
+    });
+  }, [gpsInterference]);
   const signalArcs = useMemo(() => buildSignalArcs(events, theaters, selectedTheater), [events, theaters, selectedTheater]);
 
   // Load country boundaries locally once.
@@ -704,6 +719,7 @@ export default function GodEyeGlobe({
     const activePaths = [
       ...(layers.borders ? borderPaths : []),
       ...(layers.aircraft ? aircraftTracks : []),
+      ...(layers.gpsInterference ? gpsInterferencePaths : []),
     ];
     if (activePaths.length > 0) {
       globe
@@ -714,12 +730,17 @@ export default function GodEyeGlobe({
         .pathPointAlt((point) => (point as [number, number, number])[2])
         .pathColor((path: object) => {
           const border = path as BorderPath;
+          if (border.kind === "gps") {
+            if (border.intensity > 0.1) return "rgba(255,45,85,0.5)";
+            if (border.intensity > 0.04) return "rgba(255,138,0,0.36)";
+            return "rgba(255,209,102,0.24)";
+          }
           if (border.kind === "aircraft") return ["rgba(184,194,154,0)", "rgba(184,194,154,0.34)"];
           return border.intensity > 0.08
             ? `rgba(255,96,110,${0.13 + border.intensity * 0.18})`
             : "rgba(148,210,255,0.105)";
         })
-        .pathStroke((path: object) => (path as BorderPath).kind === "aircraft" ? 0.28 : 0.15)
+        .pathStroke((path: object) => (path as BorderPath).kind === "aircraft" ? 0.28 : (path as BorderPath).kind === "gps" ? 0.34 : 0.15)
         .pathResolution(2)
         .pathTransitionDuration(300);
     } else {
@@ -903,6 +924,7 @@ export default function GodEyeGlobe({
     interactiveEvents,
     militaryAircraft,
     aircraftTracks,
+    gpsInterferencePaths,
     launches,
     naturalEvents,
     alertEvents,

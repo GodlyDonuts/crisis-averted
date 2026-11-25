@@ -46,6 +46,7 @@ const DEFAULT_LAYERS: GodEyeLayerToggles = {
   orbitalAssets: true,
   aircraft: true,
   environmental: false,
+  gpsInterference: true,
 };
 
 export default function GodEyeCommandCenter() {
@@ -224,6 +225,7 @@ export default function GodEyeCommandCenter() {
         militaryAircraft={osintSnapshot.militaryAircraft}
         launches={osintSnapshot.launches}
         naturalEvents={osintSnapshot.naturalEvents}
+        gpsInterference={osintSnapshot.gpsInterference}
         selectedEvent={selectedEvent}
         selectedTheater={selectedTheater}
         focusTarget={focusTarget}
