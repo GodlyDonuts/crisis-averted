@@ -32,6 +32,17 @@ fn camera_position(yaw: f32, pitch: f32, distance: f32) -> Vec3 {
     )
 }
 
+fn angle_delta(target: f32, current: f32) -> f32 {
+    let mut delta = target - current;
+    while delta > std::f32::consts::PI {
+        delta -= std::f32::consts::TAU;
+    }
+    while delta < -std::f32::consts::PI {
+        delta += std::f32::consts::TAU;
+    }
+    delta
+}
+
 fn track_end(lat: f32, lng: f32, track: f32, speed: f32) -> (f32, f32) {
     let distance_nm = (speed * 0.28).min(260.0);
     let angular = distance_nm / 3440.065;
@@ -488,6 +499,10 @@ async fn main() {
     let mut show_environment = false;
     let mut show_borders = true;
     let mut show_gps = true;
+    let mut tour_mode = false;
+    let mut tour_index = 0usize;
+    let mut last_tour_advance = 0.0f64;
+    let mut camera_target: Option<(f32, f32, f32)> = None;
     let mut dragging = false;
     let mut drag_distance = 0.0f32;
     let mut selected_incident: Option<usize> = None;
@@ -513,6 +528,15 @@ async fn main() {
         if is_key_pressed(KeyCode::G) {
             show_gps = !show_gps;
         }
+        if is_key_pressed(KeyCode::T) {
+            tour_mode = !tour_mode;
+            last_tour_advance = 0.0;
+        }
+        if is_key_pressed(KeyCode::F) {
+            if let Some(event) = selected_incident.and_then(|index| incidents.get(index)) {
+                camera_target = Some((event.lng.to_radians(), event.lat.to_radians(), 3.35));
+            }
+        }
         if is_key_pressed(KeyCode::Escape) {
             selected_incident = None;
         }
@@ -520,11 +544,43 @@ async fn main() {
             yaw += dt * 0.055;
         }
 
+        if tour_mode {
+            let now = get_time();
+            if now - last_tour_advance > 8.0 {
+                let targets: Vec<&Incident> = incidents
+                    .iter()
+                    .filter(|event| matches!(event.severity.as_str(), "c" | "h"))
+                    .take(80)
+                    .collect();
+                if !targets.is_empty() {
+                    let event = targets[tour_index % targets.len()];
+                    tour_index += 1;
+                    selected_incident = incidents.iter().position(|item| std::ptr::eq(item, event));
+                    camera_target = Some((event.lng.to_radians(), event.lat.to_radians(), 3.4));
+                }
+                last_tour_advance = now;
+            }
+        }
+        if let Some((target_yaw, target_pitch, target_distance)) = camera_target {
+            let blend = (dt * 2.4).min(1.0);
+            yaw += angle_delta(target_yaw, yaw) * blend;
+            pitch += (target_pitch.clamp(-0.9, 0.9) - pitch) * blend;
+            distance += (target_distance - distance) * blend;
+            if angle_delta(target_yaw, yaw).abs() < 0.005
+                && (target_pitch - pitch).abs() < 0.005
+                && (target_distance - distance).abs() < 0.02
+            {
+                camera_target = None;
+            }
+        }
+
         let wheel = mouse_wheel().1;
         if wheel.abs() > 0.01 {
+            camera_target = None;
             distance = (distance - wheel * 0.42).clamp(2.8, 9.5);
         }
         if is_mouse_button_pressed(MouseButton::Left) {
+            camera_target = None;
             dragging = true;
             drag_distance = 0.0;
         }
@@ -843,9 +899,9 @@ async fn main() {
             }
         }
 
-        draw_panel(18.0, height - 70.0, 720.0, 48.0);
+        draw_panel(18.0, height - 70.0, 820.0, 48.0);
         draw_text_mono(
-            "CLICK select  ·  DRAG orbit  ·  WHEEL zoom  ·  SPACE drift  ·  A air  ·  E env  ·  B borders  ·  G GPS",
+            "CLICK select  ·  F focus  ·  T tour  ·  SPACE drift  ·  A air  ·  E env  ·  B borders  ·  G GPS",
             34.0,
             height - 41.0,
             13.0,
