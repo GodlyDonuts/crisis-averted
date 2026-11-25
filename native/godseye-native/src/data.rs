@@ -35,6 +35,8 @@ pub struct OsintSnapshot {
     pub natural_events: Vec<NaturalEvent>,
     #[serde(rename = "mapOfWarsEvents", default)]
     map_events: Vec<MapEvent>,
+    #[serde(rename = "gpsInterference", default)]
+    pub gps_interference: Vec<GpsInterferenceCell>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,6 +63,15 @@ pub struct NaturalEvent {
     pub lng: f32,
     pub title: String,
     pub category: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GpsInterferenceCell {
+    pub hex: String,
+    #[serde(rename = "affectedShare", default)]
+    pub affected_share: f32,
+    #[serde(default)]
+    pub level: String,
 }
 
 #[derive(Debug, Deserialize)]

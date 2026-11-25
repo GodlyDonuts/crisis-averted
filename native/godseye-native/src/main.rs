@@ -1,7 +1,8 @@
 use macroquad::prelude::*;
 mod data;
 
-use data::{load_embedded, Aircraft, Incident};
+use data::{load_embedded, Aircraft, GpsInterferenceCell, Incident};
+use std::str::FromStr;
 
 const EARTH_RADIUS: f32 = 2.0;
 fn severity_color(severity: &str) -> Color {
@@ -79,6 +80,188 @@ fn append_octahedron(
     for (a, b, c) in faces {
         indices.extend_from_slice(&[base + a, base + b, base + c]);
     }
+}
+
+struct RibbonBuilder {
+    vertices: Vec<Vertex>,
+    indices: Vec<u16>,
+    meshes: Vec<Mesh>,
+}
+
+impl RibbonBuilder {
+    fn new() -> Self {
+        Self {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+            meshes: Vec::new(),
+        }
+    }
+
+    fn flush(&mut self) {
+        if !self.vertices.is_empty() {
+            self.meshes.push(Mesh {
+                vertices: std::mem::take(&mut self.vertices),
+                indices: std::mem::take(&mut self.indices),
+                texture: None,
+            });
+        }
+    }
+
+    fn push_segment(&mut self, a: Vec3, b: Vec3, width: f32, color: Color) {
+        if self.vertices.len() + 4 > 15000 || self.indices.len() + 6 > 22000 {
+            self.flush();
+        }
+        let direction = (b - a).normalize_or_zero();
+        if direction.length_squared() < 0.000001 {
+            return;
+        }
+        let radial = ((a + b) * 0.5).normalize_or_zero();
+        let side = direction.cross(radial).normalize_or_zero() * width * 0.5;
+        if side.length_squared() < 0.000001 {
+            return;
+        }
+        let base = self.vertices.len() as u16;
+        for point in [a - side, a + side, b + side, b - side] {
+            self.vertices
+                .push(Vertex::new2(point, vec2(0.0, 0.0), color));
+        }
+        self.indices
+            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    fn finish(mut self) -> Vec<Mesh> {
+        self.flush();
+        self.meshes
+    }
+}
+
+fn append_surface_polyline(
+    builder: &mut RibbonBuilder,
+    points: &[(f32, f32)],
+    radius: f32,
+    width: f32,
+    color: Color,
+    closed: bool,
+) {
+    let world: Vec<Vec3> = points
+        .iter()
+        .map(|(lat, lng)| lat_lng_to_vec3(*lat, *lng, radius))
+        .collect();
+    let segment_count = if closed {
+        world.len()
+    } else {
+        world.len().saturating_sub(1)
+    };
+    for index in 0..segment_count {
+        let next = (index + 1) % world.len();
+        let a = world[index];
+        let b = world[next];
+        if a.distance(b) > radius * 0.8 {
+            continue;
+        }
+        builder.push_segment(a, b, width, color);
+    }
+}
+
+fn build_border_meshes() -> Vec<Mesh> {
+    let mut builder = RibbonBuilder::new();
+    let Ok(geojson) =
+        include_str!("../../../frontend/public/data/ne_110m_admin_0_countries.geojson")
+            .parse::<geojson::GeoJson>()
+    else {
+        return Vec::new();
+    };
+    let geojson::GeoJson::FeatureCollection(collection) = geojson else {
+        return Vec::new();
+    };
+    let color = Color::new(0.48, 0.43, 0.3, 0.28);
+    for feature in collection.features {
+        let Some(geometry) = feature.geometry else {
+            continue;
+        };
+        match geometry.value {
+            geojson::GeometryValue::Polygon {
+                coordinates: polygon,
+            } => {
+                for ring in polygon {
+                    let points: Vec<(f32, f32)> = ring
+                        .iter()
+                        .filter_map(|point| {
+                            (point.len() >= 2).then_some((point[1] as f32, point[0] as f32))
+                        })
+                        .collect();
+                    append_surface_polyline(
+                        &mut builder,
+                        &points,
+                        EARTH_RADIUS * 1.004,
+                        0.0024,
+                        color,
+                        true,
+                    );
+                }
+            }
+            geojson::GeometryValue::MultiPolygon {
+                coordinates: multipolygon,
+            } => {
+                for polygon in multipolygon {
+                    for ring in polygon {
+                        let points: Vec<(f32, f32)> = ring
+                            .iter()
+                            .filter_map(|point| {
+                                (point.len() >= 2).then_some((point[1] as f32, point[0] as f32))
+                            })
+                            .collect();
+                        append_surface_polyline(
+                            &mut builder,
+                            &points,
+                            EARTH_RADIUS * 1.004,
+                            0.0024,
+                            color,
+                            true,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    builder.finish()
+}
+
+fn build_gps_meshes(cells: &[GpsInterferenceCell]) -> Vec<Mesh> {
+    let mut builder = RibbonBuilder::new();
+    for cell in cells.iter().take(500) {
+        let Ok(index) = h3o::CellIndex::from_str(&cell.hex) else {
+            continue;
+        };
+        let mut points: Vec<(f32, f32)> = index
+            .boundary()
+            .iter()
+            .map(|point| (point.lat() as f32, point.lng() as f32))
+            .collect();
+        if points.len() < 3 {
+            continue;
+        }
+        if let Some(first) = points.first().copied() {
+            points.push(first);
+        }
+        let color = match cell.level.as_str() {
+            "high" => Color::new(1.0, 0.18, 0.16, 0.52),
+            "medium" => Color::new(1.0, 0.55, 0.12, 0.44),
+            _ => Color::new(1.0, 0.78, 0.25, 0.32),
+        };
+        let width = (if cell.level == "high" { 0.0025 } else { 0.0017 })
+            + cell.affected_share.clamp(0.0, 1.0) * 0.0014;
+        append_surface_polyline(
+            &mut builder,
+            &points,
+            EARTH_RADIUS * 1.009,
+            width,
+            color,
+            false,
+        );
+    }
+    builder.finish()
 }
 
 fn build_event_meshes(events: &[Incident]) -> Vec<Mesh> {
@@ -254,6 +437,8 @@ async fn main() {
         .cloned()
         .collect();
     let priority_event_meshes = build_event_meshes(&priority_incidents);
+    let border_meshes = build_border_meshes();
+    let gps_meshes = build_gps_meshes(&osint.gps_interference);
 
     let mut yaw = -1.35f32;
     let mut pitch = 0.32f32;
@@ -261,6 +446,8 @@ async fn main() {
     let mut drifting = true;
     let mut show_aircraft = true;
     let mut show_environment = false;
+    let mut show_borders = true;
+    let mut show_gps = true;
     let mut dragging = false;
     let mut drag_distance = 0.0f32;
     let mut selected_incident: Option<usize> = None;
@@ -279,6 +466,12 @@ async fn main() {
         }
         if is_key_pressed(KeyCode::E) {
             show_environment = !show_environment;
+        }
+        if is_key_pressed(KeyCode::B) {
+            show_borders = !show_borders;
+        }
+        if is_key_pressed(KeyCode::G) {
+            show_gps = !show_gps;
         }
         if is_key_pressed(KeyCode::Escape) {
             selected_incident = None;
@@ -342,6 +535,17 @@ async fn main() {
         set_camera(&camera);
 
         draw_sphere(vec3(0.0, 0.0, 0.0), EARTH_RADIUS, Some(&earth), WHITE);
+
+        if show_borders {
+            for mesh in &border_meshes {
+                draw_mesh(mesh);
+            }
+        }
+        if show_gps {
+            for mesh in &gps_meshes {
+                draw_mesh(mesh);
+            }
+        }
 
         let visible_event_meshes = if distance > 5.3 {
             &priority_event_meshes
@@ -595,9 +799,9 @@ async fn main() {
             }
         }
 
-        draw_panel(18.0, height - 70.0, 560.0, 48.0);
+        draw_panel(18.0, height - 70.0, 720.0, 48.0);
         draw_text_mono(
-            "CLICK select  ·  DRAG orbit  ·  WHEEL zoom  ·  SPACE drift  ·  A aircraft  ·  E environment",
+            "CLICK select  ·  DRAG orbit  ·  WHEEL zoom  ·  SPACE drift  ·  A air  ·  E env  ·  B borders  ·  G GPS",
             34.0,
             height - 41.0,
             13.0,
