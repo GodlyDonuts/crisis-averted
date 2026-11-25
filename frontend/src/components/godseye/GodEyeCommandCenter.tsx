@@ -20,6 +20,7 @@ import ControlDeck from "./ControlDeck";
 import { MobileIntelSheet } from "./MobileIntelSheet";
 import { TargetLockOverlay } from "./TargetLockOverlay";
 import { AircraftDetailPanel } from "./AircraftDetailPanel";
+import { SourceStatusPanel } from "./SourceStatusPanel";
 import BootSequence from "./BootSequence";
 import type { GodEyeFocusTarget, GodEyeLayerToggles, GodEyeVisualMode } from "./GodEyeGlobe";
 
@@ -59,6 +60,7 @@ export default function GodEyeCommandCenter() {
   const [tourActive, setTourActive] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [selectedAircraft, setSelectedAircraft] = useState<MilitaryAircraft | null>(null);
+  const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
   const [selectedTheaterSlug, setSelectedTheaterSlug] = useState<string | null>(null);
   const [focusTarget, setFocusTarget] = useState<GodEyeFocusTarget | null>(null);
 
@@ -249,7 +251,19 @@ export default function GodEyeCommandCenter() {
           onQueryChange={handleQueryChange}
           onVisualModeChange={setVisualMode}
           onRefresh={() => { void refresh(); }}
+          sourcePanelOpen={sourcePanelOpen}
+          onToggleSourcePanel={() => setSourcePanelOpen((open) => !open)}
         />
+
+        {sourcePanelOpen ? (
+          <SourceStatusPanel
+            snapshot={osintSnapshot}
+            conflictSource={source}
+            conflictError={error}
+            lastUpdated={lastUpdated}
+            onClose={() => setSourcePanelOpen(false)}
+          />
+        ) : null}
 
         <TheaterList
           theaters={theaters}

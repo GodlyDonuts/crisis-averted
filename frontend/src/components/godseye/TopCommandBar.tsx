@@ -17,6 +17,8 @@ interface TopCommandBarProps {
   onQueryChange: (query: string) => void;
   onVisualModeChange: (mode: GodEyeVisualMode) => void;
   onRefresh: () => void;
+  sourcePanelOpen: boolean;
+  onToggleSourcePanel: () => void;
 }
 
 function useUtcClock(): string {
@@ -44,6 +46,8 @@ export default function TopCommandBar({
   onQueryChange,
   onVisualModeChange,
   onRefresh,
+  sourcePanelOpen,
+  onToggleSourcePanel,
 }: TopCommandBarProps) {
   const utcTime = useUtcClock();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -134,10 +138,14 @@ export default function TopCommandBar({
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
           </button>
 
-          <div className="hidden h-10 items-center gap-2 rounded-sm border border-amber-200/12 bg-amber-300/[0.055] px-3 font-mono text-[10px] uppercase tracking-[0.18em] text-amber-100/62 xl:flex">
+          <button
+            type="button"
+            onClick={onToggleSourcePanel}
+            className={`hidden h-10 items-center gap-2 rounded-sm border px-3 font-mono text-[10px] uppercase tracking-[0.18em] transition xl:flex ${sourcePanelOpen ? "border-amber-200/30 bg-amber-300/[0.1] text-amber-100" : "border-amber-200/12 bg-amber-300/[0.055] text-amber-100/62 hover:text-amber-50"}`}
+          >
             <Radio className="h-3.5 w-3.5" />
             Public intel
-          </div>
+          </button>
         </div>
       </div>
     </header>
