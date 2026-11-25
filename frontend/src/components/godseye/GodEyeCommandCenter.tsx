@@ -206,6 +206,7 @@ export default function GodEyeCommandCenter() {
         events={visibleEvents}
         theaters={theaters}
         militaryAircraft={osintSnapshot.militaryAircraft}
+        launches={osintSnapshot.launches}
         selectedEvent={selectedEvent}
         selectedTheater={selectedTheater}
         focusTarget={focusTarget}

@@ -25,7 +25,7 @@ import {
 } from "three";
 import { assetPath } from "@/lib/assets";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import type { ConflictEvent, ConflictTheater, MilitaryAircraft, SeverityKey } from "@/types/conflict";
+import type { ConflictEvent, ConflictTheater, MilitaryAircraft, OsintLaunch, SeverityKey } from "@/types/conflict";
 import { escapeHtml, formatRelativeTime, normalizeCategory, normalizeTheaterName, SEVERITY_META } from "@/lib/conflictData";
 
 export type GodEyeVisualMode = "cinematic" | "satellite";
@@ -52,6 +52,7 @@ interface GodEyeGlobeProps {
   events: ConflictEvent[];
   theaters: ConflictTheater[];
   militaryAircraft: MilitaryAircraft[];
+  launches: OsintLaunch[];
   selectedEvent: ConflictEvent | null;
   selectedTheater: ConflictTheater | null;
   focusTarget: GodEyeFocusTarget | null;
@@ -75,7 +76,8 @@ interface CountryFeature {
 
 type GlobePointObject =
   | (ConflictEvent & { objectKind: "event" })
-  | (MilitaryAircraft & { objectKind: "aircraft" });
+  | (MilitaryAircraft & { objectKind: "aircraft" })
+  | (OsintLaunch & { objectKind: "launch" });
 
 interface SignalArc {
   id: string;
@@ -293,6 +295,7 @@ export default function GodEyeGlobe({
   events,
   theaters,
   militaryAircraft,
+  launches,
   selectedEvent,
   selectedTheater,
   focusTarget,
@@ -782,12 +785,13 @@ export default function GodEyeGlobe({
       .pointsData([
         ...interactiveEvents.map((event) => ({ ...event, objectKind: "event" as const })),
         ...(layers.aircraft ? militaryAircraft.slice(0, 320).map((aircraft) => ({ ...aircraft, objectKind: "aircraft" as const })) : []),
+        ...(layers.orbitalAssets ? launches.slice(0, 24).map((launch) => ({ ...launch, objectKind: "launch" as const })) : []),
       ] as GlobePointObject[])
       .pointLat("lat")
       .pointLng("lng")
-      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
-      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? "#b8c29a" : pointColor(point as ConflictEvent))
-      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
+      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "launch" ? 0.015 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
+      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? "#b8c29a" : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : pointColor(point as ConflictEvent))
+      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
       .pointResolution(12)
       .pointsMerge(false)
       .pointsTransitionDuration(320)
@@ -795,6 +799,10 @@ export default function GodEyeGlobe({
         if ((point as GlobePointObject).objectKind === "aircraft") {
           const aircraft = point as MilitaryAircraft;
           return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#b8c29a">MILITARY AIRCRAFT</div><div class="godseye-tooltip__title">${escapeHtml(aircraft.callsign)}</div><div class="godseye-tooltip__meta">${escapeHtml(aircraft.aircraftType || "Unknown type")} · ${aircraft.altitude ? `${aircraft.altitude.toLocaleString()} ft` : "altitude unknown"} · ADSB.lol</div></div>`;
+        }
+        if ((point as GlobePointObject).objectKind === "launch") {
+          const launch = point as OsintLaunch;
+          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#bf5af2">UPCOMING LAUNCH</div><div class="godseye-tooltip__title">${escapeHtml(launch.name)}</div><div class="godseye-tooltip__meta">${escapeHtml(launch.provider || "Unknown provider")} · ${escapeHtml(launch.location || "Unknown pad")}</div></div>`;
         }
         const conflictEvent = point as ConflictEvent;
         const severity = SEVERITY_META[conflictEvent.severity];
@@ -843,6 +851,7 @@ export default function GodEyeGlobe({
     theaters,
     interactiveEvents,
     militaryAircraft,
+    launches,
     alertEvents,
     signalArcs,
     affectedCountries,

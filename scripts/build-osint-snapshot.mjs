@@ -59,7 +59,7 @@ try {
 } catch (error) { result.errors.push(`GDELT: ${error.message}`); }
 
 try {
-  const payload = await getJson('https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=12&mode=list');
+  const payload = await getJson('https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=12&mode=detailed');
   result.launches = (payload.results ?? []).map((launch) => ({
     id: launch.id,
     name: launch.name,
