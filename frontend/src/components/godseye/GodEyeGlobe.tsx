@@ -465,7 +465,7 @@ export default function GodEyeGlobe({
     if (visualMode === "satellite") {
       globe
         .globeTileEngineUrl((x, y, level) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${level}/${y}/${x}`)
-        .globeTileEngineMaxLevel(13);
+        .globeTileEngineMaxLevel(17);
     } else {
       globe
         .globeImageUrl(assetPath("/textures/earth-blue-marble.jpg"))
