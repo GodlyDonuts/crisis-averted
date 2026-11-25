@@ -1,4 +1,4 @@
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -40,6 +40,9 @@ function parseRssItems(xml, limit = 30) {
     return { title: pick('title'), url: pick('link'), source: pick('source') || 'Google News', publishedAt: pick('pubDate') || null };
   }).filter((article) => article.title && article.url);
 }
+
+let previousSnapshot = {};
+try { if (existsSync(outFile)) previousSnapshot = JSON.parse(readFileSync(outFile, 'utf8')); } catch {}
 
 const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], errors: [] };
 
@@ -202,6 +205,13 @@ if (process.env.WINDY_WEBCAMS_KEY) {
     result.webcams = [...unique.values()].slice(0, 160);
     result.sources.webcams = 'Windy Webcams API v3 metadata (configure WINDY_WEBCAMS_KEY)';
   } catch (error) { result.errors.push(`Windy Webcams: ${error.message}`); }
+}
+
+for (const key of ['militaryAircraft', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents']) {
+  if (result[key].length === 0 && Array.isArray(previousSnapshot[key]) && previousSnapshot[key].length > 0) {
+    result[key] = previousSnapshot[key];
+    result.errors.push(`${key}: transiently empty; preserved previous snapshot`);
+  }
 }
 
 writeFileSync(outFile, JSON.stringify(result));
