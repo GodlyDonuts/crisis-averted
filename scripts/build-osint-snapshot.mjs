@@ -89,7 +89,7 @@ if (result.news.length === 0) {
 }
 
 try {
-  const payload = await getJson('https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=12&mode=detailed');
+  const payload = await getJson('https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=12&mode=detailed', 26000);
   result.launches = (payload.results ?? []).map((launch) => ({
     id: launch.id,
     name: launch.name,
