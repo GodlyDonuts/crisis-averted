@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "prebuild": "node ../scripts/build-osint-snapshot.mjs",
+    "prebuild": "node ../scripts/build-wasm-core.mjs && node ../scripts/build-osint-snapshot.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

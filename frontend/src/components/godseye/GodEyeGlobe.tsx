@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Globe, { type GlobeInstance } from "globe.gl";
 import { cellToBoundary } from "h3-js";
+import { loadGodseyeWasm, type GodseyeWasmCore } from "@/lib/godseyeWasm";
 import {
   ACESFilmicToneMapping,
   AdditiveBlending,
@@ -358,9 +359,16 @@ export default function GodEyeGlobe({
   const globeRef = useRef<GlobeInstance | null>(null);
   const materialRef = useRef<ShaderMaterial | null>(null);
   const [viewFocus, setViewFocus] = useState({ lat: 20, lng: 0, altitude: 2.2 });
+  const [wasmCore, setWasmCore] = useState<GodseyeWasmCore | null>(null);
   const cloudsRef = useRef<Mesh | null>(null);
   const layersRef = useRef(layers);
   const [countryFeatures, setCountryFeatures] = useState<CountryFeature[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    void loadGodseyeWasm().then((core) => { if (active) setWasmCore(core); });
+    return () => { active = false; };
+  }, []);
 
   const affectedCountries = useMemo(() => {
     const counts = new Map<string, number>();
@@ -389,22 +397,28 @@ export default function GodEyeGlobe({
   const detailLevel = viewFocus.altitude < 0.62 ? 2 : viewFocus.altitude < 1.35 ? 1 : 0;
   const interactiveEvents = useMemo(() => {
     const maxEvents = detailLevel === 2 ? 430 : detailLevel === 1 ? 320 : 190;
-    let regionalPool = events;
-    if (detailLevel > 0) {
-      const radiusDegrees = detailLevel === 2 ? 30 : 58;
-      regionalPool = events.filter((event) => {
-        const meanLat = ((event.lat + viewFocus.lat) / 2) * Math.PI / 180;
-        const dLat = event.lat - viewFocus.lat;
-        const dLng = (event.lng - viewFocus.lng) * Math.cos(meanLat);
-        return Math.sqrt(dLat * dLat + dLng * dLng) <= radiusDegrees;
-      });
+    let ordered: ConflictEvent[];
+    const wasmSelection = wasmCore?.selectRegionalEvents(events, viewFocus.lat, viewFocus.lng, viewFocus.altitude);
+    if (wasmSelection) {
+      ordered = wasmSelection.map((index) => events[index]).filter(Boolean);
+    } else {
+      let regionalPool = events;
+      if (detailLevel > 0) {
+        const radiusDegrees = detailLevel === 2 ? 30 : 58;
+        regionalPool = events.filter((event) => {
+          const meanLat = ((event.lat + viewFocus.lat) / 2) * Math.PI / 180;
+          const dLat = event.lat - viewFocus.lat;
+          const dLng = (event.lng - viewFocus.lng) * Math.cos(meanLat);
+          return Math.sqrt(dLat * dLat + dLng * dLng) <= radiusDegrees;
+        });
+      }
+      ordered = [...regionalPool]
+        .sort((a, b) => (b.intensity - a.intensity) || (b.occurredAt - a.occurredAt))
+        .slice(0, maxEvents);
     }
-    const ordered = [...regionalPool]
-      .sort((a, b) => (b.intensity - a.intensity) || (b.occurredAt - a.occurredAt))
-      .slice(0, maxEvents);
     if (selectedEvent && !ordered.some((event) => event.id === selectedEvent.id)) ordered.unshift(selectedEvent);
     return ordered;
-  }, [events, detailLevel, viewFocus.lat, viewFocus.lng, selectedEvent]);
+  }, [events, detailLevel, viewFocus.lat, viewFocus.lng, viewFocus.altitude, wasmCore, selectedEvent]);
 
   const alertEvents = useMemo(() => {
     return [...events]
@@ -413,7 +427,19 @@ export default function GodEyeGlobe({
       .slice(0, 8);
   }, [events]);
 
-  const aircraftTracks = useMemo(() => aircraftTrackPaths(militaryAircraft), [militaryAircraft]);
+  const aircraftTracks = useMemo(() => {
+    const wasmTracks = wasmCore?.aircraftTrackGeometry(militaryAircraft);
+    if (!wasmTracks) return aircraftTrackPaths(militaryAircraft);
+    return wasmTracks.map((track) => {
+      const item = militaryAircraft[track.sourceIndex];
+      return {
+        points: track.points,
+        intensity: 0,
+        kind: "aircraft" as const,
+        tooltip: `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#b8c29a">PROJECTED MILITARY TRACK</div><div class="godseye-tooltip__title">${escapeHtml(item.callsign)}</div><div class="godseye-tooltip__meta">${Math.round(item.speed ?? 0)} kt · ${Math.round(item.track ?? 0)}° · Rust/WASM dead reckoning</div></div>`,
+      };
+    });
+  }, [militaryAircraft, wasmCore]);
   const gpsInterferencePaths = useMemo((): BorderPath[] => {
     return gpsInterference.map((cell) => {
       const boundary = cellToBoundary(cell.hex);
