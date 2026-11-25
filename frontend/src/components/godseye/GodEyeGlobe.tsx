@@ -221,7 +221,7 @@ function createDayNightMaterial(dayTexture: Texture, nightTexture: Texture, wate
 
         float waterMask = texture2D(waterTexture, vUv).r;
         float elevation = texture2D(bumpTexture, vUv).r;
-        vec3 dayRgb = dayColor.rgb * vec3(1.04, 1.02, 0.98) * (0.92 + elevation * 0.13);
+        vec3 dayRgb = dayColor.rgb * vec3(0.94, 0.93, 0.9) * (0.82 + elevation * 0.1);
         vec3 nightRgb = nightColor.rgb * vec3(1.16, 0.94, 0.68) * 1.5;
         vec3 color = mix(nightRgb, dayRgb, blendFactor);
 
@@ -388,7 +388,7 @@ export default function GodEyeGlobe({
 
     const renderer = globe.renderer();
     renderer.toneMapping = ACESFilmicToneMapping;
-    renderer.toneMappingExposure = visualMode === "satellite" ? 0.84 : 1.1;
+    renderer.toneMappingExposure = visualMode === "satellite" ? 0.84 : 0.92;
     renderer.outputColorSpace = SRGBColorSpace;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 
@@ -402,9 +402,9 @@ export default function GodEyeGlobe({
     const composer = globe.postProcessingComposer();
     const bloomPass = new UnrealBloomPass(
       new Vector2(container.clientWidth, container.clientHeight),
-      visualMode === "satellite" ? 0.16 : 0.52,
-      0.42,
-      0.32
+      visualMode === "satellite" ? 0.16 : 0.3,
+      0.32,
+      0.68
     );
     composer.addPass(bloomPass);
 
