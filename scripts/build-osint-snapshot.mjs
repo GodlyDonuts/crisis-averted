@@ -19,6 +19,28 @@ async function getJson(url, timeout = 14000) {
   } finally { clearTimeout(timer); }
 }
 
+async function getText(url, timeout = 16000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0 GodseyeOSINT/1.0' } });
+    if (!response.ok) throw new Error(`${response.status}`);
+    return await response.text();
+  } finally { clearTimeout(timer); }
+}
+
+function decodeXml(value) {
+  return value.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+}
+
+function parseRssItems(xml, limit = 30) {
+  return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, limit).map((match) => {
+    const item = match[1];
+    const pick = (tag) => { const start = item.indexOf(`<${tag}>`); const end = item.indexOf(`</${tag}>`, start); return start < 0 || end < 0 ? "" : decodeXml(item.slice(start + tag.length + 2, end).replace(/<!\[CDATA\[|\]\]>/g, "").trim()); };
+    return { title: pick('title'), url: pick('link'), source: pick('source') || 'Google News', publishedAt: pick('pubDate') || null };
+  }).filter((article) => article.title && article.url);
+}
+
 const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], news: [], launches: [], naturalEvents: [], errors: [] };
 
 try {
@@ -57,6 +79,14 @@ try {
   }));
   result.sources.news = 'GDELT DOC 2.0 artlist';
 } catch (error) { result.errors.push(`GDELT: ${error.message}`); }
+
+if (result.news.length === 0) {
+  try {
+    const xml = await getText('https://news.google.com/rss/search?q=war%20OR%20conflict%20OR%20airstrike%20OR%20missile&hl=en-US&gl=US&ceid=US:en');
+    result.news = parseRssItems(xml, 30);
+    result.sources.news = 'Google News RSS conflict query';
+  } catch (error) { result.errors.push(`Google News RSS: ${error.message}`); }
+}
 
 try {
   const payload = await getJson('https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=12&mode=detailed');
