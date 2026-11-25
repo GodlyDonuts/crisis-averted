@@ -30,7 +30,7 @@ export function MobileIntelSheet({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="fixed right-3 top-[4.7rem] z-40 inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-[#07111dcc] px-4 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-cyan-100 shadow-[0_10px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+        className="fixed right-3 top-[4.7rem] z-40 inline-flex items-center gap-2 rounded-full border border-amber-300/30 bg-[#07111dcc] px-4 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-amber-100 shadow-[0_10px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl"
       >
         <Layers3 className="h-4 w-4" /> Intel
       </button>
@@ -45,7 +45,7 @@ export function MobileIntelSheet({
           />
           <section className="godseye-panel absolute inset-x-0 bottom-0 flex h-[72vh] flex-col overflow-hidden rounded-t-3xl border-x-0 border-b-0">
             <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-              <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-cyan-200/70">
+              <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-amber-200/70">
                 <Activity className="h-4 w-4" /> Intelligence lattice
               </div>
               <button
@@ -64,9 +64,9 @@ export function MobileIntelSheet({
                   key={item}
                   type="button"
                   onClick={() => setTab(item)}
-                  className={`rounded-xl border px-3 py-2 font-mono text-[11px] font-bold uppercase tracking-[0.16em] ${
+                  className={`rounded-sm border px-3 py-2 font-mono text-[11px] font-bold uppercase tracking-[0.16em] ${
                     tab === item
-                      ? "border-cyan-300/45 bg-cyan-400/12 text-cyan-100"
+                      ? "border-amber-300/45 bg-amber-400/12 text-amber-100"
                       : "border-white/10 bg-white/[0.03] text-slate-400"
                   }`}
                 >
@@ -89,8 +89,8 @@ export function MobileIntelSheet({
                           onEventSelect(event);
                           setOpen(false);
                         }}
-                        className={`w-full rounded-xl border p-3 text-left ${
-                          active ? "border-cyan-300/50 bg-cyan-400/10" : "border-white/10 bg-white/[0.03]"
+                        className={`w-full rounded-sm border p-3 text-left ${
+                          active ? "border-amber-300/50 bg-amber-400/10" : "border-white/10 bg-white/[0.03]"
                         }`}
                       >
                         <div className="mb-1 flex items-center justify-between font-mono text-[9px] uppercase tracking-[0.16em]">
@@ -111,7 +111,7 @@ export function MobileIntelSheet({
                     <button
                       type="button"
                       onClick={() => onTheaterSelect(null)}
-                      className="mb-2 flex w-full items-center justify-center gap-2 rounded-xl border border-red-400/30 bg-red-500/10 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.16em] text-red-100"
+                      className="mb-2 flex w-full items-center justify-center gap-2 rounded-sm border border-red-400/30 bg-red-500/10 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.16em] text-red-100"
                     >
                       <ChevronDown className="h-4 w-4" /> Clear theater isolation
                     </button>
@@ -126,12 +126,12 @@ export function MobileIntelSheet({
                           onTheaterSelect(active ? null : theater);
                           setOpen(false);
                         }}
-                        className={`w-full rounded-xl border p-3 text-left ${
-                          active ? "border-cyan-300/50 bg-cyan-400/10" : "border-white/10 bg-white/[0.03]"
+                        className={`w-full rounded-sm border p-3 text-left ${
+                          active ? "border-amber-300/50 bg-amber-400/10" : "border-white/10 bg-white/[0.03]"
                         }`}
                       >
                         <div className="flex items-start gap-3">
-                          <span className="mt-1 font-mono text-[10px] text-cyan-300/70">{String(index + 1).padStart(2, "0")}</span>
+                          <span className="mt-1 font-mono text-[10px] text-amber-300/70">{String(index + 1).padStart(2, "0")}</span>
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-sm font-semibold text-slate-100">{theater.name}</span>
                             <span className="mt-1 block font-mono text-[10px] uppercase tracking-[0.14em] text-slate-500">

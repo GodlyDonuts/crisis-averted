@@ -282,13 +282,13 @@ export default function GodEyeCommandCenter() {
           href="https://warheatmap.app/"
           target="_blank"
           rel="noreferrer"
-          className="pointer-events-auto absolute bottom-[154px] right-4 z-20 hidden rounded-md border border-white/8 bg-black/35 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] text-white/28 backdrop-blur-sm transition hover:border-cyan-200/20 hover:text-cyan-100/60 md:block"
+          className="pointer-events-auto absolute bottom-[154px] right-4 z-20 hidden rounded-md border border-white/8 bg-black/35 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] text-white/28 backdrop-blur-sm transition hover:border-amber-200/20 hover:text-amber-100/60 md:block"
         >
           OSINT: WarHeatMap · MapOfWars/UCDP · CC BY 4.0
         </a>
 
         {error && source === "fallback" && (
-          <div className="pointer-events-auto absolute left-1/2 top-20 z-30 -translate-x-1/2 rounded-lg border border-amber-300/20 bg-amber-400/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.16em] text-amber-100/76 backdrop-blur-md">
+          <div className="pointer-events-auto absolute left-1/2 top-20 z-30 -translate-x-1/2 rounded-sm border border-amber-300/20 bg-amber-400/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.16em] text-amber-100/76 backdrop-blur-md">
             Live feed unavailable — using cached intelligence snapshot
           </div>
         )}

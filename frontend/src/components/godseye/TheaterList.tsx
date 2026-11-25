@@ -23,7 +23,7 @@ export default function TheaterList({ theaters, selectedTheaterSlug, onTheaterSe
     <aside className="godseye-panel pointer-events-auto absolute bottom-[172px] left-4 top-20 z-30 hidden w-[318px] flex-col overflow-hidden xl:flex">
       <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
         <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-cyan-100/42">Priority theaters</p>
+          <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-amber-100/42">Priority theaters</p>
           <h2 className="mt-1 text-sm font-semibold text-white/92">Target priority deck</h2>
         </div>
         {selectedTheaterSlug && (
@@ -39,13 +39,13 @@ export default function TheaterList({ theaters, selectedTheaterSlug, onTheaterSe
       </div>
 
       {selectedTheater && (
-        <div className="border-b border-cyan-200/12 bg-cyan-300/[0.045] px-4 py-3">
+        <div className="border-b border-amber-200/12 bg-amber-300/[0.045] px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-cyan-50">{selectedTheater.name}</p>
-              <p className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.18em] text-cyan-100/38">Theater isolated</p>
+              <p className="truncate text-sm font-semibold text-amber-50">{selectedTheater.name}</p>
+              <p className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.18em] text-amber-100/38">Theater isolated</p>
             </div>
-            <span className="rounded-full border border-cyan-200/20 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] text-cyan-100/62">
+            <span className="rounded-full border border-amber-200/20 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] text-amber-100/62">
               {Math.round(selectedTheater.intensity * 100)} idx
             </span>
           </div>
@@ -83,16 +83,16 @@ export default function TheaterList({ theaters, selectedTheaterSlug, onTheaterSe
               key={theater.slug}
               type="button"
               onClick={() => onTheaterSelect(theater)}
-              className={`group mb-1.5 w-full rounded-xl border px-3 py-3 text-left transition-all duration-200 ${selected ? "border-cyan-200/40 bg-cyan-300/[0.10] shadow-[0_0_30px_rgba(34,211,238,0.08)]" : "border-transparent bg-white/[0.018] hover:border-white/10 hover:bg-white/[0.045]"}`}
+              className={`group mb-1.5 w-full rounded-sm border px-3 py-3 text-left transition-all duration-200 ${selected ? "border-amber-200/40 bg-amber-300/[0.10] shadow-[0_0_30px_rgba(34,211,238,0.08)]" : "border-transparent bg-white/[0.018] hover:border-white/10 hover:bg-white/[0.045]"}`}
             >
               <div className="flex items-start gap-3">
-                <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md font-mono text-[10px] ${selected ? "bg-cyan-200/16 text-cyan-100" : "bg-white/[0.045] text-white/35"}`}>
+                <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md font-mono text-[10px] ${selected ? "bg-amber-200/16 text-amber-100" : "bg-white/[0.045] text-white/35"}`}>
                   {String(index + 1).padStart(2, "0")}
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="truncate text-[13px] font-medium text-white/88">{theater.name}</h3>
-                    <ChevronRight className={`h-3.5 w-3.5 shrink-0 transition ${selected ? "text-cyan-100" : "text-white/20 group-hover:text-white/42"}`} />
+                    <ChevronRight className={`h-3.5 w-3.5 shrink-0 transition ${selected ? "text-amber-100" : "text-white/20 group-hover:text-white/42"}`} />
                   </div>
                   <div className="mt-1 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-white/34">
                     <span className="truncate">{theater.region}</span>
@@ -102,7 +102,7 @@ export default function TheaterList({ theaters, selectedTheaterSlug, onTheaterSe
 
                   <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-white/[0.065]">
                     <div
-                      className={`h-full rounded-full transition-all duration-500 ${selected ? "bg-cyan-200" : "bg-gradient-to-r from-cyan-300/60 via-orange-300/70 to-red-400/80"}`}
+                      className={`h-full rounded-full transition-all duration-500 ${selected ? "bg-amber-200" : "bg-gradient-to-r from-amber-300/60 via-orange-300/70 to-red-400/80"}`}
                       style={{ width: `${intensityPct}%` }}
                     />
                   </div>

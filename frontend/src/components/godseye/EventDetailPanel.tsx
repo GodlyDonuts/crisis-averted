@@ -26,7 +26,7 @@ function precisionLabel(precision: number | null): string {
 
 function DetailMetric({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className="rounded-lg border border-white/8 bg-white/[0.025] px-3 py-2.5">
+    <div className="rounded-sm border border-white/8 bg-white/[0.025] px-3 py-2.5">
       <p className="font-mono text-[9px] uppercase tracking-[0.18em] text-white/30">{label}</p>
       <p className={`mt-1 font-mono text-sm ${accent ? "text-red-100" : "text-white/82"}`}>{value}</p>
     </div>
@@ -51,7 +51,7 @@ export default function EventDetailPanel({ event, theater, onClose, onTheaterFoc
                 {normalizeCategory(event.category)}
               </span>
               {event.verified && (
-                <span className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-cyan-100/54">
+                <span className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-amber-100/54">
                   <BadgeCheck className="h-3.5 w-3.5" /> Verified
                 </span>
               )}
@@ -70,8 +70,8 @@ export default function EventDetailPanel({ event, theater, onClose, onTheaterFoc
       </div>
 
       <div className="godseye-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        <div className="rounded-xl border border-cyan-200/12 bg-cyan-300/[0.045] p-3">
-          <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.18em] text-cyan-100/44">
+        <div className="rounded-sm border border-amber-200/12 bg-amber-300/[0.045] p-3">
+          <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.18em] text-amber-100/44">
             <span>Threat index</span>
             <span>{threatIndex}/100</span>
           </div>
@@ -91,9 +91,9 @@ export default function EventDetailPanel({ event, theater, onClose, onTheaterFoc
           <DetailMetric label="Geo precision" value={precisionLabel(event.precision)} />
         </div>
 
-        <div className="mt-4 rounded-xl border border-white/8 bg-white/[0.022] p-3.5">
+        <div className="mt-4 rounded-sm border border-white/8 bg-white/[0.022] p-3.5">
           <div className="flex items-start gap-3">
-            <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-cyan-100/50" />
+            <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-amber-100/50" />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-medium text-white/86">{event.country}</p>
               <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.12em] text-white/34">
@@ -104,7 +104,7 @@ export default function EventDetailPanel({ event, theater, onClose, onTheaterFoc
                 <button
                   type="button"
                   onClick={() => onTheaterFocus(theater)}
-                  className="mt-3 inline-flex items-center gap-2 rounded-lg border border-cyan-200/18 bg-cyan-300/[0.07] px-3 py-2 font-mono text-[10px] uppercase tracking-[0.16em] text-cyan-100/76 transition hover:border-cyan-200/35 hover:text-white"
+                  className="mt-3 inline-flex items-center gap-2 rounded-sm border border-amber-200/18 bg-amber-300/[0.07] px-3 py-2 font-mono text-[10px] uppercase tracking-[0.16em] text-amber-100/76 transition hover:border-amber-200/35 hover:text-white"
                 >
                   <Crosshair className="h-3.5 w-3.5" />
                   Isolate theater
@@ -118,23 +118,23 @@ export default function EventDetailPanel({ event, theater, onClose, onTheaterFoc
           <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-white/34">Source chain</p>
           <div className="mt-2 space-y-2">
             {event.sources.length === 0 ? (
-              <p className="rounded-lg border border-white/8 bg-white/[0.02] px-3 py-3 text-sm text-white/36">No public source links supplied for this incident.</p>
+              <p className="rounded-sm border border-white/8 bg-white/[0.02] px-3 py-3 text-sm text-white/36">No public source links supplied for this incident.</p>
             ) : event.sources.map((source) => (
               <a
                 key={`${source.name}-${source.url}`}
                 href={source.url}
                 target="_blank"
                 rel="noreferrer"
-                className="group flex items-center justify-between gap-3 rounded-lg border border-white/8 bg-white/[0.025] px-3 py-2.5 transition hover:border-cyan-200/22 hover:bg-cyan-300/[0.045]"
+                className="group flex items-center justify-between gap-3 rounded-sm border border-white/8 bg-white/[0.025] px-3 py-2.5 transition hover:border-amber-200/22 hover:bg-amber-300/[0.045]"
               >
                 <span className="truncate text-sm text-white/68 group-hover:text-white/88">{source.name}</span>
-                <ExternalLink className="h-3.5 w-3.5 shrink-0 text-white/26 group-hover:text-cyan-100/70" />
+                <ExternalLink className="h-3.5 w-3.5 shrink-0 text-white/26 group-hover:text-amber-100/70" />
               </a>
             ))}
           </div>
         </div>
 
-        <div className="mt-4 rounded-xl border border-amber-200/10 bg-amber-300/[0.035] p-3 font-mono text-[10px] leading-relaxed uppercase tracking-[0.12em] text-amber-100/42">
+        <div className="mt-4 rounded-sm border border-amber-200/10 bg-amber-300/[0.035] p-3 font-mono text-[10px] leading-relaxed uppercase tracking-[0.12em] text-amber-100/42">
           OSINT incident data may be incomplete, corrected, or merged as reporting improves. Casualty fields reflect source reports rather than independent confirmation.
         </div>
       </div>

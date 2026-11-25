@@ -19,7 +19,7 @@ export default function EventFeed({ events, selectedEventId, onEventSelect }: Ev
     <aside className="godseye-panel pointer-events-auto absolute bottom-[172px] right-4 top-20 z-30 hidden w-[372px] flex-col overflow-hidden xl:flex">
       <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
         <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-cyan-100/42">Live incident feed</p>
+          <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-amber-100/42">Live incident feed</p>
           <h2 className="mt-1 text-sm font-semibold text-white/92">Incoming SIGINT</h2>
         </div>
         <div className="flex items-center gap-1.5 rounded-full border border-red-300/20 bg-red-400/10 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-red-100/78">
@@ -41,7 +41,7 @@ export default function EventFeed({ events, selectedEventId, onEventSelect }: Ev
               key={event.id}
               type="button"
               onClick={() => onEventSelect(event)}
-              className={`group relative mb-1.5 w-full overflow-hidden rounded-xl border px-3 py-3 text-left transition-all duration-200 ${selected ? "border-cyan-200/40 bg-cyan-300/[0.10]" : "border-transparent bg-white/[0.018] hover:border-white/10 hover:bg-white/[0.045]"}`}
+              className={`group relative mb-1.5 w-full overflow-hidden rounded-sm border px-3 py-3 text-left transition-all duration-200 ${selected ? "border-amber-200/40 bg-amber-300/[0.10]" : "border-transparent bg-white/[0.018] hover:border-white/10 hover:bg-white/[0.045]"}`}
             >
               <span className="absolute bottom-0 left-0 top-0 w-[3px]" style={{ backgroundColor: severity.color }} />
               <div className="pl-2">
@@ -55,7 +55,7 @@ export default function EventFeed({ events, selectedEventId, onEventSelect }: Ev
                 <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[10px] text-white/34">
                   <span className="truncate uppercase tracking-[0.12em]">{event.country} · {normalizeCategory(event.category)}</span>
                   {event.verified && (
-                    <span className="inline-flex shrink-0 items-center gap-1 text-cyan-100/46">
+                    <span className="inline-flex shrink-0 items-center gap-1 text-amber-100/46">
                       <BadgeCheck className="h-3 w-3" />
                       Verified
                     </span>

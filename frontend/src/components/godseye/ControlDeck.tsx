@@ -64,7 +64,7 @@ export default function ControlDeck({
               <div
                 key={bucket.key}
                 title={`${bucket.key}: ${bucket.count} incidents, ${bucket.critical} critical`}
-                className="relative flex-1 rounded-t-sm bg-cyan-300/18 transition hover:bg-cyan-200/50"
+                className="relative flex-1 rounded-t-sm bg-amber-300/18 transition hover:bg-amber-200/50"
                 style={{ height }}
               >
                 {bucket.critical > 0 && (
@@ -87,7 +87,7 @@ export default function ControlDeck({
                 type="button"
                 title={meta.description}
                 onClick={() => onToggleCategoryGroup(group)}
-                className={`flex h-8 items-center gap-1.5 rounded-lg border px-2.5 font-mono text-[10px] uppercase tracking-[0.1em] transition ${active ? "border-white/16 bg-white/[0.055] text-white/82" : "border-white/8 bg-white/[0.015] text-white/28 hover:text-white/52"}`}
+                className={`flex h-8 items-center gap-1.5 rounded-sm border px-2.5 font-mono text-[10px] uppercase tracking-[0.1em] transition ${active ? "border-white/16 bg-white/[0.055] text-white/82" : "border-white/8 bg-white/[0.015] text-white/28 hover:text-white/52"}`}
               >
                 <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: active ? meta.color : "rgba(255,255,255,0.18)" }} />
                 {meta.label}
@@ -107,7 +107,7 @@ export default function ControlDeck({
                   type="button"
                   title={`${active ? "Hide" : "Show"} ${meta.label}`}
                   onClick={() => onToggleSeverity(severity)}
-                  className={`h-8 w-8 rounded-lg border transition ${active ? "border-white/14 bg-white/[0.05]" : "border-white/8 bg-white/[0.015] opacity-38"}`}
+                  className={`h-8 w-8 rounded-sm border transition ${active ? "border-white/14 bg-white/[0.05]" : "border-white/8 bg-white/[0.015] opacity-38"}`}
                 >
                   <span className="mx-auto block h-2 w-2 rounded-full" style={{ backgroundColor: meta.color }} />
                 </button>
@@ -117,13 +117,13 @@ export default function ControlDeck({
         </div>
 
         <div className="godseye-scrollbar flex items-center justify-start gap-1.5 overflow-x-auto px-1 pb-1 sm:flex-wrap sm:justify-center sm:overflow-visible sm:px-0 sm:pb-0">
-          <div className="flex overflow-hidden rounded-lg border border-white/10">
+          <div className="flex overflow-hidden rounded-sm border border-white/10">
             {TIME_WINDOWS.map((windowOption) => (
               <button
                 key={windowOption.key}
                 type="button"
                 onClick={() => onTimeWindowChange(windowOption.key)}
-                className={`h-8 px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] transition ${timeWindow === windowOption.key ? "bg-cyan-300/18 text-cyan-100" : "bg-white/[0.025] text-white/42 hover:text-white/72"}`}
+                className={`h-8 px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] transition ${timeWindow === windowOption.key ? "bg-amber-300/18 text-amber-100" : "bg-white/[0.025] text-white/42 hover:text-white/72"}`}
               >
                 {windowOption.label}
               </button>
@@ -133,7 +133,7 @@ export default function ControlDeck({
           <button
             type="button"
             onClick={() => onAutoRotateChange(!autoRotate)}
-            className={`flex h-8 items-center gap-1.5 rounded-lg border px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] transition ${autoRotate ? "border-cyan-200/25 bg-cyan-300/[0.09] text-cyan-100" : "border-white/10 bg-white/[0.025] text-white/42 hover:text-white/72"}`}
+            className={`flex h-8 items-center gap-1.5 rounded-sm border px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] transition ${autoRotate ? "border-amber-200/25 bg-amber-300/[0.09] text-amber-100" : "border-white/10 bg-white/[0.025] text-white/42 hover:text-white/72"}`}
           >
             {autoRotate ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
             Drift
@@ -143,7 +143,7 @@ export default function ControlDeck({
             type="button"
             onClick={() => onTourActiveChange(!tourActive)}
             title="Cycle priority theaters with cinematic target locks"
-            className={`flex h-8 items-center gap-1.5 rounded-lg border px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] transition ${tourActive ? "border-red-300/30 bg-red-400/[0.11] text-red-100" : "border-white/10 bg-white/[0.025] text-white/42 hover:text-white/72"}`}
+            className={`flex h-8 items-center gap-1.5 rounded-sm border px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] transition ${tourActive ? "border-red-300/30 bg-red-400/[0.11] text-red-100" : "border-white/10 bg-white/[0.025] text-white/42 hover:text-white/72"}`}
           >
             <Compass className="h-3.5 w-3.5" />
             Tour
@@ -160,7 +160,7 @@ export default function ControlDeck({
                 type="button"
                 onClick={() => onToggleLayer(layer.key)}
                 title={`${active ? "Hide" : "Show"} ${layer.label}`}
-                className={`flex h-8 items-center gap-1.5 rounded-lg border px-2 font-mono text-[9px] uppercase tracking-[0.1em] transition ${active ? "border-cyan-200/22 bg-cyan-300/[0.075] text-cyan-100/82" : "border-white/8 bg-white/[0.015] text-white/28 hover:text-white/52"}`}
+                className={`flex h-8 items-center gap-1.5 rounded-sm border px-2 font-mono text-[9px] uppercase tracking-[0.1em] transition ${active ? "border-amber-200/22 bg-amber-300/[0.075] text-amber-100/82" : "border-white/8 bg-white/[0.015] text-white/28 hover:text-white/52"}`}
               >
                 <Icon className="h-3.5 w-3.5" />
                 <span className="hidden 2xl:inline">{layer.label}</span>

@@ -35,20 +35,20 @@ export default function BootSequence({ loading, source }: BootSequenceProps) {
     >
       <div className="relative flex w-[min(520px,calc(100vw-3rem))] flex-col items-center px-6 py-8 text-center">
         <div className="relative flex h-28 w-28 items-center justify-center">
-          <span className="absolute inset-0 rounded-full border border-cyan-200/12" />
-          <span className="godseye-reticle absolute inset-2 rounded-full border border-cyan-200/30" />
+          <span className="absolute inset-0 rounded-full border border-amber-200/12" />
+          <span className="godseye-reticle absolute inset-2 rounded-full border border-amber-200/30" />
           <span className="absolute inset-6 rounded-full border border-red-300/20" />
-          <Crosshair className="h-9 w-9 text-cyan-100/78" strokeWidth={1.3} />
+          <Crosshair className="h-9 w-9 text-amber-100/78" strokeWidth={1.3} />
         </div>
         <h2 className="mt-5 font-mono text-lg font-semibold uppercase tracking-[0.36em] text-white">God&apos;s Eye</h2>
-        <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.28em] text-cyan-100/38">Global conflict observation lattice</p>
+        <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.28em] text-amber-100/38">Global conflict observation lattice</p>
         <div className="mt-7 w-full space-y-2 text-left font-mono text-[10px] uppercase tracking-[0.18em]">
           {BOOT_LINES.map((line, index) => {
             const active = loading || !source ? index < 3 : true;
             return (
               <div key={line} className="flex items-center justify-between border-b border-white/6 pb-2 text-white/42">
                 <span>{line}</span>
-                <span className={active ? "text-cyan-200/75" : "text-white/20"}>{active ? "SYNC" : "WAIT"}</span>
+                <span className={active ? "text-amber-200/75" : "text-white/20"}>{active ? "SYNC" : "WAIT"}</span>
               </div>
             );
           })}

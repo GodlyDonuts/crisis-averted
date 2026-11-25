@@ -60,12 +60,12 @@ export default function TopCommandBar({
   }, []);
 
   return (
-    <header className="pointer-events-auto absolute left-0 right-0 top-0 z-40 border-b border-cyan-300/10 bg-[#02060d]/78 backdrop-blur-xl">
+    <header className="pointer-events-auto absolute left-0 right-0 top-0 z-40 border-b border-amber-300/10 bg-[#02060d]/78 backdrop-blur-xl">
       <div className="grid h-16 grid-cols-[auto_minmax(250px,1fr)_auto] items-center gap-4 px-4 lg:px-5">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="relative flex h-10 w-10 items-center justify-center rounded-full border border-cyan-300/30 bg-cyan-400/10 shadow-[0_0_28px_rgba(34,211,238,0.16)]">
-            <Crosshair className="h-5 w-5 text-cyan-200" strokeWidth={1.7} />
-            <span className="absolute inset-0 rounded-full border border-cyan-200/10" />
+          <div className="relative flex h-10 w-10 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 shadow-[0_0_28px_rgba(34,211,238,0.16)]">
+            <Crosshair className="h-5 w-5 text-amber-200" strokeWidth={1.7} />
+            <span className="absolute inset-0 rounded-full border border-amber-200/10" />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -75,7 +75,7 @@ export default function TopCommandBar({
                 {source === "live" ? "Live" : source === "fallback" ? "Cached" : "Init"}
               </span>
             </div>
-            <p className="mt-0.5 hidden truncate font-mono text-[10px] uppercase tracking-[0.22em] text-cyan-100/38 sm:block">
+            <p className="mt-0.5 hidden truncate font-mono text-[10px] uppercase tracking-[0.22em] text-amber-100/38 sm:block">
               Tactical global surveillance grid
             </p>
           </div>
@@ -83,32 +83,32 @@ export default function TopCommandBar({
 
         <div className="hidden items-center justify-center gap-5 font-mono text-[11px] uppercase tracking-[0.16em] text-white/48 md:flex">
           <div className="flex items-center gap-2">
-            <Activity className="h-3.5 w-3.5 text-cyan-200/70" />
+            <Activity className="h-3.5 w-3.5 text-amber-200/70" />
             <span>{formatCompact(summary.totalEvents)} contacts</span>
           </div>
           <div className="text-red-200/78">{formatCompact(summary.criticalEvents)} priority</div>
           <div>{formatCompact(summary.activeTheaters)} AOs</div>
-          <div className="text-cyan-100/70">UTC {utcTime}</div>
+          <div className="text-amber-100/70">UTC {utcTime}</div>
         </div>
 
         <div className="flex items-center justify-end gap-2">
           <label className="relative hidden w-[280px] items-center lg:flex">
-            <Search className="pointer-events-none absolute left-3 h-4 w-4 text-cyan-100/35" />
+            <Search className="pointer-events-none absolute left-3 h-4 w-4 text-amber-100/35" />
             <input
               ref={searchRef}
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
               placeholder="Search targets, AO, countries, theaters…"
-              className="h-10 w-full rounded-lg border border-cyan-200/12 bg-white/[0.035] pl-9 pr-14 font-mono text-xs text-white outline-none transition placeholder:text-white/25 focus:border-cyan-200/35 focus:bg-cyan-400/[0.055]"
+              className="h-10 w-full rounded-sm border border-amber-200/12 bg-white/[0.035] pl-9 pr-14 font-mono text-xs text-white outline-none transition placeholder:text-white/25 focus:border-amber-200/35 focus:bg-amber-400/[0.055]"
             />
             <kbd className="pointer-events-none absolute right-2 rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 font-mono text-[9px] text-white/35">Ctrl K</kbd>
           </label>
 
-          <div className="hidden overflow-hidden rounded-lg border border-white/10 sm:flex">
+          <div className="hidden overflow-hidden rounded-sm border border-white/10 sm:flex">
             <button
               type="button"
               onClick={() => onVisualModeChange("cinematic")}
-              className={`flex h-10 items-center gap-2 px-3 font-mono text-[11px] uppercase tracking-[0.14em] transition ${visualMode === "cinematic" ? "bg-cyan-300/16 text-cyan-100" : "bg-white/[0.025] text-white/42 hover:text-white/70"}`}
+              className={`flex h-10 items-center gap-2 px-3 font-mono text-[11px] uppercase tracking-[0.14em] transition ${visualMode === "cinematic" ? "bg-amber-300/16 text-amber-100" : "bg-white/[0.025] text-white/42 hover:text-white/70"}`}
               title="Cinematic day/night Earth"
             >
               <Globe2 className="h-4 w-4" />
@@ -117,7 +117,7 @@ export default function TopCommandBar({
             <button
               type="button"
               onClick={() => onVisualModeChange("satellite")}
-              className={`flex h-10 items-center gap-2 border-l border-white/10 px-3 font-mono text-[11px] uppercase tracking-[0.14em] transition ${visualMode === "satellite" ? "bg-cyan-300/16 text-cyan-100" : "bg-white/[0.025] text-white/42 hover:text-white/70"}`}
+              className={`flex h-10 items-center gap-2 border-l border-white/10 px-3 font-mono text-[11px] uppercase tracking-[0.14em] transition ${visualMode === "satellite" ? "bg-amber-300/16 text-amber-100" : "bg-white/[0.025] text-white/42 hover:text-white/70"}`}
               title="Satellite imagery mode"
             >
               <Satellite className="h-4 w-4" />
@@ -128,13 +128,13 @@ export default function TopCommandBar({
           <button
             type="button"
             onClick={onRefresh}
-            className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-white/55 transition hover:border-cyan-200/25 hover:text-cyan-100"
+            className="flex h-10 w-10 items-center justify-center rounded-sm border border-white/10 bg-white/[0.03] text-white/55 transition hover:border-amber-200/25 hover:text-amber-100"
             title={lastUpdated ? `Last updated ${formatRelativeTime(lastUpdated)}` : "Refresh intelligence"}
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
           </button>
 
-          <div className="hidden h-10 items-center gap-2 rounded-lg border border-cyan-200/12 bg-cyan-300/[0.055] px-3 font-mono text-[10px] uppercase tracking-[0.18em] text-cyan-100/62 xl:flex">
+          <div className="hidden h-10 items-center gap-2 rounded-sm border border-amber-200/12 bg-amber-300/[0.055] px-3 font-mono text-[10px] uppercase tracking-[0.18em] text-amber-100/62 xl:flex">
             <Radio className="h-3.5 w-3.5" />
             OSINT / C2 Node
           </div>
