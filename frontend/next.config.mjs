@@ -1,18 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  async headers() {
-    return [
-      {
-        source: "/(.*)",
-        headers: [
-          {
-            key: "Content-Security-Policy",
-            value: "frame-src https://*.cloud.databricks.com 'self';",
-          },
-        ],
-      },
-    ];
-  },
+  output: "export",
+  trailingSlash: true,
+  images: { unoptimized: true },
 };
 
 export default nextConfig;
