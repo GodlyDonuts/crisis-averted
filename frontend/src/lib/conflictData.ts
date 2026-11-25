@@ -69,7 +69,7 @@ function slugifyTheater(value: string): string {
 
 export function normalizeMapOfWarsEvent(raw: MapOfWarsRawEvent): ConflictEvent | null {
   if (!raw.id || typeof raw.lat !== "number" || typeof raw.lon !== "number" || !raw.ts) return null;
-  if (!["battle", "ship", "outage", "activation", "launch"].includes(raw.kind ?? "")) return null;
+  if (raw.kind !== "battle") return null;
   const title = raw.title || "Unnamed contact";
   const country = title.includes(",") ? title.split(",").pop()?.trim() || "Unknown" : "Unknown";
   const casualties = Number((raw.detail || "").match(/•\s*(\d+)/)?.[1] ?? 0);
@@ -93,7 +93,7 @@ export function normalizeMapOfWarsEvent(raw: MapOfWarsRawEvent): ConflictEvent |
   const recencyBoost = clamp01(1 - Math.max(0, (Date.now() - occurredAt) / 36e5) / (24 * 30));
   const intensity = clamp01(SEVERITY_META[severity].rank / 4 * 0.58 + clamp01(Math.log10(1 + casualties) / 2.5) * 0.25 + recencyBoost * 0.17);
   return {
-    id: `mow-${raw.id}`, lat: raw.lat, lng: raw.lon, precision: raw.level ?? null, severity, category,
+    id: `mow-${raw.id}`, lat: raw.lat, lng: raw.lon, precision: null, severity, category,
     categoryGroup: CATEGORY_GROUP_MAP[category] ?? "security", date: new Date(occurredAt).toISOString().slice(0, 10), occurredAt,
     updatedAt: occurredAt, killed: casualties, countedCasualties: casualties, displaced: 0, country, conflict, theater,
     region: "Global", title: raw.note || title, verified: raw.source === "UCDP", sourceName: raw.source || null, sourceUrl: raw.url || null,
@@ -217,7 +217,7 @@ async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<unk
       headers: { Accept: "application/json" },
     });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-    return response.json();
+    return await response.json();
   } finally {
     window.clearTimeout(timeout);
   }
@@ -231,12 +231,18 @@ export async function loadConflictEvents(snapshotEvents: ConflictEvent[] = []): 
 
   const events: ConflictEvent[] = [...snapshotEvents];
   const errors: string[] = [];
+  let liveEventCount = 0;
   if (warHeatmap.status === "fulfilled" && Array.isArray(warHeatmap.value)) {
-    events.push(...warHeatmap.value.map((raw) => normalizeWarHeatmapEvent(raw as WarHeatmapRawEvent)).filter((event): event is ConflictEvent => event !== null));
+    const liveEvents = warHeatmap.value.map((raw) => normalizeWarHeatmapEvent(raw as WarHeatmapRawEvent)).filter((event): event is ConflictEvent => event !== null);
+    liveEventCount = liveEvents.length;
+    events.push(...liveEvents);
   } else if (warHeatmap.status === "rejected") errors.push(`WarHeatMap: ${warHeatmap.reason instanceof Error ? warHeatmap.reason.message : "unavailable"}`);
 
-  if (events.length > 0) {
+  if (liveEventCount > 0) {
     return { events: events.sort((a, b) => b.occurredAt - a.occurredAt).slice(0, 2600), source: "live", error: errors.join(" · ") || null, fetchedAt };
+  }
+  if (events.length > 0) {
+    return { events: events.sort((a, b) => b.occurredAt - a.occurredAt).slice(0, 2600), source: "fallback", error: errors.join(" · ") || "Using cached OSINT snapshot", fetchedAt };
   }
 
   try {

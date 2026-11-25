@@ -24,21 +24,23 @@ export function useConflictEvents(snapshotEvents: ConflictEvent[] = []): Conflic
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const mountedRef = useRef(true);
+  const requestSeqRef = useRef(0);
 
   const refresh = useCallback(async () => {
+    const requestId = ++requestSeqRef.current;
     setRefreshing(true);
     try {
       const result = await loadConflictEvents(snapshotEvents);
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || requestId !== requestSeqRef.current) return;
       setEvents(result.events);
       setSource(result.source);
       setError(result.error);
       setLastUpdated(result.fetchedAt);
     } catch (err) {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || requestId !== requestSeqRef.current) return;
       setError(err instanceof Error ? err.message : "Unable to refresh conflict intelligence");
     } finally {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || requestId !== requestSeqRef.current) return;
       setLoading(false);
       setRefreshing(false);
     }

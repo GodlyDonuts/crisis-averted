@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { CategoryGroup, ConflictEvent, ConflictFilters, ConflictTheater, MilitaryAircraft, SeverityKey } from "@/types/conflict";
@@ -202,11 +202,18 @@ export default function GodEyeCommandCenter() {
     setLayers((current) => ({ ...current, [layer]: !current[layer] }));
   }, []);
 
+  const theatersRef = useRef(theaters);
   useEffect(() => {
-    if (!tourActive || theaters.length === 0) return undefined;
+    theatersRef.current = theaters;
+  }, [theaters]);
+
+  useEffect(() => {
+    if (!tourActive) return undefined;
+    const tourTheaters = theatersRef.current.slice(0, 10);
+    if (tourTheaters.length === 0) return undefined;
     let index = 0;
     const focusTheater = () => {
-      const theater = theaters[index % Math.min(theaters.length, 10)];
+      const theater = tourTheaters[index % tourTheaters.length];
       index += 1;
       setSelectedEventId(null);
       setSelectedTheaterSlug(theater.slug);
@@ -224,10 +231,10 @@ export default function GodEyeCommandCenter() {
       window.clearTimeout(initial);
       window.clearInterval(interval);
     };
-  }, [tourActive, theaters]);
+  }, [tourActive]);
 
   return (
-    <main className="relative h-screen w-full overflow-hidden bg-[#01040a] text-white">
+    <main className="relative h-dvh w-full overflow-hidden bg-[#01040a] text-white">
       <GodEyeGlobe
         key={visualMode}
         events={visibleEvents}
@@ -285,7 +292,7 @@ export default function GodEyeCommandCenter() {
         <button
           type="button"
           onClick={() => setTheaterPanelOpen((open) => !open)}
-          className={`absolute top-24 z-50 hidden h-14 w-6 items-center justify-center rounded-sm border border-white/10 bg-[#050806]/78 text-white/38 backdrop-blur transition hover:border-amber-200/25 hover:text-amber-100 xl:flex ${theaterPanelOpen ? "left-[340px]" : "left-3"}`}
+          className={`pointer-events-auto absolute top-24 z-50 hidden h-14 w-6 items-center justify-center rounded-sm border border-white/10 bg-[#050806]/78 text-white/38 backdrop-blur transition hover:border-amber-200/25 hover:text-amber-100 xl:flex ${theaterPanelOpen ? "left-[340px]" : "left-3"}`}
           aria-label={theaterPanelOpen ? "Collapse theater panel" : "Expand theater panel"}
         >
           {theaterPanelOpen ? <ChevronsLeft className="h-4 w-4" /> : <ChevronsRight className="h-4 w-4" />}
@@ -318,7 +325,7 @@ export default function GodEyeCommandCenter() {
         <button
           type="button"
           onClick={() => setIncidentPanelOpen((open) => !open)}
-          className={`absolute top-24 z-50 hidden h-14 w-6 items-center justify-center rounded-sm border border-white/10 bg-[#050806]/78 text-white/38 backdrop-blur transition hover:border-amber-200/25 hover:text-amber-100 xl:flex ${incidentPanelOpen ? "right-[394px]" : "right-3"}`}
+          className={`pointer-events-auto absolute top-24 z-50 hidden h-14 w-6 items-center justify-center rounded-sm border border-white/10 bg-[#050806]/78 text-white/38 backdrop-blur transition hover:border-amber-200/25 hover:text-amber-100 xl:flex ${incidentPanelOpen ? "right-[394px]" : "right-3"}`}
           aria-label={incidentPanelOpen ? "Collapse incident panel" : "Expand incident panel"}
         >
           {incidentPanelOpen ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}

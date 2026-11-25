@@ -408,7 +408,8 @@ export default function GodEyeGlobe({
         regionalPool = events.filter((event) => {
           const meanLat = ((event.lat + viewFocus.lat) / 2) * Math.PI / 180;
           const dLat = event.lat - viewFocus.lat;
-          const dLng = (event.lng - viewFocus.lng) * Math.cos(meanLat);
+          const wrappedLngDiff = ((event.lng - viewFocus.lng + 540) % 360) - 180;
+      const dLng = wrappedLngDiff * Math.cos(meanLat);
           return Math.sqrt(dLat * dLat + dLng * dLng) <= radiusDegrees;
         });
       }
@@ -539,6 +540,7 @@ export default function GodEyeGlobe({
         activePixelRatio = desiredPixelRatio;
         renderer.setPixelRatio(desiredPixelRatio);
       }
+      materialRef.current?.uniforms.globeRotation.value.set(pov.lng ?? 0, pov.lat ?? 0);
       setViewFocus((current) => {
         const centerDelta = Math.abs((pov.lat ?? 0) - current.lat) + Math.abs((pov.lng ?? 0) - current.lng);
         const altitudeDelta = Math.abs(altitude - current.altitude);
@@ -588,9 +590,6 @@ export default function GodEyeGlobe({
         globeRef.current.globeMaterial(material);
         const pov = globeRef.current.pointOfView();
         material.uniforms.globeRotation.value.set(pov.lng ?? 0, pov.lat ?? 0);
-        globeRef.current.onZoom(({ lng, lat }) => {
-          material.uniforms.globeRotation.value.set(lng, lat);
-        });
       }).catch((error) => console.error("Unable to initialize Earth shader", error));
     }
 
