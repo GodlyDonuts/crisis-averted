@@ -23,6 +23,7 @@ import {
   Vector2,
   Vector3,
 } from "three";
+import { assetPath } from "@/lib/assets";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import type { ConflictEvent, ConflictTheater, MilitaryAircraft, SeverityKey } from "@/types/conflict";
 import { escapeHtml, formatRelativeTime, normalizeCategory, normalizeTheaterName, SEVERITY_META } from "@/lib/conflictData";
@@ -350,7 +351,7 @@ export default function GodEyeGlobe({
   // Load country boundaries locally once.
   useEffect(() => {
     let cancelled = false;
-    fetch("/data/ne_110m_admin_0_countries.geojson")
+    fetch(assetPath("/data/ne_110m_admin_0_countries.geojson"))
       .then((response) => response.json())
       .then((geojson: { features?: CountryFeature[] }) => {
         if (cancelled) return;
@@ -373,7 +374,7 @@ export default function GodEyeGlobe({
         powerPreference: "high-performance",
       },
     })
-      .backgroundImageUrl("/textures/night-sky.png")
+      .backgroundImageUrl(assetPath("/textures/night-sky.png"))
       .showAtmosphere(true)
       .atmosphereColor("#58c7ff")
       .atmosphereAltitude(0.145)
@@ -387,8 +388,8 @@ export default function GodEyeGlobe({
         .globeTileEngineMaxLevel(13);
     } else {
       globe
-        .globeImageUrl("/textures/earth-blue-marble.jpg")
-        .bumpImageUrl("/textures/earth-topology.png");
+        .globeImageUrl(assetPath("/textures/earth-blue-marble.jpg"))
+        .bumpImageUrl(assetPath("/textures/earth-topology.png"));
     }
 
     globeRef.current = globe;
@@ -447,10 +448,10 @@ export default function GodEyeGlobe({
     if (visualMode === "cinematic") {
       const textureLoader = new TextureLoader();
       Promise.all([
-        textureLoader.loadAsync("/textures/earth-blue-marble.jpg"),
-        textureLoader.loadAsync("/textures/earth-night.jpg"),
-        textureLoader.loadAsync("/textures/earth-water.png"),
-        textureLoader.loadAsync("/textures/earth-topology.png"),
+        textureLoader.loadAsync(assetPath("/textures/earth-blue-marble.jpg")),
+        textureLoader.loadAsync(assetPath("/textures/earth-night.jpg")),
+        textureLoader.loadAsync(assetPath("/textures/earth-water.png")),
+        textureLoader.loadAsync(assetPath("/textures/earth-topology.png")),
       ]).then(([dayTexture, nightTexture, waterTexture, bumpTexture]) => {
         if (cancelled || !globeRef.current) return;
         const maxAnisotropy = globeRef.current.renderer().capabilities.getMaxAnisotropy();
@@ -479,7 +480,7 @@ export default function GodEyeGlobe({
     }
 
     // Volumetric-feeling cloud shell.
-    new TextureLoader().load("/textures/clouds.png", (cloudTexture) => {
+    new TextureLoader().load(assetPath("/textures/clouds.png"), (cloudTexture) => {
       if (cancelled || !globeRef.current) return;
       cloudTexture.colorSpace = SRGBColorSpace;
       const clouds = new Mesh(

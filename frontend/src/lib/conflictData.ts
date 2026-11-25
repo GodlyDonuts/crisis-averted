@@ -10,10 +10,11 @@ import type {
   TimeWindowKey,
   WarHeatmapRawEvent,
 } from "@/types/conflict";
+import { assetPath } from "@/lib/assets";
 
 const LIVE_EVENTS_URL = "https://warheatmap.app/functions/eventsLite";
 const MAP_OF_WARS_EVENTS_URL = "https://mapofwars.org/api/events";
-const FALLBACK_EVENTS_URL = "/data/conflict-fallback.json";
+const FALLBACK_EVENTS_URL = assetPath("/data/conflict-fallback.json");
 
 export const DEFAULT_CONFLICT_FILTERS: ConflictFilters = {
   timeWindow: "30d",
