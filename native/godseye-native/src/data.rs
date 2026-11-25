@@ -44,6 +44,10 @@ pub struct Aircraft {
     #[serde(default)]
     pub callsign: Option<String>,
     #[serde(default)]
+    pub registration: Option<String>,
+    #[serde(rename = "aircraftType", default)]
+    pub aircraft_type: Option<String>,
+    #[serde(default)]
     pub track: Option<f32>,
     #[serde(default)]
     pub speed: Option<f32>,

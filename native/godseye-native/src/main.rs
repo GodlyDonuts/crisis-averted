@@ -143,6 +143,81 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     output
 }
 
+fn wrap_text(value: &str, max_chars: usize, max_lines: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in value.split_whitespace() {
+        if current.chars().count() + word.chars().count() + usize::from(!current.is_empty())
+            > max_chars
+        {
+            lines.push(current);
+            current = String::new();
+            if lines.len() >= max_lines {
+                break;
+            }
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if lines.len() < max_lines && !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+fn project_point(camera: &Camera3D, point: Vec3) -> Option<Vec2> {
+    let clip = camera.matrix() * point.extend(1.0);
+    if clip.w <= 0.0 {
+        return None;
+    }
+    let ndc = clip.truncate() / clip.w;
+    if ndc.z < -1.0 || ndc.z > 1.0 {
+        return None;
+    }
+    Some(vec2(
+        (ndc.x + 1.0) * 0.5 * screen_width(),
+        (1.0 - ndc.y) * 0.5 * screen_height(),
+    ))
+}
+
+fn relative_time(ts: f64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs() as f64)
+        .unwrap_or(ts);
+    let delta = now - ts;
+    if delta < -3600.0 {
+        format!("T+{:.0}H", -delta / 3600.0)
+    } else if delta < 3600.0 {
+        format!("{:.0}M AGO", (delta.max(0.0)) / 60.0)
+    } else if delta < 86400.0 {
+        format!("{:.1}H AGO", delta / 3600.0)
+    } else {
+        format!("{:.0}D AGO", delta / 86400.0)
+    }
+}
+
+fn build_natural_mesh(events: &[data::NaturalEvent]) -> Mesh {
+    let mut vertices = Vec::with_capacity(events.len().min(100) * 6);
+    let mut indices = Vec::with_capacity(events.len().min(100) * 24);
+    for event in events.iter().take(100) {
+        append_octahedron(
+            &mut vertices,
+            &mut indices,
+            lat_lng_to_vec3(event.lat, event.lng, EARTH_RADIUS * 1.012),
+            0.011,
+            Color::new(0.18, 0.82, 0.38, 1.0),
+        );
+    }
+    Mesh {
+        vertices,
+        indices,
+        texture: None,
+    }
+}
+
 fn draw_panel(x: f32, y: f32, w: f32, h: f32) {
     draw_rectangle(x, y, w, h, Color::new(0.015, 0.022, 0.018, 0.88));
     draw_rectangle_lines(x, y, w, h, 1.0, Color::new(0.68, 0.57, 0.3, 0.28));
@@ -172,6 +247,13 @@ async fn main() {
     earth.set_filter(FilterMode::Linear);
     let event_meshes = build_event_meshes(&incidents);
     let aircraft_mesh = build_aircraft_mesh(&osint.aircraft);
+    let natural_mesh = build_natural_mesh(&osint.natural_events);
+    let priority_incidents: Vec<Incident> = incidents
+        .iter()
+        .filter(|event| matches!(event.severity.as_str(), "c" | "h"))
+        .cloned()
+        .collect();
+    let priority_event_meshes = build_event_meshes(&priority_incidents);
 
     let mut yaw = -1.35f32;
     let mut pitch = 0.32f32;
@@ -180,6 +262,8 @@ async fn main() {
     let mut show_aircraft = true;
     let mut show_environment = false;
     let mut dragging = false;
+    let mut drag_distance = 0.0f32;
+    let mut selected_incident: Option<usize> = None;
     let critical_count = incidents
         .iter()
         .filter(|event| event.severity == "c")
@@ -196,6 +280,9 @@ async fn main() {
         if is_key_pressed(KeyCode::E) {
             show_environment = !show_environment;
         }
+        if is_key_pressed(KeyCode::Escape) {
+            selected_incident = None;
+        }
         if drifting {
             yaw += dt * 0.055;
         }
@@ -206,28 +293,62 @@ async fn main() {
         }
         if is_mouse_button_pressed(MouseButton::Left) {
             dragging = true;
-        }
-        if is_mouse_button_released(MouseButton::Left) {
-            dragging = false;
+            drag_distance = 0.0;
         }
         if dragging {
             let delta = mouse_delta_position();
+            drag_distance += delta.length();
             yaw += delta.x * 0.006;
             pitch = (pitch - delta.y * 0.006).clamp(-1.25, 1.25);
         }
+        if is_mouse_button_released(MouseButton::Left) {
+            let was_click = drag_distance < 7.0;
+            dragging = false;
+            if was_click {
+                let mouse = vec2(mouse_position().0, mouse_position().1);
+                let camera = Camera3D {
+                    position: camera_position(yaw, pitch, distance),
+                    target: vec3(0.0, 0.0, 0.0),
+                    up: vec3(0.0, 1.0, 0.0),
+                    fovy: 45f32.to_radians(),
+                    ..Default::default()
+                };
+                let camera_dir = camera.position.normalize();
+                selected_incident = incidents
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, event)| {
+                        let world = lat_lng_to_vec3(event.lat, event.lng, EARTH_RADIUS * 1.006);
+                        if world.normalize().dot(camera_dir) < 0.04 {
+                            return None;
+                        }
+                        let screen = project_point(&camera, world)?;
+                        let delta = screen - mouse;
+                        (delta.length() < 18.0).then_some((index, delta.length()))
+                    })
+                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(index, _)| index);
+            }
+        }
 
         clear_background(Color::new(0.001, 0.004, 0.009, 1.0));
-        set_camera(&Camera3D {
+        let camera = Camera3D {
             position: camera_position(yaw, pitch, distance),
             target: vec3(0.0, 0.0, 0.0),
             up: vec3(0.0, 1.0, 0.0),
             fovy: 45f32.to_radians(),
             ..Default::default()
-        });
+        };
+        set_camera(&camera);
 
         draw_sphere(vec3(0.0, 0.0, 0.0), EARTH_RADIUS, Some(&earth), WHITE);
 
-        for mesh in &event_meshes {
+        let visible_event_meshes = if distance > 5.3 {
+            &priority_event_meshes
+        } else {
+            &event_meshes
+        };
+        for mesh in visible_event_meshes {
             draw_mesh(mesh);
         }
 
@@ -247,14 +368,7 @@ async fn main() {
         }
 
         if show_environment {
-            for event in osint.natural_events.iter().take(80) {
-                draw_sphere(
-                    lat_lng_to_vec3(event.lat, event.lng, EARTH_RADIUS * 1.012),
-                    0.011,
-                    None,
-                    Color::new(0.18, 0.82, 0.38, 1.0),
-                );
-            }
+            draw_mesh(&natural_mesh);
         }
 
         set_default_camera();
@@ -324,9 +438,166 @@ async fn main() {
             );
         }
 
+        if selected_incident
+            .and_then(|index| incidents.get(index))
+            .is_some()
+        {
+            let index = selected_incident.unwrap();
+            let event = &incidents[index];
+            let world = lat_lng_to_vec3(event.lat, event.lng, EARTH_RADIUS * 1.006);
+            if let Some(screen) = project_point(&camera, world) {
+                if world.normalize().dot(camera.position.normalize()) > 0.04 {
+                    let color = severity_color(&event.severity);
+                    draw_circle_lines(screen.x, screen.y, 17.0, 1.4, color);
+                    draw_circle_lines(
+                        screen.x,
+                        screen.y,
+                        24.0,
+                        0.8,
+                        Color::new(color.r, color.g, color.b, 0.45),
+                    );
+                    draw_line(
+                        screen.x - 31.0,
+                        screen.y,
+                        screen.x - 21.0,
+                        screen.y,
+                        1.0,
+                        color,
+                    );
+                    draw_line(
+                        screen.x + 21.0,
+                        screen.y,
+                        screen.x + 31.0,
+                        screen.y,
+                        1.0,
+                        color,
+                    );
+                    draw_line(
+                        screen.x,
+                        screen.y - 31.0,
+                        screen.x,
+                        screen.y - 21.0,
+                        1.0,
+                        color,
+                    );
+                    draw_line(
+                        screen.x,
+                        screen.y + 21.0,
+                        screen.x,
+                        screen.y + 31.0,
+                        1.0,
+                        color,
+                    );
+                }
+            }
+
+            let panel_w = 350.0f32.min(width - 640.0);
+            if panel_w > 270.0 {
+                let x = width - panel_w - 18.0;
+                draw_panel(x, 78.0, panel_w, 284.0);
+                let severity = match event.severity.as_str() {
+                    "c" => "CRITICAL",
+                    "h" => "HIGH",
+                    "m" => "MEDIUM",
+                    _ => "LOW",
+                };
+                draw_text_mono(
+                    &format!("TARGET LOCK · {}", severity),
+                    x + 15.0,
+                    104.0,
+                    14.0,
+                    severity_color(&event.severity),
+                );
+                for (line_index, line) in wrap_text(&event.title, 43, 3).iter().enumerate() {
+                    draw_text_mono(
+                        line,
+                        x + 15.0,
+                        130.0 + line_index as f32 * 17.0,
+                        15.0,
+                        Color::new(0.91, 0.9, 0.84, 0.96),
+                    );
+                }
+                let category = event.category.replace('_', " ");
+                let rows = [
+                    format!("CONFLICT   {}", truncate_chars(&event.conflict, 28)),
+                    format!("REGION     {}", event.country),
+                    format!("CATEGORY   {}", category),
+                    format!("CASUALTIES {:.0}", event.casualties),
+                    format!("POSITION   {:.3} / {:.3}", event.lat, event.lng),
+                    format!("REPORTED   {}", relative_time(event.occurred_at)),
+                ];
+                for (row_index, row) in rows.iter().enumerate() {
+                    draw_text_mono(
+                        row,
+                        x + 15.0,
+                        192.0 + row_index as f32 * 21.0,
+                        12.0,
+                        Color::new(0.63, 0.62, 0.55, 0.82),
+                    );
+                }
+            }
+        } else if width > 1180.0 {
+            let x = width - 350.0;
+            draw_panel(x, 78.0, 332.0, 174.0);
+            draw_text_mono(
+                "AIR PICTURE",
+                x + 15.0,
+                104.0,
+                14.0,
+                Color::new(0.72, 0.6, 0.34, 0.85),
+            );
+            let mut aircraft: Vec<&Aircraft> = osint.aircraft.iter().collect();
+            aircraft.sort_by(|a, b| {
+                b.speed
+                    .unwrap_or(0.0)
+                    .partial_cmp(&a.speed.unwrap_or(0.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for (index, item) in aircraft.iter().take(5).enumerate() {
+                let y = 130.0 + index as f32 * 22.0;
+                let identity = item
+                    .callsign
+                    .as_deref()
+                    .filter(|value| *value != "MILITARY")
+                    .or(item.registration.as_deref())
+                    .unwrap_or("UNKNOWN");
+                let details = format!(
+                    "{}  {}  FL{:.0}  {:.0}KT",
+                    truncate_chars(identity, 10),
+                    item.aircraft_type.as_deref().unwrap_or("MIL"),
+                    item.altitude.unwrap_or(0.0) / 100.0,
+                    item.speed.unwrap_or(0.0)
+                );
+                draw_text_mono(
+                    &details,
+                    x + 15.0,
+                    y,
+                    11.5,
+                    Color::new(0.72, 0.75, 0.62, 0.86),
+                );
+            }
+        }
+
+        if show_environment && width > 1180.0 && selected_incident.is_none() {
+            let x = width - 350.0;
+            draw_panel(x, 268.0, 332.0, 142.0);
+            draw_text_mono(
+                "ENVIRONMENTAL WATCH",
+                x + 15.0,
+                294.0,
+                14.0,
+                Color::new(0.34, 0.72, 0.48, 0.85),
+            );
+            for (index, item) in osint.natural_events.iter().take(4).enumerate() {
+                let y = 320.0 + index as f32 * 21.0;
+                let line = format!("{} · {}", truncate_chars(&item.title, 28), item.category);
+                draw_text_mono(&line, x + 15.0, y, 10.8, Color::new(0.52, 0.68, 0.56, 0.82));
+            }
+        }
+
         draw_panel(18.0, height - 70.0, 560.0, 48.0);
         draw_text_mono(
-            "DRAG orbit  ·  WHEEL zoom  ·  SPACE drift  ·  A aircraft  ·  E environment",
+            "CLICK select  ·  DRAG orbit  ·  WHEEL zoom  ·  SPACE drift  ·  A aircraft  ·  E environment",
             34.0,
             height - 41.0,
             13.0,
