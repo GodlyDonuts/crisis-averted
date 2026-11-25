@@ -1,6 +1,7 @@
 "use client";
 
-import { Cloud, Compass, Hexagon, Orbit, Pause, Plane, Play, Leaf, Radio, ScanLine, Tags, Waypoints } from "lucide-react";
+import { useState } from "react";
+import { Cloud, Compass, Hexagon, Orbit, Pause, Plane, Play, Leaf, Radio, ScanLine, SlidersHorizontal, Tags, Waypoints } from "lucide-react";
 import type { CategoryGroup, SeverityKey, TimelineBucket, TimeWindowKey } from "@/types/conflict";
 import type { GodEyeLayerToggles } from "./GodEyeGlobe";
 import { CATEGORY_GROUP_META, SEVERITY_META } from "@/lib/conflictData";
@@ -55,9 +56,11 @@ export default function ControlDeck({
   onTourActiveChange,
 }: ControlDeckProps) {
   const maxCount = Math.max(1, ...timeline.map((bucket) => bucket.count));
+  const [layersOpen, setLayersOpen] = useState(false);
+  const activeLayerCount = Object.values(layers).filter(Boolean).length;
 
   return (
-    <div className="godseye-panel pointer-events-auto absolute bottom-4 left-1/2 z-40 w-[min(780px,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden">
+    <div className="godseye-panel pointer-events-auto absolute bottom-4 left-1/2 z-40 w-[min(780px,calc(100vw-2rem))] -translate-x-1/2 overflow-visible">
       <div className="border-b border-white/8 px-3 pb-1 pt-2">
         <div className="flex h-5 items-end gap-[2px]">
           {timeline.map((bucket) => {
@@ -151,24 +154,36 @@ export default function ControlDeck({
             Tour
           </button>
 
-          <div className="mx-1 hidden h-5 w-px bg-white/10 sm:block" />
-
-          {LAYER_CONTROLS.map((layer) => {
-            const Icon = layer.icon;
-            const active = layers[layer.key];
-            return (
-              <button
-                key={layer.key}
-                type="button"
-                onClick={() => onToggleLayer(layer.key)}
-                title={`${active ? "Hide" : "Show"} ${layer.label}`}
-                className={`flex h-8 items-center gap-1.5 rounded-sm border px-2 font-mono text-[9px] uppercase tracking-[0.1em] transition ${active ? "border-amber-200/22 bg-amber-300/[0.075] text-amber-100/82" : "border-white/8 bg-white/[0.015] text-white/28 hover:text-white/52"}`}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                <span className="hidden 2xl:inline">{layer.label}</span>
-              </button>
-            );
-          })}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setLayersOpen((open) => !open)}
+              className={`flex h-8 items-center gap-1.5 rounded-sm border px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] transition ${layersOpen ? "border-amber-200/30 bg-amber-300/[0.1] text-amber-100" : "border-white/10 bg-white/[0.025] text-white/46 hover:text-white/72"}`}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              Layers
+              <span className="rounded-sm bg-white/[0.07] px-1 text-[9px] text-white/52">{activeLayerCount}</span>
+            </button>
+            {layersOpen ? (
+              <div className="godseye-panel absolute bottom-10 right-0 z-50 grid w-[330px] grid-cols-2 gap-1.5 p-2">
+                {LAYER_CONTROLS.map((layer) => {
+                  const Icon = layer.icon;
+                  const active = layers[layer.key];
+                  return (
+                    <button
+                      key={layer.key}
+                      type="button"
+                      onClick={() => onToggleLayer(layer.key)}
+                      className={`flex h-9 items-center gap-2 rounded-sm border px-2.5 text-left font-mono text-[10px] uppercase tracking-[0.1em] transition ${active ? "border-amber-200/24 bg-amber-300/[0.08] text-amber-100/86" : "border-white/8 bg-white/[0.018] text-white/34 hover:text-white/62"}`}
+                    >
+                      <Icon className="h-3.5 w-3.5 shrink-0" />
+                      {layer.label}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>
