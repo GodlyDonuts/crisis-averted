@@ -11,8 +11,16 @@ interface EventFeedProps {
 }
 
 export default function EventFeed({ events, selectedEventId, onEventSelect }: EventFeedProps) {
+  const now = Date.now();
   const feedEvents = [...events]
-    .sort((a, b) => b.occurredAt - a.occurredAt)
+    .sort((a, b) => {
+      const aFuture = a.occurredAt > now + 15 * 60 * 1000 ? 1 : 0;
+      const bFuture = b.occurredAt > now + 15 * 60 * 1000 ? 1 : 0;
+      if (aFuture !== bFuture) return aFuture - bFuture;
+      const severityDelta = SEVERITY_META[b.severity].rank - SEVERITY_META[a.severity].rank;
+      if (severityDelta !== 0) return severityDelta;
+      return b.occurredAt - a.occurredAt;
+    })
     .slice(0, 90);
 
   return (
@@ -20,7 +28,7 @@ export default function EventFeed({ events, selectedEventId, onEventSelect }: Ev
       <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
         <div>
           <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-amber-100/42">Incident feed</p>
-          <h2 className="mt-1 text-sm font-semibold text-white/92">Live incidents</h2>
+          <h2 className="mt-1 text-sm font-semibold text-white/92">Priority incidents</h2>
         </div>
         <div className="flex items-center gap-1.5 rounded-full border border-red-300/20 bg-red-400/10 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-red-100/78">
           <RadioTower className="h-3 w-3" />
