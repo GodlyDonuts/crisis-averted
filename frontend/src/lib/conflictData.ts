@@ -78,9 +78,18 @@ export function normalizeMapOfWarsEvent(raw: MapOfWarsRawEvent): ConflictEvent |
     : raw.kind === "outage" || raw.kind === "activation" ? "medium" : "low";
   const category = raw.kind === "battle" ? "ground_battle" : raw.kind === "ship" ? "naval" : raw.kind === "outage" ? "cyber" : raw.kind === "launch" ? "missile" : "infrastructure";
   const occurredAt = Math.round(raw.ts * 1000);
-  const parties = (raw.detail || "").split("·").slice(1).join("·").trim();
-  const conflict = parties || `${country} battles`;
-  const theater = slugifyTheater(`${country} ${raw.kind === "battle" ? "battles" : raw.kind}`);
+  const conflict = raw.kind === "battle"
+    ? country !== "Unknown" ? `${country} conflict` : "Unresolved conflict zone"
+    : raw.kind === "ship" ? "Naval vessel activity"
+    : raw.kind === "outage" ? "Infrastructure and cyber disruption"
+    : raw.kind === "launch" ? "Strategic launch activity"
+    : "Strategic infrastructure activity";
+  const theater = slugifyTheater(
+    raw.kind === "battle" ? `${country} conflict` :
+    raw.kind === "ship" ? "naval vessel activity" :
+    raw.kind === "outage" ? "infrastructure cyber disruption" :
+    raw.kind === "launch" ? "strategic launch activity" : "strategic infrastructure activity"
+  );
   const recencyBoost = clamp01(1 - Math.max(0, (Date.now() - occurredAt) / 36e5) / (24 * 30));
   const intensity = clamp01(SEVERITY_META[severity].rank / 4 * 0.58 + clamp01(Math.log10(1 + casualties) / 2.5) * 0.25 + recencyBoost * 0.17);
   return {
