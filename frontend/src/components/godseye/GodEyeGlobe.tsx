@@ -95,6 +95,7 @@ interface SignalArc {
 interface BorderPath {
   points: [number, number, number][];
   intensity: number;
+  kind?: "border" | "aircraft";
 }
 
 type GeoJsonPosition = [number, number];
@@ -250,6 +251,38 @@ function createDayNightMaterial(dayTexture: Texture, nightTexture: Texture, wate
   });
 }
 
+
+function aircraftTrackPaths(aircraft: MilitaryAircraft[]): BorderPath[] {
+  return aircraft
+    .filter((item) => typeof item.track === "number" && typeof item.speed === "number" && item.speed > 70)
+    .slice(0, 180)
+    .map((item) => {
+      const distanceNm = Math.min(260, (item.speed ?? 0) * 0.28);
+      const angularDistance = distanceNm / 3440.065;
+      const bearing = ((item.track ?? 0) * Math.PI) / 180;
+      const lat1 = (item.lat * Math.PI) / 180;
+      const lng1 = (item.lng * Math.PI) / 180;
+      const lat2 = Math.asin(Math.sin(lat1) * Math.cos(angularDistance) + Math.cos(lat1) * Math.sin(angularDistance) * Math.cos(bearing));
+      const lng2 = lng1 + Math.atan2(
+        Math.sin(bearing) * Math.sin(angularDistance) * Math.cos(lat1),
+        Math.cos(angularDistance) - Math.sin(lat1) * Math.sin(lat2)
+      );
+      const endLat = (lat2 * 180) / Math.PI;
+      let endLng = ((lng2 * 180) / Math.PI + 540) % 360 - 180;
+      if (Math.abs(endLng - item.lng) > 180) endLng = item.lng;
+      const points: [number, number, number][] = [];
+      for (let step = 0; step <= 7; step += 1) {
+        const t = step / 7;
+        points.push([
+          item.lat + (endLat - item.lat) * t,
+          item.lng + (endLng - item.lng) * t,
+          0.018 + t * 0.004,
+        ]);
+      }
+      return { points, intensity: 0, kind: "aircraft" as const };
+    });
+}
+
 function severityPointRadius(event: ConflictEvent, selected: boolean): number {
   if (selected) return 0.23;
   const base = event.severity === "critical" ? 0.12 : event.severity === "high" ? 0.094 : event.severity === "medium" ? 0.066 : event.severity === "low" ? 0.05 : 0.05;
@@ -353,6 +386,7 @@ export default function GodEyeGlobe({
       .slice(0, 8);
   }, [events]);
 
+  const aircraftTracks = useMemo(() => aircraftTrackPaths(militaryAircraft), [militaryAircraft]);
   const signalArcs = useMemo(() => buildSignalArcs(events, theaters, selectedTheater), [events, theaters, selectedTheater]);
 
   // Load country boundaries locally once.
@@ -665,20 +699,25 @@ export default function GodEyeGlobe({
     }
 
     globe.polygonsData([]);
-    if (layers.borders && borderPaths.length > 0) {
+    const activePaths = [
+      ...(layers.borders ? borderPaths : []),
+      ...(layers.aircraft ? aircraftTracks : []),
+    ];
+    if (activePaths.length > 0) {
       globe
-        .pathsData(borderPaths)
+        .pathsData(activePaths)
         .pathPoints("points")
         .pathPointLat((point) => (point as [number, number, number])[0])
         .pathPointLng((point) => (point as [number, number, number])[1])
         .pathPointAlt((point) => (point as [number, number, number])[2])
         .pathColor((path: object) => {
           const border = path as BorderPath;
+          if (border.kind === "aircraft") return ["rgba(184,194,154,0)", "rgba(184,194,154,0.34)"];
           return border.intensity > 0.08
             ? `rgba(255,96,110,${0.13 + border.intensity * 0.18})`
             : "rgba(148,210,255,0.105)";
         })
-        .pathStroke(0.18)
+        .pathStroke((path: object) => (path as BorderPath).kind === "aircraft" ? 0.28 : 0.15)
         .pathResolution(2)
         .pathTransitionDuration(300);
     } else {
@@ -788,7 +827,7 @@ export default function GodEyeGlobe({
     globe
       .pointsData([
         ...interactiveEvents.map((event) => ({ ...event, objectKind: "event" as const })),
-        ...(layers.aircraft ? militaryAircraft.slice(0, 320).map((aircraft) => ({ ...aircraft, objectKind: "aircraft" as const })) : []),
+        ...(layers.aircraft ? militaryAircraft.slice(0, 190).map((aircraft) => ({ ...aircraft, objectKind: "aircraft" as const })) : []),
         ...(layers.orbitalAssets ? launches.slice(0, 24).map((launch) => ({ ...launch, objectKind: "launch" as const })) : []),
         ...(layers.environmental ? naturalEvents.slice(0, 70).map((event) => ({ ...event, objectKind: "natural" as const })) : []),
       ] as GlobePointObject[])
@@ -860,6 +899,7 @@ export default function GodEyeGlobe({
     theaters,
     interactiveEvents,
     militaryAircraft,
+    aircraftTracks,
     launches,
     naturalEvents,
     alertEvents,
