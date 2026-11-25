@@ -24,7 +24,7 @@ import {
   Vector3,
 } from "three";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import type { ConflictEvent, ConflictTheater, SeverityKey } from "@/types/conflict";
+import type { ConflictEvent, ConflictTheater, MilitaryAircraft, SeverityKey } from "@/types/conflict";
 import { escapeHtml, formatRelativeTime, normalizeCategory, normalizeTheaterName, SEVERITY_META } from "@/lib/conflictData";
 
 export type GodEyeVisualMode = "cinematic" | "satellite";
@@ -37,6 +37,7 @@ export interface GodEyeLayerToggles {
   borders: boolean;
   clouds: boolean;
   orbitalAssets: boolean;
+  aircraft: boolean;
 }
 
 export interface GodEyeFocusTarget {
@@ -49,6 +50,7 @@ export interface GodEyeFocusTarget {
 interface GodEyeGlobeProps {
   events: ConflictEvent[];
   theaters: ConflictTheater[];
+  militaryAircraft: MilitaryAircraft[];
   selectedEvent: ConflictEvent | null;
   selectedTheater: ConflictTheater | null;
   focusTarget: GodEyeFocusTarget | null;
@@ -69,6 +71,10 @@ interface CountryFeature {
   };
   geometry: unknown;
 }
+
+type GlobePointObject =
+  | (ConflictEvent & { objectKind: "event" })
+  | (MilitaryAircraft & { objectKind: "aircraft" });
 
 interface SignalArc {
   id: string;
@@ -285,6 +291,7 @@ function buildOrbitPosition(radius: number, angle: number, inclination: number):
 export default function GodEyeGlobe({
   events,
   theaters,
+  militaryAircraft,
   selectedEvent,
   selectedTheater,
   focusTarget,
@@ -771,17 +778,24 @@ export default function GodEyeGlobe({
     }
 
     globe
-      .pointsData(interactiveEvents)
+      .pointsData([
+        ...interactiveEvents.map((event) => ({ ...event, objectKind: "event" as const })),
+        ...(layers.aircraft ? militaryAircraft.slice(0, 320).map((aircraft) => ({ ...aircraft, objectKind: "aircraft" as const })) : []),
+      ] as GlobePointObject[])
       .pointLat("lat")
       .pointLng("lng")
-      .pointAltitude((event) => GLOBE_RADIUS_ALTITUDE + ((event as ConflictEvent).intensity * 0.006))
-      .pointColor((event: object) => pointColor(event as ConflictEvent))
-      .pointRadius((event) => severityPointRadius(event as ConflictEvent, selectedEvent?.id === (event as ConflictEvent).id))
+      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
+      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? "#b8c29a" : pointColor(point as ConflictEvent))
+      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
       .pointResolution(12)
       .pointsMerge(false)
       .pointsTransitionDuration(320)
-      .pointLabel((event) => {
-        const conflictEvent = event as ConflictEvent;
+      .pointLabel((point) => {
+        if ((point as GlobePointObject).objectKind === "aircraft") {
+          const aircraft = point as MilitaryAircraft;
+          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#b8c29a">MILITARY AIRCRAFT</div><div class="godseye-tooltip__title">${escapeHtml(aircraft.callsign)}</div><div class="godseye-tooltip__meta">${escapeHtml(aircraft.aircraftType || "Unknown type")} · ${aircraft.altitude ? `${aircraft.altitude.toLocaleString()} ft` : "altitude unknown"} · ADSB.lol</div></div>`;
+        }
+        const conflictEvent = point as ConflictEvent;
         const severity = SEVERITY_META[conflictEvent.severity];
         return `
           <div class="godseye-tooltip">
@@ -792,7 +806,7 @@ export default function GodEyeGlobe({
         `;
       })
       .onPointClick((event) => {
-        onEventSelect(event as ConflictEvent);
+        if ((event as GlobePointObject).objectKind === "event") onEventSelect(event as ConflictEvent);
       });
 
     if (layers.beacons) {
@@ -827,6 +841,7 @@ export default function GodEyeGlobe({
     events,
     theaters,
     interactiveEvents,
+    militaryAircraft,
     alertEvents,
     signalArcs,
     affectedCountries,

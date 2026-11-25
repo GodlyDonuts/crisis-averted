@@ -11,6 +11,7 @@ import {
   summarizeEvents,
 } from "@/lib/conflictData";
 import { useConflictEvents } from "@/hooks/useConflictEvents";
+import { useOsintSnapshot } from "@/hooks/useOsintSnapshot";
 import TopCommandBar from "./TopCommandBar";
 import TheaterList from "./TheaterList";
 import EventFeed from "./EventFeed";
@@ -42,10 +43,12 @@ const DEFAULT_LAYERS: GodEyeLayerToggles = {
   borders: true,
   clouds: true,
   orbitalAssets: true,
+  aircraft: true,
 };
 
 export default function GodEyeCommandCenter() {
   const { events, source, loading, refreshing, error, lastUpdated, refresh } = useConflictEvents();
+  const osintSnapshot = useOsintSnapshot();
   const [filters, setFilters] = useState<ConflictFilters>(() => createDefaultFilters());
   const [layers, setLayers] = useState<GodEyeLayerToggles>(DEFAULT_LAYERS);
   const [visualMode, setVisualMode] = useState<GodEyeVisualMode>("cinematic");
@@ -202,6 +205,7 @@ export default function GodEyeCommandCenter() {
         key={visualMode}
         events={visibleEvents}
         theaters={theaters}
+        militaryAircraft={osintSnapshot.militaryAircraft}
         selectedEvent={selectedEvent}
         selectedTheater={selectedTheater}
         focusTarget={focusTarget}

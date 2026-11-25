@@ -110,3 +110,43 @@ export interface WarHeatmapRawEvent {
   sc?: { name?: string; url?: string }[];
   et?: number | null;
 }
+
+export interface MilitaryAircraft {
+  id: string;
+  callsign: string;
+  registration: string | null;
+  aircraftType: string | null;
+  lat: number;
+  lng: number;
+  altitude: number | null;
+  speed: number | null;
+  track: number | null;
+  squawk: string | null;
+}
+
+export interface OsintNewsArticle {
+  title: string;
+  url: string;
+  source: string;
+  publishedAt: string | null;
+}
+
+export interface OsintLaunch {
+  id: string;
+  name: string;
+  provider: string | null;
+  location: string | null;
+  lat: number;
+  lng: number;
+  net: string | null;
+  url: string | null;
+}
+
+export interface OsintSnapshot {
+  fetchedAt: string;
+  sources: Record<string, string>;
+  militaryAircraft: MilitaryAircraft[];
+  news: OsintNewsArticle[];
+  launches: OsintLaunch[];
+  errors: string[];
+}
