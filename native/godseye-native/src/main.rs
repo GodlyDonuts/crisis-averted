@@ -1,77 +1,14 @@
 use macroquad::prelude::*;
-use serde::Deserialize;
+mod data;
+
+use data::{load_embedded, Aircraft, Incident};
 
 const EARTH_RADIUS: f32 = 2.0;
-
-#[derive(Debug, Deserialize)]
-struct ConflictFallback {
-    events: Vec<WarEvent>,
-}
-
-#[derive(Debug, Deserialize)]
-struct WarEvent {
-    #[serde(rename = "la")]
-    lat: f32,
-    #[serde(rename = "lo")]
-    lng: f32,
-    #[serde(rename = "s")]
-    #[serde(default)]
-    severity: Option<String>,
-    #[serde(rename = "c")]
-    #[serde(default)]
-    category: Option<String>,
-    #[serde(rename = "ti")]
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(rename = "n")]
-    #[serde(default)]
-    country: Option<String>,
-    #[serde(rename = "cf")]
-    #[serde(default)]
-    conflict: Option<String>,
-    #[serde(rename = "x")]
-    #[serde(default)]
-    casualties: Option<f32>,
-    #[serde(rename = "et")]
-    #[serde(default)]
-    occurred_at: Option<f64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OsintSnapshot {
-    #[serde(rename = "militaryAircraft", default)]
-    aircraft: Vec<Aircraft>,
-    #[serde(rename = "naturalEvents", default)]
-    natural_events: Vec<NaturalEvent>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Aircraft {
-    lat: f32,
-    lng: f32,
-    #[serde(default)]
-    callsign: Option<String>,
-    #[serde(default)]
-    track: Option<f32>,
-    #[serde(default)]
-    speed: Option<f32>,
-    #[serde(default)]
-    altitude: Option<f32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct NaturalEvent {
-    lat: f32,
-    lng: f32,
-    title: String,
-    category: String,
-}
-
-fn severity_color(severity: Option<&str>) -> Color {
+fn severity_color(severity: &str) -> Color {
     match severity {
-        Some("c") => Color::new(1.0, 0.08, 0.22, 1.0),
-        Some("h") => Color::new(1.0, 0.48, 0.0, 1.0),
-        Some("m") => Color::new(1.0, 0.78, 0.28, 1.0),
+        "c" => Color::new(1.0, 0.08, 0.22, 1.0),
+        "h" => Color::new(1.0, 0.48, 0.0, 1.0),
+        "m" => Color::new(1.0, 0.78, 0.28, 1.0),
         _ => Color::new(0.2, 0.82, 0.52, 1.0),
     }
 }
@@ -144,7 +81,7 @@ fn append_octahedron(
     }
 }
 
-fn build_event_meshes(events: &[WarEvent]) -> Vec<Mesh> {
+fn build_event_meshes(events: &[Incident]) -> Vec<Mesh> {
     const EVENTS_PER_MESH: usize = 320;
     events
         .iter()
@@ -155,11 +92,11 @@ fn build_event_meshes(events: &[WarEvent]) -> Vec<Mesh> {
             let mut vertices = Vec::with_capacity(chunk.len() * 6);
             let mut indices = Vec::with_capacity(chunk.len() * 24);
             for event in chunk {
-                let color = severity_color(event.severity.as_deref());
-                let radius = match event.severity.as_deref() {
-                    Some("c") => 0.024,
-                    Some("h") => 0.018,
-                    Some("m") => 0.013,
+                let color = severity_color(&event.severity);
+                let radius = match event.severity.as_str() {
+                    "c" => 0.024,
+                    "h" => 0.018,
+                    "m" => 0.013,
                     _ => 0.009,
                 };
                 append_octahedron(
@@ -229,18 +166,11 @@ fn window_conf() -> Conf {
 async fn main() {
     gl_set_drawcall_buffer_capacity(24000, 24000);
 
-    let conflict: ConflictFallback = serde_json::from_str(include_str!(
-        "../../../frontend/public/data/conflict-fallback.json"
-    ))
-    .expect("valid conflict fallback snapshot");
-    let osint: OsintSnapshot = serde_json::from_str(include_str!(
-        "../../../frontend/public/data/osint-snapshot.json"
-    ))
-    .expect("valid osint snapshot");
+    let (incidents, osint) = load_embedded();
     let earth_bytes = include_bytes!("../../../frontend/public/textures/earth-blue-marble.jpg");
     let earth = Texture2D::from_file_with_format(earth_bytes, Some(ImageFormat::Jpeg));
     earth.set_filter(FilterMode::Linear);
-    let event_meshes = build_event_meshes(&conflict.events);
+    let event_meshes = build_event_meshes(&incidents);
     let aircraft_mesh = build_aircraft_mesh(&osint.aircraft);
 
     let mut yaw = -1.35f32;
@@ -250,10 +180,9 @@ async fn main() {
     let mut show_aircraft = true;
     let mut show_environment = false;
     let mut dragging = false;
-    let critical_count = conflict
-        .events
+    let critical_count = incidents
         .iter()
-        .filter(|event| event.severity.as_deref() == Some("c"))
+        .filter(|event| event.severity == "c")
         .count();
 
     loop {
@@ -348,7 +277,7 @@ async fn main() {
         );
         let stats = format!(
             "{} INCIDENTS   {} CRITICAL   {} AIRCRAFT",
-            conflict.events.len(),
+            incidents.len(),
             critical_count,
             osint.aircraft.len()
         );
@@ -368,7 +297,7 @@ async fn main() {
             15.0,
             Color::new(0.77, 0.64, 0.36, 0.85),
         );
-        let mut recent: Vec<&WarEvent> = conflict.events.iter().collect();
+        let mut recent: Vec<&Incident> = incidents.iter().collect();
         recent.sort_by(|a, b| {
             b.occurred_at
                 .partial_cmp(&a.occurred_at)
@@ -379,21 +308,13 @@ async fn main() {
             if y > height - 105.0 {
                 break;
             }
-            let color = severity_color(event.severity.as_deref());
+            let color = severity_color(&event.severity);
             draw_rectangle(31.0, y - 11.0, 3.0, 19.0, color);
-            let title = event.title.as_deref().unwrap_or("Untitled incident");
+            let title = event.title.as_str();
             let truncated = truncate_chars(title, 39);
             draw_text_mono(&truncated, 42.0, y, 13.0, Color::new(0.88, 0.87, 0.82, 0.9));
-            let category = event
-                .category
-                .as_deref()
-                .unwrap_or("other")
-                .replace('_', " ");
-            let meta = format!(
-                "{} · {}",
-                event.country.as_deref().unwrap_or("Unknown"),
-                category
-            );
+            let category = event.category.replace('_', " ");
+            let meta = format!("{} · {}", event.country, category);
             draw_text_mono(
                 &meta,
                 42.0,
