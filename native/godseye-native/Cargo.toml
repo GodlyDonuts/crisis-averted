@@ -1,0 +1,18 @@
+[package]
+name = "godseye-native"
+version = "0.1.0"
+edition = "2021"
+description = "Native Rust God's Eye global intelligence command center"
+
+[dependencies]
+macroquad = "0.4.13"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+image = { version = "0.24.9", default-features = false, features = ["jpeg"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
