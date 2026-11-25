@@ -6,7 +6,7 @@
     "dev": "next dev",
     "prebuild": "node ../scripts/build-wasm-core.mjs && node ../scripts/build-osint-snapshot.mjs",
     "build": "next build",
-    "start": "next start",
+    "start": "node ../scripts/serve-static.mjs",
     "lint": "eslint"
   },
   "dependencies": {
