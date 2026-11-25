@@ -148,5 +148,19 @@ export interface OsintSnapshot {
   militaryAircraft: MilitaryAircraft[];
   news: OsintNewsArticle[];
   launches: OsintLaunch[];
+  naturalEvents: OsintNaturalEvent[];
   errors: string[];
+}
+
+export interface OsintNaturalEvent {
+  id: string;
+  title: string;
+  category: string;
+  kind: string;
+  lat: number;
+  lng: number;
+  occurredAt: string | null;
+  magnitude: number | null;
+  magnitudeUnit: string | null;
+  url: string | null;
 }

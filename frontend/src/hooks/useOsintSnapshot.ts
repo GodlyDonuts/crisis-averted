@@ -10,6 +10,7 @@ const EMPTY_SNAPSHOT: OsintSnapshot = {
   militaryAircraft: [],
   news: [],
   launches: [],
+  naturalEvents: [],
   errors: [],
 };
 

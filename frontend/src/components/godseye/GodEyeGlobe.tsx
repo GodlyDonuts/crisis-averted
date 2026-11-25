@@ -25,7 +25,7 @@ import {
 } from "three";
 import { assetPath } from "@/lib/assets";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import type { ConflictEvent, ConflictTheater, MilitaryAircraft, OsintLaunch, SeverityKey } from "@/types/conflict";
+import type { ConflictEvent, ConflictTheater, MilitaryAircraft, OsintLaunch, OsintNaturalEvent, SeverityKey } from "@/types/conflict";
 import { escapeHtml, formatRelativeTime, normalizeCategory, normalizeTheaterName, SEVERITY_META } from "@/lib/conflictData";
 
 export type GodEyeVisualMode = "cinematic" | "satellite";
@@ -39,6 +39,7 @@ export interface GodEyeLayerToggles {
   clouds: boolean;
   orbitalAssets: boolean;
   aircraft: boolean;
+  environmental: boolean;
 }
 
 export interface GodEyeFocusTarget {
@@ -53,6 +54,7 @@ interface GodEyeGlobeProps {
   theaters: ConflictTheater[];
   militaryAircraft: MilitaryAircraft[];
   launches: OsintLaunch[];
+  naturalEvents: OsintNaturalEvent[];
   selectedEvent: ConflictEvent | null;
   selectedTheater: ConflictTheater | null;
   focusTarget: GodEyeFocusTarget | null;
@@ -77,7 +79,8 @@ interface CountryFeature {
 type GlobePointObject =
   | (ConflictEvent & { objectKind: "event" })
   | (MilitaryAircraft & { objectKind: "aircraft" })
-  | (OsintLaunch & { objectKind: "launch" });
+  | (OsintLaunch & { objectKind: "launch" })
+  | (OsintNaturalEvent & { objectKind: "natural" });
 
 interface SignalArc {
   id: string;
@@ -296,6 +299,7 @@ export default function GodEyeGlobe({
   theaters,
   militaryAircraft,
   launches,
+  naturalEvents,
   selectedEvent,
   selectedTheater,
   focusTarget,
@@ -786,12 +790,13 @@ export default function GodEyeGlobe({
         ...interactiveEvents.map((event) => ({ ...event, objectKind: "event" as const })),
         ...(layers.aircraft ? militaryAircraft.slice(0, 320).map((aircraft) => ({ ...aircraft, objectKind: "aircraft" as const })) : []),
         ...(layers.orbitalAssets ? launches.slice(0, 24).map((launch) => ({ ...launch, objectKind: "launch" as const })) : []),
+        ...(layers.environmental ? naturalEvents.slice(0, 70).map((event) => ({ ...event, objectKind: "natural" as const })) : []),
       ] as GlobePointObject[])
       .pointLat("lat")
       .pointLng("lng")
-      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "launch" ? 0.015 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
-      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? "#b8c29a" : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : pointColor(point as ConflictEvent))
-      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
+      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "launch" ? 0.015 : (point as GlobePointObject).objectKind === "natural" ? 0.014 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
+      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? "#b8c29a" : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "natural" ? "#30d158" : pointColor(point as ConflictEvent))
+      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
       .pointResolution(12)
       .pointsMerge(false)
       .pointsTransitionDuration(320)
@@ -803,6 +808,10 @@ export default function GodEyeGlobe({
         if ((point as GlobePointObject).objectKind === "launch") {
           const launch = point as OsintLaunch;
           return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#bf5af2">UPCOMING LAUNCH</div><div class="godseye-tooltip__title">${escapeHtml(launch.name)}</div><div class="godseye-tooltip__meta">${escapeHtml(launch.provider || "Unknown provider")} · ${escapeHtml(launch.location || "Unknown pad")}</div></div>`;
+        }
+        if ((point as GlobePointObject).objectKind === "natural") {
+          const naturalEvent = point as OsintNaturalEvent;
+          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#30d158">${escapeHtml(naturalEvent.category.toUpperCase())}</div><div class="godseye-tooltip__title">${escapeHtml(naturalEvent.title)}</div><div class="godseye-tooltip__meta">${naturalEvent.magnitude ? `${naturalEvent.magnitude}${naturalEvent.magnitudeUnit || ""} · ` : ""}NASA EONET / USGS</div></div>`;
         }
         const conflictEvent = point as ConflictEvent;
         const severity = SEVERITY_META[conflictEvent.severity];
@@ -852,6 +861,7 @@ export default function GodEyeGlobe({
     interactiveEvents,
     militaryAircraft,
     launches,
+    naturalEvents,
     alertEvents,
     signalArcs,
     affectedCountries,

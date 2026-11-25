@@ -1,6 +1,6 @@
 "use client";
 
-import { Cloud, Compass, Hexagon, Orbit, Pause, Plane, Play, Radio, ScanLine, Tags, Waypoints } from "lucide-react";
+import { Cloud, Compass, Hexagon, Orbit, Pause, Plane, Play, Leaf, Radio, ScanLine, Tags, Waypoints } from "lucide-react";
 import type { CategoryGroup, SeverityKey, TimelineBucket, TimeWindowKey } from "@/types/conflict";
 import type { GodEyeLayerToggles } from "./GodEyeGlobe";
 import { CATEGORY_GROUP_META, SEVERITY_META } from "@/lib/conflictData";
@@ -36,6 +36,7 @@ const LAYER_CONTROLS: { key: keyof GodEyeLayerToggles; label: string; icon: type
   { key: "clouds", label: "Clouds", icon: Cloud },
   { key: "orbitalAssets", label: "Orbital", icon: Orbit },
   { key: "aircraft", label: "Air", icon: Plane },
+  { key: "environmental", label: "Env", icon: Leaf },
 ];
 
 export default function ControlDeck({
