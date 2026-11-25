@@ -1,0 +1,431 @@
+import type {
+  CategoryGroup,
+  ConflictEvent,
+  ConflictFilters,
+  ConflictSource,
+  ConflictSummary,
+  ConflictTheater,
+  SeverityKey,
+  TimelineBucket,
+  TimeWindowKey,
+  WarHeatmapRawEvent,
+} from "@/types/conflict";
+
+const LIVE_EVENTS_URL = "https://warheatmap.app/functions/eventsLite";
+const MAP_OF_WARS_EVENTS_URL = "https://mapofwars.org/api/events";
+const FALLBACK_EVENTS_URL = "/data/conflict-fallback.json";
+
+export const DEFAULT_CONFLICT_FILTERS: ConflictFilters = {
+  timeWindow: "30d",
+  categoryGroups: ["kinetic", "security", "strategic"],
+  severities: ["critical", "high", "medium", "low"],
+  theater: null,
+  query: "",
+};
+
+export const SEVERITY_ORDER: SeverityKey[] = ["critical", "high", "medium", "low"];
+
+export const SEVERITY_META: Record<SeverityKey, { label: string; color: string; softColor: string; rank: number }> = {
+  critical: { label: "Critical", color: "#ff2d55", softColor: "rgba(255,45,85,0.16)", rank: 4 },
+  high: { label: "High", color: "#ff8a00", softColor: "rgba(255,138,0,0.15)", rank: 3 },
+  medium: { label: "Medium", color: "#ffd166", softColor: "rgba(255,209,102,0.14)", rank: 2 },
+  low: { label: "Low", color: "#36d399", softColor: "rgba(54,211,153,0.13)", rank: 1 },
+};
+
+export const CATEGORY_GROUP_META: Record<CategoryGroup, { label: string; color: string; description: string }> = {
+  kinetic: { label: "Kinetic", color: "#ff3b30", description: "Strikes, battles, missiles, explosions" },
+  security: { label: "Security", color: "#ff9f0a", description: "Terrorism, assassinations, border incidents" },
+  strategic: { label: "Strategic", color: "#64d2ff", description: "Naval, cyber, nuclear and infrastructure activity" },
+  humanitarian: { label: "Humanitarian", color: "#30d158", description: "Civilian impact, displacement and relief" },
+  political: { label: "Political", color: "#bf5af2", description: "Diplomacy, sanctions, protests and coups" },
+};
+
+const CATEGORY_GROUP_MAP: Record<string, CategoryGroup> = {
+  airstrike: "kinetic",
+  ground_battle: "kinetic",
+  missile: "kinetic",
+  explosion: "kinetic",
+  terrorism: "security",
+  assassination: "security",
+  border_crossing: "security",
+  protest: "political",
+  coup: "political",
+  diplomacy: "political",
+  sanctions: "political",
+  humanitarian: "humanitarian",
+  migration: "humanitarian",
+  naval: "strategic",
+  infrastructure: "strategic",
+  cyber: "strategic",
+  nuclear: "strategic",
+  other: "security",
+};
+
+
+interface MapOfWarsRawEvent {
+  id?: string;
+  kind?: string;
+  lat?: number;
+  lon?: number;
+  title?: string;
+  detail?: string;
+  level?: number;
+  ts?: number;
+  source?: string;
+  violence?: string;
+  note?: string;
+  url?: string;
+}
+
+function slugifyTheater(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "global";
+}
+
+function normalizeMapOfWarsEvent(raw: MapOfWarsRawEvent): ConflictEvent | null {
+  if (!raw.id || typeof raw.lat !== "number" || typeof raw.lon !== "number" || !raw.ts) return null;
+  if (!["battle", "ship", "outage", "activation", "launch"].includes(raw.kind ?? "")) return null;
+  const title = raw.title || "Unnamed contact";
+  const country = title.includes(",") ? title.split(",").pop()?.trim() || "Unknown" : "Unknown";
+  const casualties = Number((raw.detail || "").match(/•\s*(\d+)/)?.[1] ?? 0);
+  const severity: SeverityKey = raw.kind === "battle"
+    ? casualties >= 25 ? "critical" : casualties >= 5 || (raw.level ?? 1) >= 3 ? "high" : casualties > 0 ? "medium" : "low"
+    : raw.kind === "outage" || raw.kind === "activation" ? "medium" : "low";
+  const category = raw.kind === "battle" ? "ground_battle" : raw.kind === "ship" ? "naval" : raw.kind === "outage" ? "cyber" : raw.kind === "launch" ? "missile" : "infrastructure";
+  const occurredAt = Math.round(raw.ts * 1000);
+  const parties = (raw.detail || "").split("·").slice(1).join("·").trim();
+  const conflict = parties || `${country} battles`;
+  const theater = slugifyTheater(`${country} ${raw.kind === "battle" ? "battles" : raw.kind}`);
+  const recencyBoost = clamp01(1 - Math.max(0, (Date.now() - occurredAt) / 36e5) / (24 * 30));
+  const intensity = clamp01(SEVERITY_META[severity].rank / 4 * 0.58 + clamp01(Math.log10(1 + casualties) / 2.5) * 0.25 + recencyBoost * 0.17);
+  return {
+    id: `mow-${raw.id}`, lat: raw.lat, lng: raw.lon, precision: raw.level ?? null, severity, category,
+    categoryGroup: CATEGORY_GROUP_MAP[category] ?? "security", date: new Date(occurredAt).toISOString().slice(0, 10), occurredAt,
+    updatedAt: occurredAt, killed: casualties, countedCasualties: casualties, displaced: 0, country, conflict, theater,
+    region: "Global", title: raw.note || title, verified: raw.source === "UCDP", sourceName: raw.source || null, sourceUrl: raw.url || null,
+    sources: raw.url ? [{ name: raw.source || "Map of Wars", url: raw.url }] : [], intensity,
+  };
+}
+
+const severityFromCode = (code: string | undefined): SeverityKey => {
+  switch (code) {
+    case "c": return "critical";
+    case "h": return "high";
+    case "m": return "medium";
+    default: return "low";
+  }
+};
+
+const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+
+export function normalizeCategory(category: string): string {
+  return category.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+export function normalizeTheaterName(slugOrName: string): string {
+  return slugOrName
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .replace(/\bScs\b/g, "SCS")
+    .replace(/\bM23\b/g, "M23");
+}
+
+function parseEventDate(date: string | undefined): number {
+  if (!date) return 0;
+  const [year, month, day] = date.split("-").map(Number);
+  if (!year || !month || !day) return 0;
+  return Date.UTC(year, month - 1, day);
+}
+
+function safeNumber(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+export function normalizeWarHeatmapEvent(raw: WarHeatmapRawEvent): ConflictEvent | null {
+  if (!raw.i || typeof raw.la !== "number" || typeof raw.lo !== "number") return null;
+  if (!Number.isFinite(raw.la) || !Number.isFinite(raw.lo)) return null;
+
+  const severity = severityFromCode(raw.s);
+  const category = raw.c || "other";
+  const occurredAt = raw.et ? raw.et * 1000 : parseEventDate(raw.d);
+  const updatedAt = raw.u ? raw.u * 1000 : occurredAt;
+  const killed = Math.max(0, safeNumber(raw.k));
+  const countedCasualties = Math.max(0, safeNumber(raw.x));
+  const displaced = Math.max(0, safeNumber(raw.dp));
+  const recencyHours = occurredAt ? Math.max(0, (Date.now() - occurredAt) / 36e5) : 720;
+  const recencyBoost = clamp01(1 - recencyHours / (24 * 30));
+  const casualtyBoost = clamp01(Math.log10(1 + Math.min(killed, 1000)) / 3);
+  const displacementBoost = clamp01(Math.log10(1 + Math.min(displaced, 100000)) / 5);
+  const precisionBoost = raw.p ? clamp01((7 - raw.p) / 7) * 0.08 : 0;
+  const verificationBoost = raw.v ? 0.08 : 0;
+  const severityWeight = SEVERITY_META[severity].rank / 4;
+  const intensity = clamp01(
+    severityWeight * 0.52 +
+    casualtyBoost * 0.2 +
+    displacementBoost * 0.1 +
+    recencyBoost * 0.16 +
+    precisionBoost +
+    verificationBoost
+  );
+
+  const sources: ConflictSource[] = (raw.sc ?? [])
+    .filter((source): source is { name: string; url: string } => Boolean(source.name && source.url))
+    .slice(0, 4)
+    .map((source) => ({ name: source.name, url: source.url }));
+
+  if (raw.sn && raw.su && !sources.some((source) => source.url === raw.su)) {
+    sources.unshift({ name: raw.sn, url: raw.su });
+  }
+
+  const theater = raw.t || raw.cf || raw.n || "global";
+
+  return {
+    id: raw.i,
+    lat: raw.la,
+    lng: raw.lo,
+    precision: typeof raw.p === "number" ? raw.p : null,
+    severity,
+    category,
+    categoryGroup: CATEGORY_GROUP_MAP[category] ?? "security",
+    date: raw.d || "unknown",
+    occurredAt,
+    updatedAt,
+    killed,
+    countedCasualties,
+    displaced,
+    country: raw.n || "Unknown",
+    conflict: raw.cf || normalizeTheaterName(theater),
+    theater,
+    region: raw.r || "Global",
+    title: raw.ti || "Untitled incident",
+    verified: Boolean(raw.v),
+    sourceName: raw.sn || null,
+    sourceUrl: raw.su || null,
+    sources,
+    intensity,
+  };
+}
+
+export interface ConflictDataResult {
+  events: ConflictEvent[];
+  source: "live" | "fallback";
+  error: string | null;
+  fetchedAt: number;
+}
+
+async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    return response.json();
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+export async function loadConflictEvents(): Promise<ConflictDataResult> {
+  const fetchedAt = Date.now();
+  const [warHeatmap, mapOfWars] = await Promise.allSettled([
+    fetchJsonWithTimeout(LIVE_EVENTS_URL, 14000),
+    fetchJsonWithTimeout(MAP_OF_WARS_EVENTS_URL, 14000),
+  ]);
+
+  const events: ConflictEvent[] = [];
+  const errors: string[] = [];
+  if (warHeatmap.status === "fulfilled" && Array.isArray(warHeatmap.value)) {
+    events.push(...warHeatmap.value.map((raw) => normalizeWarHeatmapEvent(raw as WarHeatmapRawEvent)).filter((event): event is ConflictEvent => event !== null));
+  } else if (warHeatmap.status === "rejected") errors.push(`WarHeatMap: ${warHeatmap.reason instanceof Error ? warHeatmap.reason.message : "unavailable"}`);
+
+  if (mapOfWars.status === "fulfilled") {
+    const payload = mapOfWars.value as { events?: MapOfWarsRawEvent[] };
+    events.push(...(payload.events ?? []).map(normalizeMapOfWarsEvent).filter((event): event is ConflictEvent => event !== null));
+  } else errors.push(`Map of Wars: ${mapOfWars.reason instanceof Error ? mapOfWars.reason.message : "unavailable"}`);
+
+  if (events.length > 0) {
+    return { events: events.sort((a, b) => b.occurredAt - a.occurredAt).slice(0, 2600), source: "live", error: errors.join(" · ") || null, fetchedAt };
+  }
+
+  try {
+    const payload = await fetchJsonWithTimeout(FALLBACK_EVENTS_URL, 8000) as { events?: WarHeatmapRawEvent[] };
+    const fallbackEvents = (payload.events ?? []).map(normalizeWarHeatmapEvent).filter((event): event is ConflictEvent => event !== null);
+    return { events: fallbackEvents, source: "fallback", error: errors.join(" · ") || "Live feeds unavailable", fetchedAt };
+  } catch (fallbackError) {
+    return { events: [], source: "fallback", error: fallbackError instanceof Error ? fallbackError.message : "Unable to load conflict data", fetchedAt };
+  }
+}
+
+export function getTimeWindowHours(timeWindow: TimeWindowKey): number {
+  switch (timeWindow) {
+    case "24h": return 24;
+    case "7d": return 24 * 7;
+    case "30d": return 24 * 30;
+    case "all": return Infinity;
+  }
+}
+
+export function filterConflictEvents(events: ConflictEvent[], filters: ConflictFilters): ConflictEvent[] {
+  const hours = getTimeWindowHours(filters.timeWindow);
+  const cutoff = Number.isFinite(hours) ? Date.now() - hours * 36e5 : 0;
+  const query = filters.query.trim().toLowerCase();
+
+  return events.filter((event) => {
+    if (event.occurredAt < cutoff) return false;
+    if (!filters.categoryGroups.includes(event.categoryGroup)) return false;
+    if (!filters.severities.includes(event.severity)) return false;
+    if (filters.theater && event.theater !== filters.theater) return false;
+    if (query) {
+      const haystack = `${event.title} ${event.country} ${event.conflict} ${event.region} ${event.category}`.toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+    return true;
+  });
+}
+
+export function summarizeEvents(events: ConflictEvent[]): ConflictSummary {
+  const theaterCasualties = new Map<string, number>();
+  const theaterDisplacement = new Map<string, number>();
+
+  for (const event of events) {
+    theaterCasualties.set(event.theater, (theaterCasualties.get(event.theater) ?? 0) + event.countedCasualties);
+    theaterDisplacement.set(event.theater, Math.max(theaterDisplacement.get(event.theater) ?? 0, event.displaced));
+  }
+
+  return {
+    totalEvents: events.length,
+    criticalEvents: events.filter((event) => event.severity === "critical").length,
+    highEvents: events.filter((event) => event.severity === "high").length,
+    kineticEvents: events.filter((event) => event.categoryGroup === "kinetic").length,
+    humanitarianEvents: events.filter((event) => event.categoryGroup === "humanitarian").length,
+    reportedKilled: [...theaterCasualties.values()].reduce((sum, value) => sum + value, 0),
+    reportedDisplaced: [...theaterDisplacement.values()].reduce((sum, value) => sum + value, 0),
+    activeTheaters: new Set(events.map((event) => event.theater)).size,
+    latestEventAt: Math.max(0, ...events.map((event) => event.occurredAt)),
+  };
+}
+
+export function aggregateTheaters(events: ConflictEvent[]): ConflictTheater[] {
+  const groups = new Map<string, ConflictEvent[]>();
+  for (const event of events) {
+    const existing = groups.get(event.theater) ?? [];
+    existing.push(event);
+    groups.set(event.theater, existing);
+  }
+
+  const now = Date.now();
+  const theaters = [...groups.entries()].map(([slug, group]) => {
+    let weightTotal = 0;
+    let latTotal = 0;
+    let lngTotal = 0;
+    let rawIntensity = 0;
+    const categories: Record<string, number> = {};
+
+    for (const event of group) {
+      const weight = 0.4 + event.intensity;
+      weightTotal += weight;
+      latTotal += event.lat * weight;
+      lngTotal += event.lng * weight;
+      rawIntensity += event.intensity;
+      categories[event.category] = (categories[event.category] ?? 0) + 1;
+    }
+
+    const representativeName = group.find((event) => event.conflict)?.conflict || normalizeTheaterName(slug);
+    const sortedEvents = [...group].sort((a, b) => (b.intensity - a.intensity) || (b.occurredAt - a.occurredAt));
+
+    return {
+      slug,
+      name: representativeName,
+      region: group[0]?.region || "Global",
+      lat: latTotal / Math.max(weightTotal, 1),
+      lng: lngTotal / Math.max(weightTotal, 1),
+      eventCount: group.length,
+      recentEventCount: group.filter((event) => now - event.occurredAt <= 7 * 24 * 36e5).length,
+      criticalCount: group.filter((event) => event.severity === "critical").length,
+      highCount: group.filter((event) => event.severity === "high").length,
+      killed: group.reduce((sum, event) => sum + event.countedCasualties, 0),
+      displaced: Math.max(0, ...group.map((event) => event.displaced)),
+      intensity: rawIntensity,
+      latestAt: Math.max(0, ...group.map((event) => event.occurredAt)),
+      categories,
+      topEvents: sortedEvents.slice(0, 5),
+    } satisfies ConflictTheater;
+  });
+
+  const maxIntensity = Math.max(1, ...theaters.map((theater) => theater.intensity));
+  return theaters
+    .map((theater) => ({ ...theater, intensity: theater.intensity / maxIntensity }))
+    .sort((a, b) => (b.intensity - a.intensity) || (b.eventCount - a.eventCount));
+}
+
+export function buildTimeline(events: ConflictEvent[], days = 30): TimelineBucket[] {
+  const now = new Date();
+  const utcToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const buckets: TimelineBucket[] = [];
+
+  for (let index = days - 1; index >= 0; index--) {
+    const start = utcToday - index * 24 * 36e5;
+    const date = new Date(start);
+    buckets.push({
+      key: date.toISOString().slice(0, 10),
+      label: `${date.getUTCMonth() + 1}/${date.getUTCDate()}`,
+      start,
+      count: 0,
+      critical: 0,
+      intensity: 0,
+    });
+  }
+
+  const byKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
+  for (const event of events) {
+    const key = new Date(event.occurredAt).toISOString().slice(0, 10);
+    const bucket = byKey.get(key);
+    if (!bucket) continue;
+    bucket.count += 1;
+    bucket.intensity += event.intensity;
+    if (event.severity === "critical") bucket.critical += 1;
+  }
+
+  return buckets;
+}
+
+export function formatCompact(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return "--";
+  if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(Math.round(value));
+}
+
+export function formatRelativeTime(timestamp: number): string {
+  if (!timestamp) return "unknown";
+  const delta = Date.now() - timestamp;
+  const future = delta < 0;
+  const abs = Math.abs(delta);
+  const minutes = Math.floor(abs / 60000);
+  if (minutes < 1) return future ? "imminent" : "just now";
+  if (minutes < 60) return `${minutes}m ${future ? "ahead" : "ago"}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${future ? "ahead" : "ago"}`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}d ${future ? "ahead" : "ago"}`;
+  const months = Math.floor(days / 30);
+  return `${months}mo ${future ? "ahead" : "ago"}`;
+}
+
+export function formatUtcTime(timestamp: number): string {
+  if (!timestamp) return "--";
+  return new Date(timestamp).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+}
+
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}

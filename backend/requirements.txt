@@ -1,0 +1,10 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+httpx>=0.28.1,<1.0.0
+pandas>=2.2.3
+numpy>=2.2.1,<2.5
+python-dotenv==1.0.1
+google-genai==1.38.0
+markdown-pdf==1.13.1
+# Vector search: embeddings (required for live Actian DB); cortex is optional (demo used when missing)
+sentence-transformers>=2.2.0
