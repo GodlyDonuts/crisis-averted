@@ -151,6 +151,7 @@ export interface OsintSnapshot {
   naturalEvents: OsintNaturalEvent[];
   gpsInterference: GpsInterferenceCell[];
   mapOfWarsEvents: MapOfWarsRawEvent[];
+  webcams: OsintWebcam[];
   errors: string[];
 }
 
@@ -190,4 +191,19 @@ export interface MapOfWarsRawEvent {
   violence?: string;
   note?: string;
   url?: string;
+}
+
+
+export interface OsintWebcam {
+  id: string;
+  title: string;
+  lat: number;
+  lng: number;
+  city: string | null;
+  region: string | null;
+  country: string | null;
+  status: string | null;
+  categories: string[];
+  detailUrl: string | null;
+  playerUrl: string | null;
 }

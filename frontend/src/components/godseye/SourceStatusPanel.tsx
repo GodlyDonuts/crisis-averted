@@ -46,6 +46,7 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
         <Row label="Launch pads" value={String(snapshot.launches.length)} />
         <Row label="Natural events" value={String(snapshot.naturalEvents.length)} />
         <Row label="GPS interference cells" value={String(snapshot.gpsInterference.length)} />
+        <Row label="Webcam metadata" value={snapshot.webcams.length > 0 ? String(snapshot.webcams.length) : "key not configured"} warn={snapshot.webcams.length === 0} />
       </div>
 
       <div className="border-t border-white/8 px-4 py-3">

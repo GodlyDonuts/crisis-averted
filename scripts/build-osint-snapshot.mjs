@@ -6,13 +6,13 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const outFile = join(root, 'frontend/public/data/osint-snapshot.json');
 mkdirSync(dirname(outFile), { recursive: true });
 
-async function getJson(url, timeout = 14000) {
+async function getJson(url, timeout = 14000, extraHeaders = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(url, {
       signal: controller.signal,
-      headers: { 'User-Agent': 'GodseyeOSINT/1.0 (+https://github.com/GodlyDonuts/crisis-averted)' },
+      headers: { 'User-Agent': 'GodseyeOSINT/1.0 (+https://github.com/GodlyDonuts/crisis-averted)', ...extraHeaders },
     });
     if (!response.ok) throw new Error(`${response.status}`);
     return await response.json();
@@ -41,7 +41,7 @@ function parseRssItems(xml, limit = 30) {
   }).filter((article) => article.title && article.url);
 }
 
-const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], errors: [] };
+const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], errors: [] };
 
 try {
   const payload = await getJson('https://api.adsb.lol/v2/mil');
@@ -173,5 +173,36 @@ try {
   result.sources.gpsInterference = `gpsjam.org daily H3 interference (${latestDate})`;
 } catch (error) { result.errors.push(`gpsjam.org: ${error.message}`); }
 
+if (process.env.WINDY_WEBCAMS_KEY) {
+  try {
+    const regions = [
+      [49.0, 32.0], [31.5, 34.8], [15.5, 32.5], [15.0, 43.0], [23.8, 121.0],
+      [38.0, 127.5], [56.8, 24.5], [33.5, 44.3], [48.7, 44.5], [36.2, 37.1],
+    ];
+    const responses = await Promise.allSettled(regions.map(([lat, lng]) => getJson(
+      `https://api.windy.com/webcams/api/v3/webcams?nearby=${lat},${lng},250&limit=12&include=categories,location,player,urls`,
+      16000,
+      { 'x-windy-api-key': process.env.WINDY_WEBCAMS_KEY },
+    )));
+    const unique = new Map();
+    for (const response of responses) {
+      if (response.status !== 'fulfilled') continue;
+      for (const webcam of response.value.webcams ?? []) {
+        const lat = webcam.location?.latitude, lng = webcam.location?.longitude;
+        if (!webcam.webcamId || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        unique.set(String(webcam.webcamId), {
+          id: String(webcam.webcamId), title: webcam.title || 'Public webcam', lat, lng,
+          city: webcam.location?.city || null, region: webcam.location?.region || null,
+          country: webcam.location?.country || null, status: webcam.status || null,
+          categories: (webcam.categories ?? []).map((category) => category.name).filter(Boolean).slice(0, 3),
+          detailUrl: webcam.urls?.detail || null, playerUrl: webcam.player?.day || webcam.player?.lifetime || null,
+        });
+      }
+    }
+    result.webcams = [...unique.values()].slice(0, 160);
+    result.sources.webcams = 'Windy Webcams API v3 metadata (configure WINDY_WEBCAMS_KEY)';
+  } catch (error) { result.errors.push(`Windy Webcams: ${error.message}`); }
+}
+
 writeFileSync(outFile, JSON.stringify(result));
-console.log(`osint snapshot: ${result.militaryAircraft.length} aircraft, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events`);
+console.log(`osint snapshot: ${result.militaryAircraft.length} aircraft, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.webcams.length} webcams`);

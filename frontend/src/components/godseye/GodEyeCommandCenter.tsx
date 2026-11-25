@@ -287,6 +287,7 @@ export default function GodEyeCommandCenter() {
           <EventDetailPanel
             event={selectedEvent}
             theater={theaters.find((theater) => theater.slug === selectedEvent.theater) ?? null}
+            snapshot={osintSnapshot}
             onClose={() => setSelectedEventId(null)}
             onTheaterFocus={isolateTheater}
           />

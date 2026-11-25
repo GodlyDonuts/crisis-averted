@@ -1,13 +1,14 @@
 "use client";
 
 import { BadgeCheck, Crosshair, ExternalLink, MapPin, X } from "lucide-react";
-import type { ConflictEvent, ConflictTheater } from "@/types/conflict";
+import type { ConflictEvent, ConflictTheater, OsintSnapshot } from "@/types/conflict";
 import { RegionalIntel } from "./RegionalIntel";
 import { formatCompact, formatRelativeTime, formatUtcTime, normalizeCategory, SEVERITY_META } from "@/lib/conflictData";
 
 interface EventDetailPanelProps {
   event: ConflictEvent;
   theater: ConflictTheater | null;
+  snapshot: OsintSnapshot;
   onClose: () => void;
   onTheaterFocus: (theater: ConflictTheater) => void;
 }
@@ -34,7 +35,7 @@ function DetailMetric({ label, value, accent = false }: { label: string; value: 
   );
 }
 
-export default function EventDetailPanel({ event, theater, onClose, onTheaterFocus }: EventDetailPanelProps) {
+export default function EventDetailPanel({ event, theater, snapshot, onClose, onTheaterFocus }: EventDetailPanelProps) {
   const severity = SEVERITY_META[event.severity];
   const threatIndex = Math.round(event.intensity * 100);
 
@@ -115,7 +116,7 @@ export default function EventDetailPanel({ event, theater, onClose, onTheaterFoc
           </div>
         </div>
 
-        <RegionalIntel event={event} />
+        <RegionalIntel event={event} snapshot={snapshot} />
 
         <div className="mt-4">
           <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-white/34">Source chain</p>

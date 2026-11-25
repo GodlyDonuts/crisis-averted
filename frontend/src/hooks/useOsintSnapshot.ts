@@ -13,6 +13,7 @@ const EMPTY_SNAPSHOT: OsintSnapshot = {
   naturalEvents: [],
   gpsInterference: [],
   mapOfWarsEvents: [],
+  webcams: [],
   errors: [],
 };
 
