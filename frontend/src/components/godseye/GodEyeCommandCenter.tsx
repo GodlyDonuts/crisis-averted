@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { CategoryGroup, ConflictEvent, ConflictFilters, ConflictTheater, MilitaryAircraft, SeverityKey } from "@/types/conflict";
 import {
   aggregateTheaters,
@@ -66,6 +67,8 @@ export default function GodEyeCommandCenter() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [selectedAircraft, setSelectedAircraft] = useState<MilitaryAircraft | null>(null);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
+  const [theaterPanelOpen, setTheaterPanelOpen] = useState(true);
+  const [incidentPanelOpen, setIncidentPanelOpen] = useState(true);
   const [selectedTheaterSlug, setSelectedTheaterSlug] = useState<string | null>(null);
   const [focusTarget, setFocusTarget] = useState<GodEyeFocusTarget | null>(null);
 
@@ -270,12 +273,23 @@ export default function GodEyeCommandCenter() {
           />
         ) : null}
 
-        <TheaterList
-          theaters={theaters}
-          selectedTheaterSlug={selectedTheaterSlug}
-          onTheaterSelect={handleTheaterSelect}
-          onClearTheater={clearTheater}
-        />
+        {theaterPanelOpen ? (
+          <TheaterList
+            theaters={theaters}
+            selectedTheaterSlug={selectedTheaterSlug}
+            onTheaterSelect={handleTheaterSelect}
+            onClearTheater={clearTheater}
+          />
+        ) : null}
+
+        <button
+          type="button"
+          onClick={() => setTheaterPanelOpen((open) => !open)}
+          className={`absolute top-24 z-50 hidden h-14 w-6 items-center justify-center rounded-sm border border-white/10 bg-[#050806]/78 text-white/38 backdrop-blur transition hover:border-amber-200/25 hover:text-amber-100 xl:flex ${theaterPanelOpen ? "left-[340px]" : "left-3"}`}
+          aria-label={theaterPanelOpen ? "Collapse theater panel" : "Expand theater panel"}
+        >
+          {theaterPanelOpen ? <ChevronsLeft className="h-4 w-4" /> : <ChevronsRight className="h-4 w-4" />}
+        </button>
 
         {selectedEvent ? <TargetLockOverlay event={selectedEvent} /> : null}
 
@@ -283,21 +297,32 @@ export default function GodEyeCommandCenter() {
           <AircraftDetailPanel aircraft={selectedAircraft} onClose={() => setSelectedAircraft(null)} />
         ) : null}
 
-        {selectedEvent ? (
-          <EventDetailPanel
-            event={selectedEvent}
-            theater={theaters.find((theater) => theater.slug === selectedEvent.theater) ?? null}
-            snapshot={osintSnapshot}
-            onClose={() => setSelectedEventId(null)}
-            onTheaterFocus={isolateTheater}
-          />
-        ) : (
-          <EventFeed
-            events={visibleEvents}
-            selectedEventId={selectedEventId}
-            onEventSelect={handleEventSelect}
-          />
-        )}
+        {incidentPanelOpen ? (
+          selectedEvent ? (
+            <EventDetailPanel
+              event={selectedEvent}
+              theater={theaters.find((theater) => theater.slug === selectedEvent.theater) ?? null}
+              snapshot={osintSnapshot}
+              onClose={() => setSelectedEventId(null)}
+              onTheaterFocus={isolateTheater}
+            />
+          ) : (
+            <EventFeed
+              events={visibleEvents}
+              selectedEventId={selectedEventId}
+              onEventSelect={handleEventSelect}
+            />
+          )
+        ) : null}
+
+        <button
+          type="button"
+          onClick={() => setIncidentPanelOpen((open) => !open)}
+          className={`absolute top-24 z-50 hidden h-14 w-6 items-center justify-center rounded-sm border border-white/10 bg-[#050806]/78 text-white/38 backdrop-blur transition hover:border-amber-200/25 hover:text-amber-100 xl:flex ${incidentPanelOpen ? "right-[394px]" : "right-3"}`}
+          aria-label={incidentPanelOpen ? "Collapse incident panel" : "Expand incident panel"}
+        >
+          {incidentPanelOpen ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
+        </button>
 
         <ControlDeck
           timeWindow={filters.timeWindow}
