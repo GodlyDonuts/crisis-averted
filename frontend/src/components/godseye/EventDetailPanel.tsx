@@ -2,6 +2,7 @@
 
 import { BadgeCheck, Crosshair, ExternalLink, MapPin, X } from "lucide-react";
 import type { ConflictEvent, ConflictTheater } from "@/types/conflict";
+import { RegionalIntel } from "./RegionalIntel";
 import { formatCompact, formatRelativeTime, formatUtcTime, normalizeCategory, SEVERITY_META } from "@/lib/conflictData";
 
 interface EventDetailPanelProps {
@@ -113,6 +114,8 @@ export default function EventDetailPanel({ event, theater, onClose, onTheaterFoc
             </div>
           </div>
         </div>
+
+        <RegionalIntel event={event} />
 
         <div className="mt-4">
           <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-white/34">Source chain</p>
