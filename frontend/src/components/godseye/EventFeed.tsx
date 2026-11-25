@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { BadgeCheck, RadioTower } from "lucide-react";
 import type { ConflictEvent } from "@/types/conflict";
 import { formatRelativeTime, normalizeCategory, SEVERITY_META } from "@/lib/conflictData";
@@ -11,7 +12,13 @@ interface EventFeedProps {
 }
 
 export default function EventFeed({ events, selectedEventId, onEventSelect }: EventFeedProps) {
-  const now = Date.now();
+  const [now, setNow] = useState(0);
+  useEffect(() => {
+    const update = () => setNow(Date.now());
+    update();
+    const interval = window.setInterval(update, 60000);
+    return () => window.clearInterval(interval);
+  }, []);
   const feedEvents = [...events]
     .sort((a, b) => {
       const aFuture = a.occurredAt > now + 15 * 60 * 1000 ? 1 : 0;
