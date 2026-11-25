@@ -5,6 +5,7 @@ import type {
   ConflictSource,
   ConflictSummary,
   ConflictTheater,
+  MapOfWarsRawEvent,
   SeverityKey,
   TimelineBucket,
   TimeWindowKey,
@@ -13,7 +14,6 @@ import type {
 import { assetPath } from "@/lib/assets";
 
 const LIVE_EVENTS_URL = "https://warheatmap.app/functions/eventsLite";
-const MAP_OF_WARS_EVENTS_URL = "https://mapofwars.org/api/events";
 const FALLBACK_EVENTS_URL = assetPath("/data/conflict-fallback.json");
 
 export const DEFAULT_CONFLICT_FILTERS: ConflictFilters = {
@@ -63,26 +63,11 @@ const CATEGORY_GROUP_MAP: Record<string, CategoryGroup> = {
 };
 
 
-interface MapOfWarsRawEvent {
-  id?: string;
-  kind?: string;
-  lat?: number;
-  lon?: number;
-  title?: string;
-  detail?: string;
-  level?: number;
-  ts?: number;
-  source?: string;
-  violence?: string;
-  note?: string;
-  url?: string;
-}
-
 function slugifyTheater(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "global";
 }
 
-function normalizeMapOfWarsEvent(raw: MapOfWarsRawEvent): ConflictEvent | null {
+export function normalizeMapOfWarsEvent(raw: MapOfWarsRawEvent): ConflictEvent | null {
   if (!raw.id || typeof raw.lat !== "number" || typeof raw.lon !== "number" || !raw.ts) return null;
   if (!["battle", "ship", "outage", "activation", "launch"].includes(raw.kind ?? "")) return null;
   const title = raw.title || "Unnamed contact";
@@ -229,23 +214,17 @@ async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<unk
   }
 }
 
-export async function loadConflictEvents(): Promise<ConflictDataResult> {
+export async function loadConflictEvents(snapshotEvents: ConflictEvent[] = []): Promise<ConflictDataResult> {
   const fetchedAt = Date.now();
-  const [warHeatmap, mapOfWars] = await Promise.allSettled([
+  const [warHeatmap] = await Promise.allSettled([
     fetchJsonWithTimeout(LIVE_EVENTS_URL, 14000),
-    fetchJsonWithTimeout(MAP_OF_WARS_EVENTS_URL, 14000),
   ]);
 
-  const events: ConflictEvent[] = [];
+  const events: ConflictEvent[] = [...snapshotEvents];
   const errors: string[] = [];
   if (warHeatmap.status === "fulfilled" && Array.isArray(warHeatmap.value)) {
     events.push(...warHeatmap.value.map((raw) => normalizeWarHeatmapEvent(raw as WarHeatmapRawEvent)).filter((event): event is ConflictEvent => event !== null));
   } else if (warHeatmap.status === "rejected") errors.push(`WarHeatMap: ${warHeatmap.reason instanceof Error ? warHeatmap.reason.message : "unavailable"}`);
-
-  if (mapOfWars.status === "fulfilled") {
-    const payload = mapOfWars.value as { events?: MapOfWarsRawEvent[] };
-    events.push(...(payload.events ?? []).map(normalizeMapOfWarsEvent).filter((event): event is ConflictEvent => event !== null));
-  } else errors.push(`Map of Wars: ${mapOfWars.reason instanceof Error ? mapOfWars.reason.message : "unavailable"}`);
 
   if (events.length > 0) {
     return { events: events.sort((a, b) => b.occurredAt - a.occurredAt).slice(0, 2600), source: "live", error: errors.join(" · ") || null, fetchedAt };
@@ -254,7 +233,7 @@ export async function loadConflictEvents(): Promise<ConflictDataResult> {
   try {
     const payload = await fetchJsonWithTimeout(FALLBACK_EVENTS_URL, 8000) as { events?: WarHeatmapRawEvent[] };
     const fallbackEvents = (payload.events ?? []).map(normalizeWarHeatmapEvent).filter((event): event is ConflictEvent => event !== null);
-    return { events: fallbackEvents, source: "fallback", error: errors.join(" · ") || "Live feeds unavailable", fetchedAt };
+    return { events: [...fallbackEvents, ...snapshotEvents].sort((a, b) => b.occurredAt - a.occurredAt), source: "fallback", error: errors.join(" · ") || "Live feeds unavailable", fetchedAt };
   } catch (fallbackError) {
     return { events: [], source: "fallback", error: fallbackError instanceof Error ? fallbackError.message : "Unable to load conflict data", fetchedAt };
   }

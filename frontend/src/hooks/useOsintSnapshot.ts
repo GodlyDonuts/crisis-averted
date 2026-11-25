@@ -12,6 +12,7 @@ const EMPTY_SNAPSHOT: OsintSnapshot = {
   launches: [],
   naturalEvents: [],
   gpsInterference: [],
+  mapOfWarsEvents: [],
   errors: [],
 };
 

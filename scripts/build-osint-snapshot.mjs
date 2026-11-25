@@ -41,7 +41,7 @@ function parseRssItems(xml, limit = 30) {
   }).filter((article) => article.title && article.url);
 }
 
-const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], errors: [] };
+const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], errors: [] };
 
 try {
   const payload = await getJson('https://api.adsb.lol/v2/mil');
@@ -141,6 +141,19 @@ try {
 
 
 try {
+  const payload = await getJson('https://mapofwars.org/api/events', 24000);
+  result.mapOfWarsEvents = (payload.events ?? [])
+    .filter((event) => ['battle', 'ship', 'outage', 'activation', 'launch'].includes(event.kind) && Number.isFinite(event.lat) && Number.isFinite(event.lon) && event.id && event.ts)
+    .slice(0, 1800)
+    .map((event) => ({
+      id: event.id, kind: event.kind, lat: event.lat, lon: event.lon, title: event.title,
+      detail: event.detail, level: event.level, ts: event.ts, source: event.source,
+      note: event.note, url: event.url,
+    }));
+  result.sources.mapOfWars = 'Map of Wars public event lattice (build-time cache)';
+} catch (error) { result.errors.push(`Map of Wars: ${error.message}`); }
+
+try {
   const manifest = await getText('https://gpsjam.org/data/manifest.csv', 20000);
   const rows = manifest.trim().split(String.fromCharCode(10));
   const latestDate = rows[rows.length - 1].split(',')[0];
@@ -161,4 +174,4 @@ try {
 } catch (error) { result.errors.push(`gpsjam.org: ${error.message}`); }
 
 writeFileSync(outFile, JSON.stringify(result));
-console.log(`osint snapshot: ${result.militaryAircraft.length} aircraft, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells`);
+console.log(`osint snapshot: ${result.militaryAircraft.length} aircraft, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events`);

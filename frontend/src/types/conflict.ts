@@ -150,6 +150,7 @@ export interface OsintSnapshot {
   launches: OsintLaunch[];
   naturalEvents: OsintNaturalEvent[];
   gpsInterference: GpsInterferenceCell[];
+  mapOfWarsEvents: MapOfWarsRawEvent[];
   errors: string[];
 }
 
@@ -173,4 +174,20 @@ export interface GpsInterferenceCell {
   aircraftCount: number;
   affectedShare: number;
   level: "low" | "medium" | "high";
+}
+
+
+export interface MapOfWarsRawEvent {
+  id?: string;
+  kind?: string;
+  lat?: number;
+  lon?: number;
+  title?: string;
+  detail?: string;
+  level?: number;
+  ts?: number;
+  source?: string;
+  violence?: string;
+  note?: string;
+  url?: string;
 }

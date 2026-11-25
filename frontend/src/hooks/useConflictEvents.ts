@@ -16,7 +16,7 @@ interface ConflictEventsState {
   refresh: () => Promise<void>;
 }
 
-export function useConflictEvents(): ConflictEventsState {
+export function useConflictEvents(snapshotEvents: ConflictEvent[] = []): ConflictEventsState {
   const [events, setEvents] = useState<ConflictEvent[]>([]);
   const [source, setSource] = useState<"live" | "fallback" | null>(null);
   const [loading, setLoading] = useState(true);
@@ -28,7 +28,7 @@ export function useConflictEvents(): ConflictEventsState {
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const result = await loadConflictEvents();
+      const result = await loadConflictEvents(snapshotEvents);
       if (!mountedRef.current) return;
       setEvents(result.events);
       setSource(result.source);
@@ -42,7 +42,7 @@ export function useConflictEvents(): ConflictEventsState {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [snapshotEvents]);
 
   useEffect(() => {
     mountedRef.current = true;

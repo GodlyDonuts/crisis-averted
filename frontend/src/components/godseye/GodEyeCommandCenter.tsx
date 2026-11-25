@@ -9,6 +9,7 @@ import {
   DEFAULT_CONFLICT_FILTERS,
   filterConflictEvents,
   summarizeEvents,
+  normalizeMapOfWarsEvent,
 } from "@/lib/conflictData";
 import { useConflictEvents } from "@/hooks/useConflictEvents";
 import { useOsintSnapshot } from "@/hooks/useOsintSnapshot";
@@ -51,8 +52,12 @@ const DEFAULT_LAYERS: GodEyeLayerToggles = {
 };
 
 export default function GodEyeCommandCenter() {
-  const { events, source, loading, refreshing, error, lastUpdated, refresh } = useConflictEvents();
   const osintSnapshot = useOsintSnapshot();
+  const snapshotConflictEvents = useMemo(
+    () => osintSnapshot.mapOfWarsEvents.map(normalizeMapOfWarsEvent).filter((event): event is ConflictEvent => event !== null),
+    [osintSnapshot.mapOfWarsEvents]
+  );
+  const { events, source, loading, refreshing, error, lastUpdated, refresh } = useConflictEvents(snapshotConflictEvents);
   const [filters, setFilters] = useState<ConflictFilters>(() => createDefaultFilters());
   const [layers, setLayers] = useState<GodEyeLayerToggles>(DEFAULT_LAYERS);
   const [visualMode, setVisualMode] = useState<GodEyeVisualMode>("cinematic");
