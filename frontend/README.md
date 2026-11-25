@@ -11,6 +11,15 @@ npm run dev
 
 Open `http://localhost:3000` or `http://localhost:3000/globe`.
 
+
+## Hosted deployment
+
+The static production build is deployed to GitHub Pages:
+
+**https://godlydonuts.github.io/crisis-averted/**
+
+GitHub Actions rebuilds and redeploys on every `main` push and twice hourly. During each deployment the OSINT snapshot is refreshed from public endpoints including ADSB.lol military aircraft, Google News RSS/GDELT conflict coverage, Launch Library 2, NASA EONET, USGS earthquakes, WarHeatMap, and Map of Wars/UCDP-derived events.
+
 Production validation:
 
 ```bash
