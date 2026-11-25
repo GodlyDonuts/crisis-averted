@@ -377,7 +377,7 @@ export default function GodEyeGlobe({
     if (visualMode === "satellite") {
       globe
         .globeTileEngineUrl((x, y, level) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${level}/${y}/${x}`)
-        .globeTileEngineMaxLevel(8);
+        .globeTileEngineMaxLevel(13);
     } else {
       globe
         .globeImageUrl("/textures/earth-blue-marble.jpg")
@@ -416,6 +416,16 @@ export default function GodEyeGlobe({
     controls.panSpeed = 0.35;
     controls.minDistance = 118;
     controls.maxDistance = 430;
+
+    let activePixelRatio = 0;
+    globe.onZoom((pov) => {
+      const altitude = pov.altitude ?? 2.2;
+      const desiredPixelRatio = Math.min(window.devicePixelRatio || 1, altitude < 0.62 ? 2 : altitude < 1.35 ? 1.6 : 1.25);
+      if (Math.abs(desiredPixelRatio - activePixelRatio) > 0.08) {
+        activePixelRatio = desiredPixelRatio;
+        renderer.setPixelRatio(desiredPixelRatio);
+      }
+    });
 
     const resizeObserver = new ResizeObserver(() => {
       if (!containerRef.current || !globeRef.current) return;
