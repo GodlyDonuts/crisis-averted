@@ -313,7 +313,7 @@ function buildSignalArcs(events: ConflictEvent[], theaters: ConflictTheater[], s
       const start = theaterEvents[index];
       const end = theaterEvents[index + 1];
       const distance = Math.hypot(start.lat - end.lat, start.lng - end.lng);
-      if (distance < 0.5 || distance > 75) continue;
+      if (distance < 0.5 || distance > 32) continue;
       arcs.push({
         id: `${start.id}-${end.id}`,
         startLat: start.lat,
@@ -321,7 +321,7 @@ function buildSignalArcs(events: ConflictEvent[], theaters: ConflictTheater[], s
         endLat: end.lat,
         endLng: end.lng,
         severity: start.severity,
-        altitude: Math.min(0.42, 0.1 + distance / 180),
+        altitude: Math.min(0.24, 0.07 + distance / 240),
       });
     }
   }
@@ -828,10 +828,10 @@ export default function GodEyeGlobe({
         .arcColor((arc: object) => {
           const signal = arc as SignalArc;
           const color = SEVERITY_META[signal.severity].color;
-          return ["rgba(100,210,255,0.035)", color];
+          return ["rgba(214,168,79,0.018)", color];
         })
         .arcAltitude((arc) => (arc as SignalArc).altitude)
-        .arcStroke(0.32)
+        .arcStroke(0.24)
         .arcCurveResolution(48)
         .arcCircularResolution(8)
         .arcDashLength(0.36)
