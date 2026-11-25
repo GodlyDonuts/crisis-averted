@@ -48,6 +48,42 @@ fn track_end(lat: f32, lng: f32, track: f32, speed: f32) -> (f32, f32) {
     )
 }
 
+fn slerp_unit(a: Vec3, b: Vec3, t: f32) -> Vec3 {
+    let dot = a.dot(b).clamp(-1.0, 1.0);
+    if dot > 0.9995 {
+        return (a + (b - a) * t).normalize_or_zero();
+    }
+    let theta = dot.acos();
+    let sin_theta = theta.sin();
+    (a * ((1.0 - t) * theta).sin() + b * (t * theta).sin()) / sin_theta
+}
+
+fn build_aircraft_track_meshes(aircraft: &[Aircraft]) -> Vec<Mesh> {
+    let mut builder = RibbonBuilder::new();
+    let color = Color::new(0.7, 0.78, 0.52, 0.34);
+    for item in aircraft.iter().take(240) {
+        let (Some(track), Some(speed)) = (item.track, item.speed) else {
+            continue;
+        };
+        if speed <= 70.0 {
+            continue;
+        }
+        let (end_lat, end_lng) = track_end(item.lat, item.lng, track, speed);
+        let start = lat_lng_to_vec3(item.lat, item.lng, 1.0).normalize_or_zero();
+        let end = lat_lng_to_vec3(end_lat, end_lng, 1.0).normalize_or_zero();
+        if start.length_squared() < 0.5 || end.length_squared() < 0.5 {
+            continue;
+        }
+        let mut previous = start * EARTH_RADIUS * 1.035;
+        for step in 1..=7 {
+            let current = slerp_unit(start, end, step as f32 / 7.0) * EARTH_RADIUS * 1.035;
+            builder.push_segment(previous, current, 0.0022, color);
+            previous = current;
+        }
+    }
+    builder.finish()
+}
+
 fn append_octahedron(
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u16>,
@@ -428,8 +464,12 @@ async fn main() {
     let earth_bytes = include_bytes!("../../../frontend/public/textures/earth-blue-marble.jpg");
     let earth = Texture2D::from_file_with_format(earth_bytes, Some(ImageFormat::Jpeg));
     earth.set_filter(FilterMode::Linear);
+    let cloud_bytes = include_bytes!("../../../frontend/public/textures/clouds.png");
+    let clouds = Texture2D::from_file_with_format(cloud_bytes, Some(ImageFormat::Png));
+    clouds.set_filter(FilterMode::Linear);
     let event_meshes = build_event_meshes(&incidents);
     let aircraft_mesh = build_aircraft_mesh(&osint.aircraft);
+    let aircraft_track_meshes = build_aircraft_track_meshes(&osint.aircraft);
     let natural_mesh = build_natural_mesh(&osint.natural_events);
     let priority_incidents: Vec<Incident> = incidents
         .iter()
@@ -535,6 +575,18 @@ async fn main() {
         set_camera(&camera);
 
         draw_sphere(vec3(0.0, 0.0, 0.0), EARTH_RADIUS, Some(&earth), WHITE);
+        draw_sphere(
+            vec3(0.0, 0.0, 0.0),
+            EARTH_RADIUS * 1.009,
+            Some(&clouds),
+            Color::new(1.0, 1.0, 1.0, 0.26),
+        );
+        draw_sphere(
+            vec3(0.0, 0.0, 0.0),
+            EARTH_RADIUS * 1.045,
+            None,
+            Color::new(0.24, 0.46, 0.82, 0.055),
+        );
 
         if show_borders {
             for mesh in &border_meshes {
@@ -558,16 +610,8 @@ async fn main() {
 
         if show_aircraft {
             draw_mesh(&aircraft_mesh);
-            for aircraft in osint.aircraft.iter().take(220) {
-                let start = lat_lng_to_vec3(aircraft.lat, aircraft.lng, EARTH_RADIUS * 1.035);
-                if let (Some(track), Some(speed)) = (aircraft.track, aircraft.speed) {
-                    if speed > 70.0 {
-                        let (end_lat, end_lng) =
-                            track_end(aircraft.lat, aircraft.lng, track, speed);
-                        let end = lat_lng_to_vec3(end_lat, end_lng, EARTH_RADIUS * 1.035);
-                        draw_line_3d(start, end, Color::new(0.7, 0.78, 0.52, 0.34));
-                    }
-                }
+            for mesh in &aircraft_track_meshes {
+                draw_mesh(mesh);
             }
         }
 
