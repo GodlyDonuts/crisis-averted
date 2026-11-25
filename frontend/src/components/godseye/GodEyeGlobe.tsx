@@ -357,6 +357,7 @@ export default function GodEyeGlobe({
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
   const materialRef = useRef<ShaderMaterial | null>(null);
+  const [viewFocus, setViewFocus] = useState({ lat: 20, lng: 0, altitude: 2.2 });
   const cloudsRef = useRef<Mesh | null>(null);
   const layersRef = useRef(layers);
   const [countryFeatures, setCountryFeatures] = useState<CountryFeature[]>([]);
@@ -385,11 +386,25 @@ export default function GodEyeGlobe({
     });
   }, [affectedCountries, countryFeatures]);
 
+  const detailLevel = viewFocus.altitude < 0.62 ? 2 : viewFocus.altitude < 1.35 ? 1 : 0;
   const interactiveEvents = useMemo(() => {
-    return [...events]
+    const maxEvents = detailLevel === 2 ? 430 : detailLevel === 1 ? 320 : 190;
+    let regionalPool = events;
+    if (detailLevel > 0) {
+      const radiusDegrees = detailLevel === 2 ? 30 : 58;
+      regionalPool = events.filter((event) => {
+        const meanLat = ((event.lat + viewFocus.lat) / 2) * Math.PI / 180;
+        const dLat = event.lat - viewFocus.lat;
+        const dLng = (event.lng - viewFocus.lng) * Math.cos(meanLat);
+        return Math.sqrt(dLat * dLat + dLng * dLng) <= radiusDegrees;
+      });
+    }
+    const ordered = [...regionalPool]
       .sort((a, b) => (b.intensity - a.intensity) || (b.occurredAt - a.occurredAt))
-      .slice(0, 260);
-  }, [events]);
+      .slice(0, maxEvents);
+    if (selectedEvent && !ordered.some((event) => event.id === selectedEvent.id)) ordered.unshift(selectedEvent);
+    return ordered;
+  }, [events, detailLevel, viewFocus.lat, viewFocus.lng, selectedEvent]);
 
   const alertEvents = useMemo(() => {
     return [...events]
@@ -498,6 +513,15 @@ export default function GodEyeGlobe({
         activePixelRatio = desiredPixelRatio;
         renderer.setPixelRatio(desiredPixelRatio);
       }
+      setViewFocus((current) => {
+        const centerDelta = Math.abs((pov.lat ?? 0) - current.lat) + Math.abs((pov.lng ?? 0) - current.lng);
+        const altitudeDelta = Math.abs(altitude - current.altitude);
+        if (altitude < 1.55 && (centerDelta > 3 || altitudeDelta > 0.12)) {
+          return { lat: pov.lat ?? current.lat, lng: pov.lng ?? current.lng, altitude };
+        }
+        if (altitudeDelta > 0.16) return { ...current, altitude };
+        return current;
+      });
     });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -825,12 +849,14 @@ export default function GodEyeGlobe({
         : theaters;
       const labelTheaters: ConflictTheater[] = [];
       for (const theater of orderedTheaters) {
-        if (labelTheaters.length >= 8) break;
+        const maxLabels = detailLevel === 2 ? 16 : detailLevel === 1 ? 12 : 8;
+        if (labelTheaters.length >= maxLabels) break;
         const isolated = labelTheaters.every((existing) => {
           const avgLat = ((existing.lat + theater.lat) / 2) * Math.PI / 180;
           const dLat = existing.lat - theater.lat;
           const dLng = (existing.lng - theater.lng) * Math.cos(avgLat);
-          return Math.sqrt(dLat * dLat + dLng * dLng) >= 11.5;
+          const minimumSeparation = detailLevel === 2 ? 4.2 : detailLevel === 1 ? 7.2 : 11.5;
+          return Math.sqrt(dLat * dLat + dLng * dLng) >= minimumSeparation;
         });
         if (isolated || theater.slug === selectedTheater?.slug) labelTheaters.push(theater);
       }
@@ -858,7 +884,7 @@ export default function GodEyeGlobe({
     globe
       .pointsData([
         ...interactiveEvents.map((event) => ({ ...event, objectKind: "event" as const })),
-        ...(layers.aircraft ? militaryAircraft.slice(0, 190).map((aircraft) => ({ ...aircraft, objectKind: "aircraft" as const })) : []),
+        ...(layers.aircraft ? militaryAircraft.slice(0, detailLevel === 2 ? 240 : detailLevel === 1 ? 190 : 120).map((aircraft) => ({ ...aircraft, objectKind: "aircraft" as const })) : []),
         ...(layers.orbitalAssets ? launches.slice(0, 24).map((launch) => ({ ...launch, objectKind: "launch" as const })) : []),
         ...(layers.environmental ? naturalEvents.slice(0, 70).map((event) => ({ ...event, objectKind: "natural" as const })) : []),
       ] as GlobePointObject[])
@@ -929,6 +955,7 @@ export default function GodEyeGlobe({
   }, [
     events,
     theaters,
+    detailLevel,
     interactiveEvents,
     militaryAircraft,
     aircraftTracks,
