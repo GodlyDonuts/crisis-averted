@@ -30,7 +30,7 @@ export function MobileIntelSheet({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="fixed right-3 top-[4.7rem] z-40 inline-flex items-center gap-2 rounded-full border border-amber-300/30 bg-[#07111dcc] px-4 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-amber-100 shadow-[0_10px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl"
+        className="absolute right-3 top-[4.7rem] z-40 inline-flex items-center gap-2 rounded-full border border-amber-300/30 bg-[#07111dcc] px-4 py-3 font-mono text-[11px] font-bold uppercase tracking-[0.18em] text-amber-100 shadow-[0_10px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl"
       >
         <Layers3 className="h-4 w-4" /> Intel
       </button>

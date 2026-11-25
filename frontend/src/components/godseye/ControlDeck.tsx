@@ -62,7 +62,7 @@ export default function ControlDeck({
 
   return (
     <div className="godseye-panel pointer-events-auto absolute bottom-4 left-1/2 z-40 w-[min(780px,calc(100vw-2rem))] -translate-x-1/2 overflow-visible">
-      <div className="border-b border-white/8 px-3 pb-1 pt-2">
+      <div className="hidden border-b border-white/8 px-3 pb-1 pt-2 sm:block">
         <div className="flex h-5 items-end gap-[2px]">
           {timeline.map((bucket) => {
             const height = Math.max(4, Math.round((bucket.count / maxCount) * 18));

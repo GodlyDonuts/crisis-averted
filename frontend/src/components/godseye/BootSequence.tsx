@@ -41,14 +41,14 @@ export default function BootSequence({ loading, source }: BootSequenceProps) {
           <Crosshair className="h-9 w-9 text-amber-100/78" strokeWidth={1.3} />
         </div>
         <h2 className="mt-5 font-mono text-lg font-semibold uppercase tracking-[0.36em] text-white">God&apos;s Eye</h2>
-        <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.28em] text-amber-100/38">Global conflict observation lattice</p>
-        <div className="mt-7 w-full space-y-2 text-left font-mono text-[10px] uppercase tracking-[0.18em]">
+        <p className="mt-2 px-3 font-mono text-[9px] uppercase leading-relaxed tracking-[0.18em] sm:text-[10px] sm:tracking-[0.28em] text-amber-100/38">Global conflict observation lattice</p>
+        <div className="mt-7 w-full space-y-2 text-left font-mono text-[9px] uppercase tracking-[0.1em] sm:text-[10px] sm:tracking-[0.18em]">
           {BOOT_LINES.map((line, index) => {
             const active = loading || !source ? index < 3 : true;
             return (
               <div key={line} className="flex items-center justify-between border-b border-white/6 pb-2 text-white/42">
-                <span>{line}</span>
-                <span className={active ? "text-amber-200/75" : "text-white/20"}>{active ? "SYNC" : "WAIT"}</span>
+                <span className="min-w-0 pr-3">{line}</span>
+                <span className={`shrink-0 ${active ? "text-amber-200/75" : "text-white/20"}`}>{active ? "SYNC" : "WAIT"}</span>
               </div>
             );
           })}

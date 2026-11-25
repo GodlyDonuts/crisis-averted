@@ -65,7 +65,7 @@ export default function TopCommandBar({
 
   return (
     <header className="pointer-events-auto absolute left-0 right-0 top-0 z-40 border-b border-amber-300/10 bg-[#02060d]/78 backdrop-blur-xl">
-      <div className="grid h-16 grid-cols-[auto_minmax(250px,1fr)_auto] items-center gap-4 px-4 lg:px-5">
+      <div className="grid h-16 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-4 px-4 lg:px-5">
         <div className="flex min-w-0 items-center gap-3">
           <div className="relative flex h-10 w-10 items-center justify-center rounded-full border border-amber-300/30 bg-amber-400/10 shadow-[0_0_22px_rgba(214,168,79,0.1)]">
             <Crosshair className="h-5 w-5 text-amber-200" strokeWidth={1.7} />
