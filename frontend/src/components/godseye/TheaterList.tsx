@@ -23,7 +23,7 @@ export default function TheaterList({ theaters, selectedTheaterSlug, onTheaterSe
     <aside className="godseye-panel pointer-events-auto absolute bottom-[172px] left-4 top-20 z-30 hidden w-[318px] flex-col overflow-hidden xl:flex">
       <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
         <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-amber-100/42">Priority theaters</p>
+          <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-amber-100/42">Operational theaters</p>
           <h2 className="mt-1 text-sm font-semibold text-white/92">Priority theaters</h2>
         </div>
         {selectedTheaterSlug && (

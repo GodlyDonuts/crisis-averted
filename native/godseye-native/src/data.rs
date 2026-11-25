@@ -149,7 +149,7 @@ pub fn load_embedded() -> (Vec<Incident>, OsintSnapshot) {
             continue;
         };
         let kind = event.kind.as_deref().unwrap_or("");
-        if !matches!(kind, "battle" | "ship" | "outage" | "activation" | "launch") {
+        if kind != "battle" {
             continue;
         }
         let casualties = map_casualties(event.detail.as_deref());

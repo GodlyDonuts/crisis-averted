@@ -258,6 +258,17 @@ function createDayNightMaterial(dayTexture: Texture, nightTexture: Texture, wate
 }
 
 
+function disposeDayNightMaterial(material: ShaderMaterial | null) {
+  if (!material) return;
+  for (const uniform of Object.values(material.uniforms)) {
+    const value = uniform.value as unknown;
+    if (value && typeof value === "object" && "dispose" in value && typeof (value as { dispose?: unknown }).dispose === "function") {
+      (value as { dispose: () => void }).dispose();
+    }
+  }
+  material.dispose();
+}
+
 function aircraftTrackPaths(aircraft: MilitaryAircraft[]): BorderPath[] {
   return aircraft
     .filter((item) => typeof item.track === "number" && typeof item.speed === "number" && item.speed > 70)
@@ -493,10 +504,6 @@ export default function GodEyeGlobe({
       globe
         .globeTileEngineUrl((x, y, level) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${level}/${y}/${x}`)
         .globeTileEngineMaxLevel(17);
-    } else {
-      globe
-        .globeImageUrl(assetPath("/textures/earth-blue-marble.jpg"))
-        .bumpImageUrl(assetPath("/textures/earth-topology.png"));
     }
 
     globeRef.current = globe;
@@ -712,8 +719,18 @@ export default function GodEyeGlobe({
       if (solarInterval) window.clearInterval(solarInterval);
       resizeObserver.disconnect();
       orbitalCleanup();
+      disposeDayNightMaterial(materialRef.current);
       materialRef.current = null;
-      cloudsRef.current = null;
+      if (cloudsRef.current) {
+        cloudsRef.current.removeFromParent();
+        cloudsRef.current.geometry.dispose();
+        const cloudMaterial = cloudsRef.current.material;
+        if (!Array.isArray(cloudMaterial)) {
+          (cloudMaterial as MeshPhongMaterial).map?.dispose();
+          cloudMaterial.dispose();
+        }
+        cloudsRef.current = null;
+      }
       globe._destructor?.();
       globeRef.current = null;
     };
