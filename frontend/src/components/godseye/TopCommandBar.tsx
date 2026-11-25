@@ -76,7 +76,7 @@ export default function TopCommandBar({
               </span>
             </div>
             <p className="mt-0.5 hidden truncate font-mono text-[10px] uppercase tracking-[0.22em] text-amber-100/38 sm:block">
-              Tactical global surveillance grid
+              Global conflict surveillance
             </p>
           </div>
         </div>
@@ -84,10 +84,10 @@ export default function TopCommandBar({
         <div className="hidden items-center justify-center gap-5 font-mono text-[11px] uppercase tracking-[0.16em] text-white/48 md:flex">
           <div className="flex items-center gap-2">
             <Activity className="h-3.5 w-3.5 text-amber-200/70" />
-            <span>{formatCompact(summary.totalEvents)} contacts</span>
+            <span>{formatCompact(summary.totalEvents)} incidents</span>
           </div>
-          <div className="text-red-200/78">{formatCompact(summary.criticalEvents)} priority</div>
-          <div>{formatCompact(summary.activeTheaters)} AOs</div>
+          <div className="text-red-200/78">{formatCompact(summary.criticalEvents)} critical</div>
+          <div>{formatCompact(summary.activeTheaters)} theaters</div>
           <div className="text-amber-100/70">UTC {utcTime}</div>
         </div>
 
@@ -98,7 +98,7 @@ export default function TopCommandBar({
               ref={searchRef}
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
-              placeholder="Search targets, AO, countries, theaters…"
+              placeholder="Search incidents, countries or theaters…"
               className="h-10 w-full rounded-sm border border-amber-200/12 bg-white/[0.035] pl-9 pr-14 font-mono text-xs text-white outline-none transition placeholder:text-white/25 focus:border-amber-200/35 focus:bg-amber-400/[0.055]"
             />
             <kbd className="pointer-events-none absolute right-2 rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 font-mono text-[9px] text-white/35">Ctrl K</kbd>
@@ -136,7 +136,7 @@ export default function TopCommandBar({
 
           <div className="hidden h-10 items-center gap-2 rounded-sm border border-amber-200/12 bg-amber-300/[0.055] px-3 font-mono text-[10px] uppercase tracking-[0.18em] text-amber-100/62 xl:flex">
             <Radio className="h-3.5 w-3.5" />
-            OSINT / C2 Node
+            Public intel
           </div>
         </div>
       </div>

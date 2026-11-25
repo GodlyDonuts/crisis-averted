@@ -46,7 +46,7 @@ export function MobileIntelSheet({
           <section className="godseye-panel absolute inset-x-0 bottom-0 flex h-[72vh] flex-col overflow-hidden rounded-t-3xl border-x-0 border-b-0">
             <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
               <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-amber-200/70">
-                <Activity className="h-4 w-4" /> Intelligence lattice
+                <Activity className="h-4 w-4" /> Incident intelligence
               </div>
               <button
                 type="button"

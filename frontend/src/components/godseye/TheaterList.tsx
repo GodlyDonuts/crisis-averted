@@ -24,7 +24,7 @@ export default function TheaterList({ theaters, selectedTheaterSlug, onTheaterSe
       <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
         <div>
           <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-amber-100/42">Priority theaters</p>
-          <h2 className="mt-1 text-sm font-semibold text-white/92">Target priority deck</h2>
+          <h2 className="mt-1 text-sm font-semibold text-white/92">Priority theaters</h2>
         </div>
         {selectedTheaterSlug && (
           <button
@@ -83,7 +83,7 @@ export default function TheaterList({ theaters, selectedTheaterSlug, onTheaterSe
               key={theater.slug}
               type="button"
               onClick={() => onTheaterSelect(theater)}
-              className={`group mb-1.5 w-full rounded-sm border px-3 py-3 text-left transition-all duration-200 ${selected ? "border-amber-200/40 bg-amber-300/[0.10] shadow-[0_0_30px_rgba(34,211,238,0.08)]" : "border-transparent bg-white/[0.018] hover:border-white/10 hover:bg-white/[0.045]"}`}
+              className={`group w-full border-b border-white/8 px-3 py-3 text-left transition-colors duration-150 ${selected ? "bg-amber-300/[0.075]" : "bg-transparent hover:bg-white/[0.032]"}`}
             >
               <div className="flex items-start gap-3">
                 <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md font-mono text-[10px] ${selected ? "bg-amber-200/16 text-amber-100" : "bg-white/[0.045] text-white/35"}`}>

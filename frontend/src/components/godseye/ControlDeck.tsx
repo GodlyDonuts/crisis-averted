@@ -55,11 +55,11 @@ export default function ControlDeck({
   const maxCount = Math.max(1, ...timeline.map((bucket) => bucket.count));
 
   return (
-    <div className="godseye-panel pointer-events-auto absolute bottom-4 left-1/2 z-40 w-[min(920px,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden">
-      <div className="border-b border-white/8 px-4 pb-1.5 pt-2.5">
-        <div className="flex h-8 items-end gap-[2px]">
+    <div className="godseye-panel pointer-events-auto absolute bottom-4 left-1/2 z-40 w-[min(780px,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden">
+      <div className="border-b border-white/8 px-3 pb-1 pt-2">
+        <div className="flex h-5 items-end gap-[2px]">
           {timeline.map((bucket) => {
-            const height = Math.max(4, Math.round((bucket.count / maxCount) * 28));
+            const height = Math.max(4, Math.round((bucket.count / maxCount) * 18));
             return (
               <div
                 key={bucket.key}
@@ -76,7 +76,7 @@ export default function ControlDeck({
         </div>
       </div>
 
-      <div className="space-y-2 px-3 py-2.5">
+      <div className="space-y-1.5 px-2.5 py-2">
         <div className="godseye-scrollbar flex items-center justify-start gap-1.5 overflow-x-auto px-1 pb-1 sm:flex-wrap sm:justify-center sm:overflow-visible sm:px-0 sm:pb-0">
           {(Object.keys(CATEGORY_GROUP_META) as CategoryGroup[]).map((group) => {
             const active = categoryGroups.includes(group);
