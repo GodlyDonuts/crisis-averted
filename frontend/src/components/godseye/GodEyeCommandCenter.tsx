@@ -102,6 +102,7 @@ export default function GodEyeCommandCenter() {
   }, [theaters, selectedTheaterSlug]);
 
   const handleEventSelect = useCallback((event: ConflictEvent) => {
+    setAutoRotate(false);
     setSelectedAircraft(null);
     setSelectedEventId(event.id);
     setFocusTarget({
@@ -113,6 +114,7 @@ export default function GodEyeCommandCenter() {
   }, []);
 
   const handleAircraftSelect = useCallback((aircraft: MilitaryAircraft) => {
+    setAutoRotate(false);
     setSelectedEventId(null);
     setSelectedAircraft(aircraft);
     setFocusTarget({
@@ -124,6 +126,7 @@ export default function GodEyeCommandCenter() {
   }, []);
 
   const handleTheaterSelect = useCallback((theater: ConflictTheater) => {
+    setAutoRotate(false);
     const alreadySelected = filters.theater === theater.slug;
     setSelectedEventId(null);
     setSelectedAircraft(null);
