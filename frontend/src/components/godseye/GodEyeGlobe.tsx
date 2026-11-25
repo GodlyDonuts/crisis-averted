@@ -100,6 +100,7 @@ interface BorderPath {
   points: [number, number, number][];
   intensity: number;
   kind?: "border" | "aircraft" | "gps";
+  tooltip?: string;
 }
 
 type GeoJsonPosition = [number, number];
@@ -283,7 +284,12 @@ function aircraftTrackPaths(aircraft: MilitaryAircraft[]): BorderPath[] {
           0.018 + t * 0.004,
         ]);
       }
-      return { points, intensity: 0, kind: "aircraft" as const };
+      return {
+        points,
+        intensity: 0,
+        kind: "aircraft" as const,
+        tooltip: `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#b8c29a">PROJECTED MILITARY TRACK</div><div class="godseye-tooltip__title">${escapeHtml(item.callsign)}</div><div class="godseye-tooltip__meta">${Math.round(item.speed ?? 0)} kt · ${Math.round(item.track ?? 0)}° · short-horizon dead reckoning</div></div>`,
+      };
     });
 }
 
@@ -401,6 +407,7 @@ export default function GodEyeGlobe({
         points: ring.map(([lat, lng]) => [lat, lng, 0.0065] as [number, number, number]),
         intensity: cell.affectedShare,
         kind: "gps" as const,
+        tooltip: `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#ff8a00">GPS/GNSS INTERFERENCE</div><div class="godseye-tooltip__title">${Math.round(cell.affectedShare * 100)}% affected aircraft</div><div class="godseye-tooltip__meta">${cell.badAircraft}/${cell.aircraftCount} aircraft reporting interference · gpsjam.org</div></div>`,
       };
     });
   }, [gpsInterference]);
@@ -728,6 +735,7 @@ export default function GodEyeGlobe({
         .pathPointLat((point) => (point as [number, number, number])[0])
         .pathPointLng((point) => (point as [number, number, number])[1])
         .pathPointAlt((point) => (point as [number, number, number])[2])
+        .pathLabel((path: object) => (path as BorderPath).tooltip ?? "")
         .pathColor((path: object) => {
           const border = path as BorderPath;
           if (border.kind === "gps") {
