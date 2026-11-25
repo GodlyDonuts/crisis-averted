@@ -62,6 +62,7 @@ interface GodEyeGlobeProps {
   visualMode: GodEyeVisualMode;
   autoRotate: boolean;
   onEventSelect: (event: ConflictEvent) => void;
+  onAircraftSelect: (aircraft: MilitaryAircraft) => void;
   onTheaterSelect: (theater: ConflictTheater) => void;
 }
 
@@ -340,6 +341,7 @@ export default function GodEyeGlobe({
   visualMode,
   autoRotate,
   onEventSelect,
+  onAircraftSelect,
   onTheaterSelect,
 }: GodEyeGlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -864,6 +866,7 @@ export default function GodEyeGlobe({
       })
       .onPointClick((event) => {
         if ((event as GlobePointObject).objectKind === "event") onEventSelect(event as ConflictEvent);
+        if ((event as GlobePointObject).objectKind === "aircraft") onAircraftSelect(event as MilitaryAircraft);
       });
 
     if (layers.beacons) {
@@ -910,6 +913,7 @@ export default function GodEyeGlobe({
     selectedTheater,
     layers,
     onEventSelect,
+    onAircraftSelect,
     onTheaterSelect,
     visualMode,
   ]);

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import type { CategoryGroup, ConflictEvent, ConflictFilters, ConflictTheater, SeverityKey } from "@/types/conflict";
+import type { CategoryGroup, ConflictEvent, ConflictFilters, ConflictTheater, MilitaryAircraft, SeverityKey } from "@/types/conflict";
 import {
   aggregateTheaters,
   buildTimeline,
@@ -19,6 +19,7 @@ import EventDetailPanel from "./EventDetailPanel";
 import ControlDeck from "./ControlDeck";
 import { MobileIntelSheet } from "./MobileIntelSheet";
 import { TargetLockOverlay } from "./TargetLockOverlay";
+import { AircraftDetailPanel } from "./AircraftDetailPanel";
 import BootSequence from "./BootSequence";
 import type { GodEyeFocusTarget, GodEyeLayerToggles, GodEyeVisualMode } from "./GodEyeGlobe";
 
@@ -56,6 +57,7 @@ export default function GodEyeCommandCenter() {
   const [autoRotate, setAutoRotate] = useState(true);
   const [tourActive, setTourActive] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [selectedAircraft, setSelectedAircraft] = useState<MilitaryAircraft | null>(null);
   const [selectedTheaterSlug, setSelectedTheaterSlug] = useState<string | null>(null);
   const [focusTarget, setFocusTarget] = useState<GodEyeFocusTarget | null>(null);
 
@@ -89,6 +91,7 @@ export default function GodEyeCommandCenter() {
   }, [theaters, selectedTheaterSlug]);
 
   const handleEventSelect = useCallback((event: ConflictEvent) => {
+    setSelectedAircraft(null);
     setSelectedEventId(event.id);
     setFocusTarget({
       lat: event.lat,
@@ -98,9 +101,21 @@ export default function GodEyeCommandCenter() {
     });
   }, []);
 
+  const handleAircraftSelect = useCallback((aircraft: MilitaryAircraft) => {
+    setSelectedEventId(null);
+    setSelectedAircraft(aircraft);
+    setFocusTarget({
+      lat: aircraft.lat,
+      lng: aircraft.lng,
+      altitude: 1.05,
+      key: `aircraft-${aircraft.id}-${Date.now()}`,
+    });
+  }, []);
+
   const handleTheaterSelect = useCallback((theater: ConflictTheater) => {
     const alreadySelected = filters.theater === theater.slug;
     setSelectedEventId(null);
+    setSelectedAircraft(null);
     setSelectedTheaterSlug(alreadySelected ? null : theater.slug);
     setFilters((current) => ({
       ...current,
@@ -216,6 +231,7 @@ export default function GodEyeCommandCenter() {
         visualMode={visualMode}
         autoRotate={autoRotate}
         onEventSelect={handleEventSelect}
+        onAircraftSelect={handleAircraftSelect}
         onTheaterSelect={handleTheaterSelect}
       />
 
@@ -241,6 +257,10 @@ export default function GodEyeCommandCenter() {
         />
 
         {selectedEvent ? <TargetLockOverlay event={selectedEvent} /> : null}
+
+        {selectedAircraft && !selectedEvent ? (
+          <AircraftDetailPanel aircraft={selectedAircraft} onClose={() => setSelectedAircraft(null)} />
+        ) : null}
 
         {selectedEvent ? (
           <EventDetailPanel
