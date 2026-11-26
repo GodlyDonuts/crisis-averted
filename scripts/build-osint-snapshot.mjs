@@ -422,6 +422,44 @@ try {
   result.sources.mapOfWars = 'Map of Wars public event lattice (build-time cache)';
 } catch (error) { result.errors.push(`Map of Wars: ${error.message}`); }
 
+
+if (process.env.ACLED_API_KEY && process.env.ACLED_EMAIL) {
+  try {
+    const url = new URL('https://api.acleddata.com/acled/read');
+    url.searchParams.set('key', process.env.ACLED_API_KEY);
+    url.searchParams.set('email', process.env.ACLED_EMAIL);
+    url.searchParams.set('limit', '1200');
+    url.searchParams.set('fields', 'event_id_cnty|event_date|time_precision|event_type|sub_event_type|actor1|actor2|country|admin1|admin2|location|latitude|longitude|geo_precision|source|notes|fatalities');
+    url.searchParams.set('sort', 'event_date DESC');
+    const payload = await getJson(url, 32000);
+    const acledEvents = (payload.data ?? []).map((event) => {
+      const lat = Number(event.latitude);
+      const lon = Number(event.longitude);
+      const occurred = Date.parse(`${event.event_date}T00:00:00Z`);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(occurred)) return null;
+      const fatalities = Number(event.fatalities) || 0;
+      return {
+        id: `acled-${event.event_id_cnty}`,
+        kind: 'battle',
+        lat, lon,
+        title: `${event.event_type || 'Political violence'} — ${event.location || event.admin1 || event.country || 'unknown location'}`,
+        detail: `${event.sub_event_type || 'Unspecified subevent'} · ${event.actor1 || 'Unknown actor'}${event.actor2 ? ` vs ${event.actor2}` : ''} · ${fatalities} reported fatalities`,
+        level: fatalities >= 50 ? 5 : fatalities >= 10 ? 4 : fatalities >= 1 ? 3 : 2,
+        ts: Math.floor(occurred / 1000),
+        source: 'ACLED',
+        note: event.notes || null,
+        url: 'https://acleddata.com/',
+      };
+    }).filter(Boolean);
+    const merged = new Map(result.mapOfWarsEvents.map((event) => [String(event.id), event]));
+    for (const event of acledEvents) merged.set(String(event.id), event);
+    result.mapOfWarsEvents = [...merged.values()].slice(0, 2800);
+    result.sources.acled = `ACLED authenticated political violence API (${acledEvents.length} records)`;
+  } catch (error) { result.errors.push(`ACLED: ${error.message}`); }
+} else {
+  result.errors.push('ACLED: ACLED_API_KEY/ACLED_EMAIL not configured; authenticated political-violence enrichment unavailable');
+}
+
 try {
   const manifest = await getText('https://gpsjam.org/data/manifest.csv', 20000);
   const rows = manifest.trim().split(String.fromCharCode(10));
