@@ -20,6 +20,7 @@ const EMPTY_SNAPSHOT: OsintSnapshot = {
   cyberVulnerabilities: [],
   internetOutages: [],
   internetOutageMeta: null,
+  ucdpMeta: null,
   errors: [],
 };
 

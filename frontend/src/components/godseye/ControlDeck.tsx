@@ -65,7 +65,7 @@ function exportEvents(events: ConflictEvent[], format: "json" | "csv") {
     downloadFile(`godseye-incidents-${stamp}.json`, JSON.stringify(events, null, 2), "application/json");
     return;
   }
-  const header = ["id", "occurred_utc", "lat", "lng", "severity", "category", "country", "conflict", "killed", "counted_casualties", "displaced", "precision", "verified", "title", "sources"];
+  const header = ["id", "occurred_utc", "lat", "lng", "severity", "category", "country", "conflict", "killed", "counted_casualties", "displaced", "precision", "verified", "title", "sources", "ucdp_release", "ucdp_code_status", "ucdp_side_a", "ucdp_side_b", "ucdp_low", "ucdp_best", "ucdp_high", "ucdp_date_start", "ucdp_date_end", "ucdp_where_prec", "ucdp_date_prec", "ucdp_source_count", "ucdp_source_article"];
   const rows = events.map((event) => [
     event.id,
     new Date(event.occurredAt).toISOString(),
@@ -82,6 +82,19 @@ function exportEvents(events: ConflictEvent[], format: "json" | "csv") {
     event.verified,
     event.title,
     event.sources.map((source) => `${source.name} ${source.url}`).join(" | "),
+    event.ucdp ? `${event.ucdp.dataset_version} ${event.ucdp.dataset_release}` : "",
+    event.ucdp?.code_status ?? "",
+    event.ucdp?.side_a ?? "",
+    event.ucdp?.side_b ?? "",
+    event.ucdp?.low ?? "",
+    event.ucdp?.best ?? "",
+    event.ucdp?.high ?? "",
+    event.ucdp?.date_start ?? "",
+    event.ucdp?.date_end ?? "",
+    event.ucdp?.where_prec ?? "",
+    event.ucdp?.date_prec ?? "",
+    event.ucdp?.number_of_sources ?? "",
+    event.ucdp?.source_article ?? "",
   ].map(csvCell).join(","));
   downloadFile(`godseye-incidents-${stamp}.csv`, [header.map(csvCell).join(","), ...rows].join(String.fromCharCode(10)), "text/csv");
 }

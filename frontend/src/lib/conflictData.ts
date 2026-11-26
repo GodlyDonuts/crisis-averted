@@ -57,6 +57,7 @@ const CATEGORY_GROUP_MAP: Record<string, CategoryGroup> = {
   migration: "humanitarian",
   naval: "strategic",
   infrastructure: "strategic",
+  organized_violence: "kinetic",
   cyber: "strategic",
   nuclear: "strategic",
   other: "security",
@@ -67,37 +68,45 @@ function slugifyTheater(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "global";
 }
 
+function parseMapOfWarsFatalities(detail: string | undefined): number {
+  if (!detail) return 0;
+  const patterns = [/†\s*(\d+)/, /•\s*(\d+)/, /(\d+)\s+reported fatalities/i];
+  for (const pattern of patterns) {
+    const value = Number(detail.match(pattern)?.[1]);
+    if (Number.isFinite(value) && value >= 0) return value;
+  }
+  return 0;
+}
+
+function nonNegativeNumber(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
 export function normalizeMapOfWarsEvent(raw: MapOfWarsRawEvent): ConflictEvent | null {
-  if (!raw.id || typeof raw.lat !== "number" || typeof raw.lon !== "number" || !raw.ts) return null;
+  if (!raw.id || typeof raw.lat !== "number" || typeof raw.lon !== "number" || !Number.isFinite(raw.ts)) return null;
   if (raw.kind !== "battle") return null;
   const title = raw.title || "Unnamed contact";
-  const country = title.includes(",") ? title.split(",").pop()?.trim() || "Unknown" : "Unknown";
-  const casualties = Number((raw.detail || "").match(/•\s*(\d+)/)?.[1] ?? 0);
-  const severity: SeverityKey = raw.kind === "battle"
-    ? casualties >= 25 ? "critical" : casualties >= 5 || (raw.level ?? 1) >= 3 ? "high" : casualties > 0 ? "medium" : "low"
-    : raw.kind === "outage" || raw.kind === "activation" ? "medium" : "low";
-  const category = raw.kind === "battle" ? "ground_battle" : raw.kind === "ship" ? "naval" : raw.kind === "outage" ? "cyber" : raw.kind === "launch" ? "missile" : "infrastructure";
-  const occurredAt = Math.round(raw.ts * 1000);
-  const conflict = raw.kind === "battle"
-    ? country !== "Unknown" ? `${country} conflict` : "Unresolved conflict zone"
-    : raw.kind === "ship" ? "Naval vessel activity"
-    : raw.kind === "outage" ? "Infrastructure and cyber disruption"
-    : raw.kind === "launch" ? "Strategic launch activity"
-    : "Strategic infrastructure activity";
-  const theater = slugifyTheater(
-    raw.kind === "battle" ? `${country} conflict` :
-    raw.kind === "ship" ? "naval vessel activity" :
-    raw.kind === "outage" ? "infrastructure cyber disruption" :
-    raw.kind === "launch" ? "strategic launch activity" : "strategic infrastructure activity"
-  );
+  const ucdp = raw.ucdp;
+  const country = ucdp?.country || (title.includes(",") ? title.split(",").pop()?.trim() || "Unknown" : "Unknown");
+  const parsedFatalities = parseMapOfWarsFatalities(raw.detail);
+  const casualties = nonNegativeNumber(ucdp?.best) ?? parsedFatalities;
+  const uncertaintyAwareFatalities = ucdp ? Math.max(casualties, (ucdp.high ?? 0) > 0 ? 1 : 0) : casualties;
+  const severity: SeverityKey = uncertaintyAwareFatalities >= 25 ? "critical" : uncertaintyAwareFatalities >= 5 || (raw.level ?? 1) >= 3 ? "high" : uncertaintyAwareFatalities > 0 ? "medium" : "low";
+  const category = ucdp ? "organized_violence" : "ground_battle";
+  const occurredAt = Math.round((raw.ts ?? 0) * 1000);
+  const conflict = ucdp?.conflict_name || (country !== "Unknown" ? `${country} conflict` : "Unresolved conflict zone");
+  const theater = slugifyTheater(conflict);
   const recencyBoost = clamp01(1 - Math.max(0, (Date.now() - occurredAt) / 36e5) / (24 * 30));
-  const intensity = clamp01(SEVERITY_META[severity].rank / 4 * 0.58 + clamp01(Math.log10(1 + casualties) / 2.5) * 0.25 + recencyBoost * 0.17);
+  const intensity = clamp01(SEVERITY_META[severity].rank / 4 * 0.58 + clamp01(Math.log10(1 + uncertaintyAwareFatalities) / 2.5) * 0.25 + recencyBoost * 0.17);
+  const rawUcdpIdMatch = raw.id.match(/^ucdp:(\d+)$/);
+  const canonicalUcdpId = ucdp?.id ?? (rawUcdpIdMatch ? Number(rawUcdpIdMatch[1]) : null);
   return {
-    id: `mow-${raw.id}`, lat: raw.lat, lng: raw.lon, precision: null, severity, category,
-    categoryGroup: CATEGORY_GROUP_MAP[category] ?? "security", date: new Date(occurredAt).toISOString().slice(0, 10), occurredAt,
+    id: canonicalUcdpId ? `ucdp:${canonicalUcdpId}` : `mow-${raw.id}`, lat: raw.lat, lng: raw.lon, precision: ucdp?.where_prec ?? null, severity, category,
+    categoryGroup: CATEGORY_GROUP_MAP[category] ?? "security", date: ucdp?.date_end || new Date(occurredAt).toISOString().slice(0, 10), occurredAt,
     updatedAt: occurredAt, killed: casualties, countedCasualties: casualties, displaced: 0, country, conflict, theater,
-    region: "Global", title: raw.note || title, verified: raw.source === "UCDP", sourceName: raw.source || null, sourceUrl: raw.url || null,
+    region: ucdp?.region || "Global", title: raw.note || title, detail: raw.detail || null, verified: ucdp ? ucdp.code_status?.toLowerCase() === "clear" : raw.source === "UCDP", sourceName: raw.source || null, sourceUrl: raw.url || null,
     sources: raw.url ? [{ name: raw.source || "Map of Wars", url: raw.url }] : [], intensity,
+    ...(ucdp ? { ucdp } : {}),
   };
 }
 
@@ -344,7 +353,8 @@ export function filterConflictEvents(events: ConflictEvent[], filters: ConflictF
 
 export function estimateEventConfidence(event: ConflictEvent): { score: number; label: "low" | "moderate" | "high" } {
   const precisionScore = event.precision === null ? 0.35 : event.precision <= 2 ? 1 : event.precision <= 4 ? 0.65 : 0.3;
-  const sourceScore = Math.min(1, event.sources.length / 3);
+  const documentedSourceCount = event.ucdp?.number_of_sources && event.ucdp.number_of_sources > 0 ? event.ucdp.number_of_sources : event.sources.length;
+  const sourceScore = Math.min(1, documentedSourceCount / 3);
   const verificationScore = event.verified ? 1 : 0.25;
   const specificityScore = event.countedCasualties > 0 || event.displaced > 0 ? 0.8 : 0.5;
   const score = Math.round((precisionScore * 0.24 + sourceScore * 0.28 + verificationScore * 0.34 + specificityScore * 0.14) * 100);

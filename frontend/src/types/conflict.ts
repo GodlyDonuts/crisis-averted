@@ -14,6 +14,54 @@ export interface ConflictSource {
   url: string;
 }
 
+/** Official UCDP GED fields retained with an ingested event. Field names intentionally mirror the UCDP API/codebook. */
+export interface UcdpGedEventMetadata {
+  id: number;
+  relid: string | null;
+  year: number | null;
+  active_year: boolean | null;
+  code_status: string | null;
+  type_of_violence: number | null;
+  conflict_new_id: number | null;
+  conflict_name: string | null;
+  dyad_new_id: number | null;
+  dyad_name: string | null;
+  side_a_new_id: number | null;
+  side_a: string | null;
+  side_b_new_id: number | null;
+  side_b: string | null;
+  number_of_sources: number | null;
+  source_article: string | null;
+  source_office: string | null;
+  source_date: string | null;
+  source_headline: string | null;
+  source_original: string | null;
+  where_prec: number | null;
+  where_coordinates: string | null;
+  where_description: string | null;
+  adm_1: string | null;
+  adm_2: string | null;
+  priogrid_gid: number | null;
+  country: string | null;
+  country_id: number | null;
+  region: string | null;
+  event_clarity: number | null;
+  date_prec: number | null;
+  date_start: string | null;
+  date_end: string | null;
+  deaths_a: number | null;
+  deaths_b: number | null;
+  deaths_civilians: number | null;
+  deaths_unknown: number | null;
+  low: number | null;
+  best: number | null;
+  high: number | null;
+  gwnoa: string | null;
+  gwnob: string | null;
+  dataset_version: string;
+  dataset_release: string;
+}
+
 export interface ConflictEvent {
   id: string;
   lat: number;
@@ -33,11 +81,13 @@ export interface ConflictEvent {
   theater: string;
   region: string;
   title: string;
+  detail?: string | null;
   verified: boolean;
   sourceName: string | null;
   sourceUrl: string | null;
   sources: ConflictSource[];
   intensity: number;
+  ucdp?: UcdpGedEventMetadata;
 }
 
 export interface ConflictTheater {
@@ -263,6 +313,48 @@ export interface IodaInternetOutageMeta {
   preservedAt?: string;
 }
 
+export type UcdpSnapshotStatus = "ok" | "unconfigured" | "degraded";
+
+export interface UcdpIngestionMeta {
+  status: UcdpSnapshotStatus;
+  provider: string;
+  resource: "gedevents";
+  version: string;
+  datasetRelease: string;
+  apiEndpoint: string;
+  codebook: string;
+  authentication: string;
+  releaseSelection: string;
+  pageSize: number;
+  maxPages: number;
+  maxNormalizedEvents: number;
+  totalCount: number | null;
+  totalPages: number | null;
+  pagesFetched: number;
+  fetchedEventCount: number;
+  uniqueCanonicalEventCount: number;
+  validEventCount: number;
+  ingestedEventCount: number;
+  mergedEventCount: number;
+  preservedPriorEventCount: number;
+  omittedEventCount: number;
+  omittedByReason: {
+    missingCanonicalId: number;
+    invalidCoordinates: number;
+    invalidTime: number;
+    invalidFatalityContract: number;
+    invalidPrecisionContract: number;
+    duplicateCanonicalId: number;
+    highValueCap: number;
+    mergeCap: number;
+  };
+  requestUrls: string[];
+  selection: string;
+  caveat: string;
+  statusDetail?: string;
+  preservedAt?: string;
+}
+
 export interface OsintSnapshot {
   fetchedAt: string;
   sources: Record<string, string>;
@@ -279,6 +371,7 @@ export interface OsintSnapshot {
   cyberVulnerabilities: OsintCyberVulnerability[];
   internetOutages: IodaInternetOutage[];
   internetOutageMeta: IodaInternetOutageMeta | null;
+  ucdpMeta: UcdpIngestionMeta | null;
   errors: string[];
 }
 
@@ -318,6 +411,7 @@ export interface MapOfWarsRawEvent {
   violence?: string;
   note?: string;
   url?: string;
+  ucdp?: UcdpGedEventMetadata;
 }
 
 

@@ -37,8 +37,16 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
   const outageValue = outageMeta
     ? `${snapshot.internetOutages.length} mapped/${outageMeta.fetchedEventCount} fetched · ${outageMeta.status}`
     : `${snapshot.internetOutages.length} mapped · metadata unavailable`;
+  const ucdpMeta = snapshot.ucdpMeta;
+  const ucdpValue = ucdpMeta
+    ? ucdpMeta.status === "ok"
+      ? `${ucdpMeta.mergedEventCount} merged/${ucdpMeta.fetchedEventCount} fetched · ok`
+      : ucdpMeta.preservedPriorEventCount > 0
+        ? `${ucdpMeta.preservedPriorEventCount} preserved · ${ucdpMeta.status}`
+        : ucdpMeta.status
+    : "metadata unavailable";
   return (
-    <aside className="godseye-panel pointer-events-auto absolute right-4 top-[4.5rem] z-50 hidden w-[360px] overflow-hidden xl:block">
+    <aside className="godseye-panel godseye-scrollbar pointer-events-auto absolute right-4 top-[4.5rem] z-50 hidden max-h-[calc(100vh-5.5rem)] w-[360px] overflow-y-auto xl:block">
       <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
         <div className="flex items-center gap-2">
           <Database className="h-4 w-4 text-amber-100/60" />
@@ -66,6 +74,8 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
         <Row label="IODA outage detections" value={outageValue} warn={outageMeta?.status !== "ok"} />
         <Row label="IODA query window" value={`${outageMeta ? `${Math.round(outageMeta.queryWindow.lookbackSeconds / 3600)}h ending ${outageWindowEnd}` : "not loaded"}`} />
         <Row label="Map of Wars records" value={String(snapshot.mapOfWarsEvents.length)} />
+        <Row label="UCDP official events" value={ucdpValue} warn={ucdpMeta?.status !== "ok"} />
+        <Row label="UCDP release" value={ucdpMeta ? `${ucdpMeta.version} · ${ucdpMeta.datasetRelease}` : "not loaded"} />
         <Row label="Known exploited CVEs" value={String(snapshot.cyberVulnerabilities.length)} />
         <Row label="Webcam metadata" value={snapshot.webcams.length > 0 ? String(snapshot.webcams.length) : "key not configured"} warn={snapshot.webcams.length === 0} />
       </div>
@@ -92,6 +102,19 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
           <p className="mt-2 text-[11px] leading-relaxed text-white/54">
             Unix window {outageMeta.queryWindow.from}–{outageMeta.queryWindow.until}; {outageMeta.countryEventCount} country and {outageMeta.regionEventCount} region records fetched, {outageMeta.omittedEventCount} omitted when not defensibly geolocatable. Coordinates are coarse Natural Earth reference placements, not outage origins or footprints.
             {outageMeta.status === "preserved" ? " Current ingest degraded; prior build-time snapshot retained." : ""}
+          </p>
+        </div>
+      ) : null}
+
+      {ucdpMeta ? (
+        <div className="border-t border-white/8 px-4 py-3">
+          <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/34">
+            <Activity className="h-3.5 w-3.5" /> UCDP GED evidence
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-white/54">
+            Fixed version {ucdpMeta.version} ({ucdpMeta.datasetRelease}); {ucdpMeta.ingestedEventCount} high-value records selected from {ucdpMeta.validEventCount} valid/{ucdpMeta.fetchedEventCount} fetched rows, with {ucdpMeta.omittedEventCount} bounded omissions accounted. Authentication uses only a build-time x-ucdp-access-token header. Candidate rows are preliminary and retain per-event review status, actors, precision codes, date ranges, source references, and low/best/high fatalities.
+            {ucdpMeta.status === "unconfigured" ? " Token not configured; no new official ingest occurred." : ""}
+            {ucdpMeta.status === "degraded" ? " Current ingest degraded; prior authenticated records are retained when available." : ""}
           </p>
         </div>
       ) : null}

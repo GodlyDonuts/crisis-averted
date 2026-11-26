@@ -26,6 +26,47 @@ function precisionLabel(precision: number | null): string {
   }
 }
 
+function ucdpWherePrecisionLabel(precision: number | null | undefined): string {
+  switch (precision) {
+    case 1: return "exact location known";
+    case 2: return "within 25 km of a known point";
+    case 3: return "second-order administrative representation";
+    case 4: return "first-order administrative representation";
+    case 5: return "linear feature or fuzzy-area representation";
+    case 6: return "country-only representation";
+    case 7: return "international waters or airspace";
+    default: return "unknown location precision";
+  }
+}
+
+function violenceTypeLabel(type: number | null | undefined): string {
+  switch (type) {
+    case 1: return "state-based conflict";
+    case 2: return "non-state conflict";
+    case 3: return "one-sided violence";
+    default: return "unknown violence type";
+  }
+}
+
+function eventClarityLabel(clarity: number | null | undefined): string {
+  switch (clarity) {
+    case 1: return "high clarity / individually identifiable incident";
+    case 2: return "lower clarity / source-reported aggregate";
+    default: return "unknown event clarity";
+  }
+}
+
+function datePrecisionLabel(precision: number | null | undefined): string {
+  switch (precision) {
+    case 1: return "exact date";
+    case 2: return "2-6 day range";
+    case 3: return "week range";
+    case 4: return "8-30 day/month range";
+    case 5: return "up-to-year range";
+    default: return "unknown date precision";
+  }
+}
+
 function DetailMetric({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
   return (
     <div className="rounded-sm border border-white/8 bg-white/[0.025] px-3 py-2.5">
@@ -39,6 +80,14 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
   const severity = SEVERITY_META[event.severity];
   const threatIndex = Math.round(event.intensity * 100);
   const confidence = estimateEventConfidence(event);
+  const ucdpFatalityIntervalDiscrepancy = Boolean(
+    event.ucdp
+    && typeof event.ucdp.low === "number"
+    && typeof event.ucdp.best === "number"
+    && typeof event.ucdp.high === "number"
+    && (event.ucdp.low > event.ucdp.best || event.ucdp.best > event.ucdp.high)
+  );
+  const ucdpHighOnlyFatalityUncertainty = Boolean(event.ucdp && event.ucdp.best === 0 && typeof event.ucdp.high === "number" && event.ucdp.high > 0);
   const copyBrief = () => {
     const brief = [
       `INCIDENT BRIEF — ${event.title}`,
@@ -48,6 +97,11 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
       `REPORTED KILLED: ${event.killed}; COUNTED CASUALTIES: ${event.countedCasualties}; DISPLACED: ${event.displaced}`,
       `PRIORITY SCORE: ${threatIndex}/100; CONFIDENCE: ${confidence.score}/100 (${confidence.label})`,
       `SOURCES: ${event.sources.map((source) => `${source.name} ${source.url}`).join(" | ") || "none supplied"}`,
+      ...(event.ucdp ? [
+        `UCDP RECORD: ${event.ucdp.id} (${event.ucdp.relid || "relid unavailable"}) · release ${event.ucdp.dataset_version} · status ${event.ucdp.code_status || "unknown"}`,
+        `UCDP ACTORS: ${event.ucdp.side_a || "unknown side A"} vs ${event.ucdp.side_b || "unknown side B"}`,
+        `UCDP FATALITIES: low ${event.ucdp.low ?? "unknown"} / best ${event.ucdp.best ?? "unknown"} / high ${event.ucdp.high ?? "unknown"}; window ${event.ucdp.date_start || "unknown"} to ${event.ucdp.date_end || "unknown"}`,
+      ] : []),
       "CAVEAT: Public OSINT; not independently confirmed unless explicitly stated by sources.",
     ].join("\n");
     void navigator.clipboard?.writeText(brief);
@@ -68,7 +122,7 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
               </span>
               {event.verified && (
                 <span className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-amber-100/54">
-                  <BadgeCheck className="h-3.5 w-3.5" /> Verified
+                  <BadgeCheck className="h-3.5 w-3.5" /> {event.ucdp?.dataset_release.includes("candidate") ? "UCDP clear" : "Verified"}
                 </span>
               )}
             </div>
@@ -115,7 +169,7 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
           <DetailMetric label="Reported killed" value={event.killed > 0 ? formatCompact(event.killed) : "None reported"} accent={event.killed > 0} />
           <DetailMetric label="Counted casualties" value={event.countedCasualties > 0 ? formatCompact(event.countedCasualties) : "--"} />
           <DetailMetric label="Displaced" value={event.displaced > 0 ? formatCompact(event.displaced) : "--"} />
-          <DetailMetric label="Geo precision" value={precisionLabel(event.precision)} />
+          <DetailMetric label="Geo precision" value={event.ucdp ? ucdpWherePrecisionLabel(event.ucdp.where_prec) : precisionLabel(event.precision)} />
           <DetailMetric label="Confidence" value={`${confidence.score}/100 ${confidence.label}`} accent={confidence.label === "low"} />
         </div>
 
@@ -141,6 +195,63 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
             </div>
           </div>
         </div>
+
+        {event.ucdp && (
+          <div className="mt-4 rounded-sm border border-sky-200/10 bg-sky-300/[0.035] p-3.5">
+            <div className="flex items-center justify-between gap-3">
+              <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-sky-100/48">
+                Official UCDP {event.ucdp.dataset_release.includes("candidate") ? "Candidate" : "GED"} record
+              </p>
+              <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-white/34">{event.ucdp.code_status || "status unknown"}</span>
+            </div>
+            <div className="mt-3 space-y-2.5 text-[12px] leading-relaxed text-white/60">
+              <p>
+                <span className="text-white/34">Event:</span> {event.ucdp.id} · {event.ucdp.relid || "relid unavailable"} · release {event.ucdp.dataset_version} ({event.ucdp.dataset_release})
+              </p>
+              <p>
+                <span className="text-white/34">Violence:</span> {violenceTypeLabel(event.ucdp.type_of_violence)} · {event.ucdp.dyad_name || "dyad unavailable"}
+              </p>
+              <p>
+                <span className="text-white/34">Resolution:</span> {eventClarityLabel(event.ucdp.event_clarity)}
+              </p>
+              <p>
+                <span className="text-white/34">Actors:</span> {event.ucdp.side_a || "unknown side A"} (ID {event.ucdp.side_a_new_id ?? "unknown"}) vs {event.ucdp.side_b || "unknown side B"} (ID {event.ucdp.side_b_new_id ?? "unknown"})
+              </p>
+              <p>
+                <span className="text-white/34">Fatalities:</span> low {event.ucdp.low ?? "unknown"} / best {event.ucdp.best ?? "unknown"} / high {event.ucdp.high ?? "unknown"} · side A {event.ucdp.deaths_a ?? 0}, side B {event.ucdp.deaths_b ?? 0}, civilians {event.ucdp.deaths_civilians ?? 0}, unknown status {event.ucdp.deaths_unknown ?? 0}
+              </p>
+              {ucdpFatalityIntervalDiscrepancy && (
+                <p className="font-mono text-[10px] uppercase leading-relaxed tracking-[0.1em] text-amber-100/48">
+                  Published candidate interval is internally inconsistent; values are preserved rather than silently corrected.
+                </p>
+              )}
+              {ucdpHighOnlyFatalityUncertainty && (
+                <p className="font-mono text-[10px] uppercase leading-relaxed tracking-[0.1em] text-amber-100/48">
+                  Only the high fatality estimate is positive; reporting supports at least one death, but attribution or source reliability remains uncertain.
+                </p>
+              )}
+              <p>
+                <span className="text-white/34">Time:</span> {event.ucdp.date_start || "unknown"} → {event.ucdp.date_end || "unknown"} · {datePrecisionLabel(event.ucdp.date_prec)}
+              </p>
+              <p>
+                <span className="text-white/34">Location:</span> {event.ucdp.where_description || event.ucdp.where_coordinates || "location unavailable"} · {ucdpWherePrecisionLabel(event.ucdp.where_prec)} · {event.ucdp.adm_2 || event.ucdp.adm_1 || event.ucdp.country || "administration unavailable"}
+              </p>
+              <p>
+                <span className="text-white/34">Provenance:</span> {event.ucdp.number_of_sources && event.ucdp.number_of_sources > 0 ? `${event.ucdp.number_of_sources} source(s)` : "source count unavailable"} · {event.ucdp.source_office || "source office unavailable"} · original attribution: {event.ucdp.source_original || "unavailable"}
+              </p>
+              {event.ucdp.dataset_release.includes("candidate") && (
+                <p className="font-mono text-[10px] uppercase leading-relaxed tracking-[0.1em] text-sky-100/38">
+                  Candidate coding is preliminary and may be revised, reclassified, or omitted from the final annual GED.
+                </p>
+              )}
+              {event.ucdp.source_article && (
+                <p className="max-h-28 overflow-y-auto rounded-sm border border-white/8 bg-black/18 p-2 font-mono text-[10px] leading-relaxed text-white/42">
+                  {event.ucdp.source_article}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
 
         <RegionalIntel event={event} snapshot={snapshot} />
 

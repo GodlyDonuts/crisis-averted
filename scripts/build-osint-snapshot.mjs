@@ -250,11 +250,406 @@ async function collectIodaOutages(queryWindow) {
   };
 }
 
+// UCDP versions are immutable once published. The official API documentation currently
+// lists 26.0.10 as the latest monthly GED Candidate release; using that explicit version
+// avoids a mutable "latest" endpoint while providing the recent operational month that
+// overlaps the UCDP-derived Map of Wars lattice. Candidate review status is preserved on
+// every event rather than presenting these rows as final annual GED coding.
+const UCDP_GED_VERSION = '26.0.10';
+const UCDP_DATASET_RELEASE = 'candidate-monthly';
+const UCDP_API_URL = `https://ucdpapi.pcr.uu.se/api/gedevents/${UCDP_GED_VERSION}`;
+const UCDP_CODEBOOK_URL = 'https://ucdp.uu.se/downloads/candidateged/ucdp-candidate-codebook1.5.pdf';
+const UCDP_PAGE_SIZE = 1000;
+// The documented quota is 5,000 requests/day. Even the hard 8-page safety cap is at most
+// 384 requests/day in a twice-hourly workflow; the current candidate release uses 3 pages.
+const UCDP_MAX_PAGES = 8;
+const UCDP_MAX_NORMALIZED_EVENTS = 1200;
+const UCDP_LIMITATIONS = 'UCDP Candidate events are preliminary monthly rows: not all candidate events necessarily enter the final annual UCDP GED, and events can be revised or reclassified in later releases. The fixed API version itself is immutable. Fatality low/best/high values are source-estimate intervals, date and location precision codes describe uncertainty, the map timestamp uses date_end while the full date range is retained, and a point for a low-precision event can represent a district, province, country, linear feature, or other approximation rather than the exact incident site.';
+const UCDP_SELECTION_DESCRIPTION = `Fixed immutable UCDP GED Candidate monthly release ${UCDP_GED_VERSION}; the complete release is fetched within a hard page cap, canonical event IDs are deduplicated, then at most ${UCDP_MAX_NORMALIZED_EVENTS} records are retained by local high-value score: log1p(best)*120 + log1p(high)*25 + (8-where_prec)*4 + (6-date_prec)*3 + 10 for event_clarity 1 + 8 for code_status Clear + up to 25 for recency within 45 days of the release's newest date_end.`;
+const UCDP_TYPE_OF_VIOLENCE_LABELS = {
+  1: 'state-based conflict',
+  2: 'non-state conflict',
+  3: 'one-sided violence',
+};
+const UCDP_WHERE_PRECISION_LABELS = {
+  1: 'exact location known',
+  2: 'within 25 km of a known point',
+  3: 'second-order administrative division representation',
+  4: 'first-order administrative division representation',
+  5: 'linear feature or fuzzy-area representation',
+  6: 'country-only representation',
+  7: 'international waters or airspace',
+};
+const UCDP_DATE_PRECISION_LABELS = {
+  1: 'exact date known',
+  2: '2-6 day range',
+  3: 'week range',
+  4: '8-30 day or month range',
+  5: 'range longer than one month and up to one year',
+};
+
+function createUcdpOmissionCounts() {
+  return {
+    missingCanonicalId: 0,
+    invalidCoordinates: 0,
+    invalidTime: 0,
+    invalidFatalityContract: 0,
+    invalidPrecisionContract: 0,
+    duplicateCanonicalId: 0,
+    highValueCap: 0,
+    mergeCap: 0,
+  };
+}
+
+function createUcdpMeta(status = 'unconfigured') {
+  return {
+    status,
+    provider: 'Uppsala Conflict Data Program (UCDP), Uppsala University',
+    resource: 'gedevents',
+    version: UCDP_GED_VERSION,
+    datasetRelease: UCDP_DATASET_RELEASE,
+    apiEndpoint: UCDP_API_URL,
+    codebook: UCDP_CODEBOOK_URL,
+    authentication: 'build-time x-ucdp-access-token header; token is never written to the browser artifact',
+    releaseSelection: 'newest fixed monthly GED Candidate version listed in the official UCDP API documentation at implementation time',
+    pageSize: UCDP_PAGE_SIZE,
+    maxPages: UCDP_MAX_PAGES,
+    maxNormalizedEvents: UCDP_MAX_NORMALIZED_EVENTS,
+    totalCount: null,
+    totalPages: null,
+    pagesFetched: 0,
+    fetchedEventCount: 0,
+    uniqueCanonicalEventCount: 0,
+    validEventCount: 0,
+    ingestedEventCount: 0,
+    mergedEventCount: 0,
+    preservedPriorEventCount: 0,
+    omittedEventCount: 0,
+    omittedByReason: createUcdpOmissionCounts(),
+    requestUrls: [],
+    selection: UCDP_SELECTION_DESCRIPTION,
+    caveat: UCDP_LIMITATIONS,
+  };
+}
+
+function numberOrNull(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value))) return Number(value);
+  return null;
+}
+
+function integerOrNull(value) {
+  const number = numberOrNull(value);
+  return number !== null && Number.isInteger(number) ? number : null;
+}
+
+function nonNegativeIntegerOrNull(value) {
+  const number = integerOrNull(value);
+  return number !== null && number >= 0 ? number : null;
+}
+
+function textOrNull(value) {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+}
+
+function booleanOrNull(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number' && (value === 0 || value === 1)) return value === 1;
+  if (typeof value === 'string') {
+    if (value.toLowerCase() === 'true' || value === '1') return true;
+    if (value.toLowerCase() === 'false' || value === '0') return false;
+  }
+  return null;
+}
+
+function identifierTextOrNull(value) {
+  const text = textOrNull(value);
+  if (text) return text;
+  const number = numberOrNull(value);
+  return number !== null ? String(number) : null;
+}
+
+function parseUcdpDate(value) {
+  if (typeof value !== 'string') return null;
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const epochMs = Date.UTC(year, month - 1, day);
+  const roundTrip = new Date(epochMs);
+  if (roundTrip.getUTCFullYear() !== year || roundTrip.getUTCMonth() !== month - 1 || roundTrip.getUTCDate() !== day) return null;
+  return { iso: `${match[1]}-${match[2]}-${match[3]}`, epochMs };
+}
+
+function canonicalUcdpKeyFromId(id) {
+  return Number.isInteger(id) && id > 0 ? `ucdp:${id}` : null;
+}
+
+function canonicalMapOfWarsKey(event) {
+  const nestedId = integerOrNull(event?.ucdp?.id);
+  const nestedKey = canonicalUcdpKeyFromId(nestedId);
+  if (nestedKey) return nestedKey;
+  const id = typeof event?.id === 'string' || typeof event?.id === 'number' ? String(event.id) : '';
+  const ucdpMatch = id.match(/^ucdp:(\d+)$/);
+  if (ucdpMatch) return `ucdp:${Number(ucdpMatch[1])}`;
+  return id || null;
+}
+
+function mergeMapOfWarsEventRecords(...groups) {
+  const merged = new Map();
+  for (const group of groups) {
+    for (const event of group ?? []) {
+      const key = canonicalMapOfWarsKey(event);
+      if (!key) continue;
+      merged.set(key, event);
+    }
+  }
+  return [...merged.values()];
+}
+
+function validCoordinatePair(lat, lon) {
+  return Number.isFinite(lat) && lat >= -90 && lat <= 90 && Number.isFinite(lon) && lon >= -180 && lon <= 180;
+}
+
+function normalizeUcdpGedEvent(rawEvent) {
+  const id = integerOrNull(rawEvent?.id);
+  if (!id || id <= 0) return { reason: 'missingCanonicalId' };
+
+  const lat = numberOrNull(rawEvent.latitude);
+  const lon = numberOrNull(rawEvent.longitude);
+  if (!validCoordinatePair(lat, lon)) return { reason: 'invalidCoordinates' };
+
+  const start = parseUcdpDate(rawEvent.date_start);
+  const end = parseUcdpDate(rawEvent.date_end);
+  if (!start || !end || start.epochMs > end.epochMs) return { reason: 'invalidTime' };
+
+  const deathsA = nonNegativeIntegerOrNull(rawEvent.deaths_a);
+  const deathsB = nonNegativeIntegerOrNull(rawEvent.deaths_b);
+  const deathsCivilians = nonNegativeIntegerOrNull(rawEvent.deaths_civilians);
+  const deathsUnknown = nonNegativeIntegerOrNull(rawEvent.deaths_unknown);
+  const low = nonNegativeIntegerOrNull(rawEvent.low);
+  const best = nonNegativeIntegerOrNull(rawEvent.best);
+  const high = nonNegativeIntegerOrNull(rawEvent.high);
+  if ([deathsA, deathsB, deathsCivilians, deathsUnknown, low, best, high].some((value) => value === null)) return { reason: 'invalidFatalityContract' };
+  if (deathsA + deathsB + deathsCivilians + deathsUnknown !== best) return { reason: 'invalidFatalityContract' };
+  if (Math.max(low, best, high) < 1) return { reason: 'invalidFatalityContract' };
+
+  const typeOfViolence = integerOrNull(rawEvent.type_of_violence);
+  const wherePrecision = integerOrNull(rawEvent.where_prec);
+  const datePrecision = integerOrNull(rawEvent.date_prec);
+  if (!UCDP_TYPE_OF_VIOLENCE_LABELS[typeOfViolence] || !UCDP_WHERE_PRECISION_LABELS[wherePrecision] || !UCDP_DATE_PRECISION_LABELS[datePrecision]) return { reason: 'invalidPrecisionContract' };
+
+  const conflictId = integerOrNull(rawEvent.conflict_new_id);
+  const dyadId = integerOrNull(rawEvent.dyad_new_id);
+  const sideAId = integerOrNull(rawEvent.side_a_new_id);
+  const sideBId = integerOrNull(rawEvent.side_b_new_id);
+  const conflictName = textOrNull(rawEvent.conflict_name);
+  const dyadName = textOrNull(rawEvent.dyad_name);
+  const sideA = textOrNull(rawEvent.side_a);
+  const sideB = textOrNull(rawEvent.side_b);
+  const actorsText = dyadName || [sideA, sideB].filter(Boolean).join(' - ') || 'Unknown actors';
+  const country = textOrNull(rawEvent.country);
+  const locationName = textOrNull(rawEvent.where_coordinates) || textOrNull(rawEvent.where_description) || textOrNull(rawEvent.adm_2) || textOrNull(rawEvent.adm_1) || country || 'unknown location';
+  const violenceLabel = UCDP_TYPE_OF_VIOLENCE_LABELS[typeOfViolence];
+  const effectiveFatalities = Math.max(best, high > 0 ? 1 : 0);
+  const event = {
+    id: `ucdp:${id}`,
+    kind: 'battle',
+    lat,
+    lon,
+    title: country && !locationName.includes(country) ? `${locationName}, ${country}` : locationName,
+    detail: `†${best} best (low ${low} / high ${high}) · ${actorsText} · ${violenceLabel}`,
+    level: effectiveFatalities >= 100 ? 5 : effectiveFatalities >= 25 ? 4 : effectiveFatalities >= 5 ? 3 : effectiveFatalities >= 1 ? 2 : 1,
+    ts: Math.floor(end.epochMs / 1000),
+    source: 'UCDP',
+    url: conflictId ? `https://ucdp.uu.se/conflict/${conflictId}` : 'https://ucdp.uu.se/apidocs/',
+    ucdp: {
+      id,
+      relid: textOrNull(rawEvent.relid),
+      year: integerOrNull(rawEvent.year),
+      active_year: booleanOrNull(rawEvent.active_year),
+      code_status: textOrNull(rawEvent.code_status),
+      type_of_violence: typeOfViolence,
+      conflict_new_id: conflictId,
+      conflict_name: conflictName,
+      dyad_new_id: dyadId,
+      dyad_name: dyadName,
+      side_a_new_id: sideAId,
+      side_a: sideA,
+      side_b_new_id: sideBId,
+      side_b: sideB,
+      number_of_sources: integerOrNull(rawEvent.number_of_sources),
+      source_article: textOrNull(rawEvent.source_article),
+      source_office: textOrNull(rawEvent.source_office),
+      source_date: textOrNull(rawEvent.source_date),
+      source_headline: textOrNull(rawEvent.source_headline),
+      source_original: textOrNull(rawEvent.source_original),
+      where_prec: wherePrecision,
+      where_coordinates: textOrNull(rawEvent.where_coordinates),
+      where_description: textOrNull(rawEvent.where_description),
+      adm_1: textOrNull(rawEvent.adm_1),
+      adm_2: textOrNull(rawEvent.adm_2),
+      priogrid_gid: integerOrNull(rawEvent.priogrid_gid),
+      country,
+      country_id: integerOrNull(rawEvent.country_id),
+      region: textOrNull(rawEvent.region),
+      event_clarity: integerOrNull(rawEvent.event_clarity),
+      date_prec: datePrecision,
+      date_start: start.iso,
+      date_end: end.iso,
+      deaths_a: deathsA,
+      deaths_b: deathsB,
+      deaths_civilians: deathsCivilians,
+      deaths_unknown: deathsUnknown,
+      low,
+      best,
+      high,
+      gwnoa: identifierTextOrNull(rawEvent.gwnoa),
+      gwnob: identifierTextOrNull(rawEvent.gwnob),
+      dataset_version: UCDP_GED_VERSION,
+      dataset_release: UCDP_DATASET_RELEASE,
+    },
+  };
+  return { event, endEpochMs: end.epochMs };
+}
+
+function buildUcdpInitialUrl() {
+  const url = new URL(UCDP_API_URL);
+  url.searchParams.set('pagesize', String(UCDP_PAGE_SIZE));
+  return url;
+}
+
+function readUcdpNextPageUrl(value, page) {
+  try {
+    const url = new URL(value);
+    const expected = new URL(UCDP_API_URL);
+    if (url.protocol !== expected.protocol || url.host !== expected.host || url.pathname !== expected.pathname) throw new Error('unexpected next-page target');
+    return url;
+  } catch {
+    throw new Error(`UCDP page ${page}: invalid or untrusted NextPageUrl`);
+  }
+}
+
+function readUcdpPaginationInteger(payload, key, page) {
+  const value = integerOrNull(payload?.[key]);
+  if (value === null || value < 0) throw new Error(`UCDP page ${page}: missing or invalid ${key}`);
+  return value;
+}
+
+function ucdpSelectionScore(normalized, newestEndEpochMs) {
+  const ucdp = normalized.event.ucdp;
+  const fatalityScore = Math.log1p(ucdp.best) * 120 + Math.log1p(ucdp.high) * 25;
+  const spatialScore = (8 - ucdp.where_prec) * 4;
+  const temporalScore = (6 - ucdp.date_prec) * 3;
+  const clarityScore = ucdp.event_clarity === 1 ? 10 : 0;
+  const statusScore = ucdp.code_status?.toLowerCase() === 'clear' ? 8 : 0;
+  const ageDays = Math.max(0, (newestEndEpochMs - normalized.endEpochMs) / 86400000);
+  const recencyScore = Math.max(0, 1 - ageDays / 45) * 25;
+  return fatalityScore + spatialScore + temporalScore + clarityScore + statusScore + recencyScore;
+}
+
+async function collectUcdpGedEvents(token) {
+  // UCDP explicitly warns that API result ordering is meaningless. This bounded monthly
+  // release is therefore fetched completely before local canonical dedupe/ranking.
+  const rawEvents = [];
+  const requestUrls = [];
+  let totalCount = null;
+  let totalPages = null;
+  let pagesFetched = 0;
+
+  let url = buildUcdpInitialUrl();
+  for (let page = 1; page <= UCDP_MAX_PAGES; page += 1) {
+    requestUrls.push(url.toString());
+    const payload = await getJson(url, 32000, {
+      Accept: 'application/json',
+      'x-ucdp-access-token': token,
+    });
+    if (!payload || !Array.isArray(payload.Result)) throw new Error(`UCDP page ${page}: unexpected response contract`);
+    totalCount = readUcdpPaginationInteger(payload, 'TotalCount', page);
+    totalPages = readUcdpPaginationInteger(payload, 'TotalPages', page);
+    if (totalPages > UCDP_MAX_PAGES) throw new Error(`UCDP release has ${totalPages} pages, exceeding bounded safety cap of ${UCDP_MAX_PAGES}`);
+    rawEvents.push(...payload.Result);
+    pagesFetched = page;
+    if (page >= totalPages || payload.Result.length === 0) break;
+    if (!textOrNull(payload.NextPageUrl)) throw new Error(`UCDP page ${page}: missing NextPageUrl before final page`);
+    url = readUcdpNextPageUrl(payload.NextPageUrl, page);
+  }
+
+  if (totalCount !== rawEvents.length) throw new Error(`UCDP pagination incomplete: expected ${totalCount} rows, received ${rawEvents.length}`);
+
+  const omittedByReason = createUcdpOmissionCounts();
+  const byCanonicalId = new Map();
+  for (const rawEvent of rawEvents) {
+    const id = integerOrNull(rawEvent?.id);
+    const key = canonicalUcdpKeyFromId(id);
+    if (!key) {
+      omittedByReason.missingCanonicalId += 1;
+      continue;
+    }
+    if (byCanonicalId.has(key)) {
+      omittedByReason.duplicateCanonicalId += 1;
+      continue;
+    }
+    byCanonicalId.set(key, rawEvent);
+  }
+
+  const normalizedEvents = [];
+  for (const rawEvent of byCanonicalId.values()) {
+    const normalized = normalizeUcdpGedEvent(rawEvent);
+    if (!normalized.event) {
+      omittedByReason[normalized.reason] = (omittedByReason[normalized.reason] ?? 0) + 1;
+      continue;
+    }
+    normalizedEvents.push(normalized);
+  }
+
+  const newestEndEpochMs = Math.max(0, ...normalizedEvents.map((item) => item.endEpochMs));
+  const ranked = normalizedEvents
+    .map((item) => ({ ...item, score: ucdpSelectionScore(item, newestEndEpochMs) }))
+    .sort((a, b) => b.score - a.score || b.endEpochMs - a.endEpochMs || a.event.ucdp.id - b.event.ucdp.id);
+  const selected = ranked.slice(0, UCDP_MAX_NORMALIZED_EVENTS).map((item) => item.event);
+  omittedByReason.highValueCap = Math.max(0, ranked.length - selected.length);
+  const omittedEventCount = Object.values(omittedByReason).reduce((sum, value) => sum + value, 0);
+
+  return {
+    events: selected,
+    meta: {
+      ...createUcdpMeta('ok'),
+      totalCount,
+      totalPages,
+      pagesFetched,
+      fetchedEventCount: rawEvents.length,
+      uniqueCanonicalEventCount: byCanonicalId.size,
+      validEventCount: normalizedEvents.length,
+      ingestedEventCount: selected.length,
+      omittedEventCount,
+      omittedByReason,
+      requestUrls,
+    },
+  };
+}
+
+function isOfficialUcdpRecord(event) {
+  return event?.source === 'UCDP' && Number.isInteger(event?.ucdp?.id) && event.ucdp.id > 0;
+}
+
+const currentUcdpIngestionKeys = new Set();
+
+function preservePriorUcdpRecords(result, previousSnapshot) {
+  const prior = Array.isArray(previousSnapshot.mapOfWarsEvents)
+    ? previousSnapshot.mapOfWarsEvents.filter(isOfficialUcdpRecord)
+    : [];
+  if (prior.length === 0) return 0;
+  result.mapOfWarsEvents = mergeMapOfWarsEventRecords(result.mapOfWarsEvents, prior);
+  return prior.length;
+}
+
 let previousSnapshot = {};
 try { if (existsSync(outFile)) previousSnapshot = JSON.parse(readFileSync(outFile, 'utf8')); } catch {}
 
 const iodaQueryWindow = createIodaQueryWindow();
-const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], aircraft: [], vessels: [], satellites: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], cyberVulnerabilities: [], internetOutages: [], internetOutageMeta: createIodaUnavailableMeta(iodaQueryWindow), errors: [] };
+const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], aircraft: [], vessels: [], satellites: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], cyberVulnerabilities: [], internetOutages: [], internetOutageMeta: createIodaUnavailableMeta(iodaQueryWindow), ucdpMeta: createUcdpMeta('unconfigured'), errors: [] };
 
 try {
   const ioda = await collectIodaOutages(iodaQueryWindow);
@@ -657,8 +1052,68 @@ try {
       note: event.note, url: event.url,
     }));
   result.sources.mapOfWars = 'Map of Wars public event lattice (build-time cache)';
-} catch (error) { result.errors.push(`Map of Wars: ${error.message}`); }
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  result.errors.push(`Map of Wars: ${message}`);
+  if (Array.isArray(previousSnapshot.mapOfWarsEvents) && previousSnapshot.mapOfWarsEvents.length > 0) {
+    result.mapOfWarsEvents = mergeMapOfWarsEventRecords(previousSnapshot.mapOfWarsEvents);
+    result.sources.mapOfWars = 'Map of Wars public event lattice (prior build-time snapshot preserved after transient ingestion failure)';
+    result.errors.push('mapOfWarsEvents: transient failure; preserved previous snapshot');
+  }
+}
 
+
+const ucdpApiToken = process.env.UCDP_API_TOKEN?.trim();
+if (ucdpApiToken) {
+  try {
+    const ucdp = await collectUcdpGedEvents(ucdpApiToken);
+    currentUcdpIngestionKeys.clear();
+    for (const event of ucdp.events) currentUcdpIngestionKeys.add(canonicalMapOfWarsKey(event));
+    result.mapOfWarsEvents = mergeMapOfWarsEventRecords(result.mapOfWarsEvents, ucdp.events);
+    result.ucdpMeta = {
+      ...ucdp.meta,
+      mergedEventCount: ucdp.events.length,
+    };
+    result.sources.ucdp = `UCDP API gedevents/${UCDP_GED_VERSION} authenticated monthly candidate slice (${ucdp.events.length} high-value records from ${ucdp.meta.fetchedEventCount} fetched)`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const preservedPriorEventCount = preservePriorUcdpRecords(result, previousSnapshot);
+    result.errors.push(`UCDP: ${message}`);
+    result.ucdpMeta = {
+      ...createUcdpMeta('degraded'),
+      statusDetail: `Authenticated ingestion failed before a complete bounded release could be validated: ${message}`,
+      preservedPriorEventCount,
+      preservedAt: preservedPriorEventCount > 0 ? result.fetchedAt : undefined,
+    };
+    result.sources.ucdp = preservedPriorEventCount > 0
+      ? `UCDP API gedevents/${UCDP_GED_VERSION} degraded; ${preservedPriorEventCount} prior authenticated records preserved`
+      : `UCDP API gedevents/${UCDP_GED_VERSION} unavailable during build`;
+    if (preservedPriorEventCount > 0) result.errors.push('UCDP: transient failure; preserved previous authenticated records');
+  }
+} else {
+  const preservedPriorEventCount = preservePriorUcdpRecords(result, previousSnapshot);
+  result.ucdpMeta = {
+    ...createUcdpMeta('unconfigured'),
+    statusDetail: 'UCDP_API_TOKEN is not configured in the build-time environment',
+    preservedPriorEventCount,
+    preservedAt: preservedPriorEventCount > 0 ? result.fetchedAt : undefined,
+  };
+  result.sources.ucdp = preservedPriorEventCount > 0
+    ? `UCDP API token not configured; ${preservedPriorEventCount} prior authenticated records preserved`
+    : 'UCDP API token not configured; official GED enrichment unavailable';
+  result.errors.push('UCDP: UCDP_API_TOKEN not configured; authenticated official GED enrichment unavailable');
+}
+
+function finalizeMapOfWarsEventCap() {
+  result.mapOfWarsEvents = result.mapOfWarsEvents.slice(0, 2800);
+  if (result.ucdpMeta.status !== 'ok') return;
+  const mergedEventCount = result.mapOfWarsEvents.filter((event) => currentUcdpIngestionKeys.has(canonicalMapOfWarsKey(event))).length;
+  const mergeCap = Math.max(0, result.ucdpMeta.ingestedEventCount - mergedEventCount);
+  const previousMergeCap = result.ucdpMeta.omittedByReason.mergeCap ?? 0;
+  result.ucdpMeta.mergedEventCount = mergedEventCount;
+  result.ucdpMeta.omittedByReason.mergeCap = mergeCap;
+  result.ucdpMeta.omittedEventCount += mergeCap - previousMergeCap;
+}
 
 if (process.env.ACLED_API_KEY && process.env.ACLED_EMAIL) {
   try {
@@ -688,14 +1143,13 @@ if (process.env.ACLED_API_KEY && process.env.ACLED_EMAIL) {
         url: 'https://acleddata.com/',
       };
     }).filter(Boolean);
-    const merged = new Map(result.mapOfWarsEvents.map((event) => [String(event.id), event]));
-    for (const event of acledEvents) merged.set(String(event.id), event);
-    result.mapOfWarsEvents = [...merged.values()].slice(0, 2800);
+    result.mapOfWarsEvents = mergeMapOfWarsEventRecords(result.mapOfWarsEvents, acledEvents);
     result.sources.acled = `ACLED authenticated political violence API (${acledEvents.length} records)`;
   } catch (error) { result.errors.push(`ACLED: ${error.message}`); }
 } else {
   result.errors.push('ACLED: ACLED_API_KEY/ACLED_EMAIL not configured; authenticated political-violence enrichment unavailable');
 }
+finalizeMapOfWarsEventCap();
 
 try {
   const manifest = await getText('https://gpsjam.org/data/manifest.csv', 20000);
@@ -780,6 +1234,102 @@ function validateNonNegativeInteger(value) {
   return Number.isInteger(value) && value >= 0;
 }
 
+function validateIsoDateOnly(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function validateNullableString(value) {
+  return value === null || typeof value === 'string';
+}
+
+function validateUcdpOfficialRecord(item, label, errors) {
+  const ucdp = item.ucdp;
+  if (!ucdp || typeof ucdp !== 'object') {
+    errors.push(`${label} missing official UCDP provenance object`);
+    return;
+  }
+  if (!Number.isInteger(ucdp.id) || ucdp.id <= 0 || item.id !== `ucdp:${ucdp.id}`) errors.push(`${label} canonical UCDP id mismatch`);
+  if (typeof ucdp.relid !== 'string' || ucdp.relid.length === 0) errors.push(`${label} missing UCDP relid`);
+  if (!Number.isInteger(ucdp.year) || ucdp.year < 1989) errors.push(`${label} invalid UCDP year`);
+  if (typeof ucdp.active_year !== 'boolean') errors.push(`${label} invalid active_year`);
+  if (typeof ucdp.code_status !== 'string' || ucdp.code_status.length === 0) errors.push(`${label} missing candidate code_status`);
+  if (!UCDP_TYPE_OF_VIOLENCE_LABELS[ucdp.type_of_violence]) errors.push(`${label} invalid type_of_violence`);
+  for (const key of ['conflict_new_id', 'dyad_new_id', 'side_a_new_id', 'side_b_new_id', 'country_id', 'priogrid_gid']) {
+    if (!Number.isInteger(ucdp[key]) || ucdp[key] <= 0) errors.push(`${label} invalid ${key}`);
+  }
+  for (const key of ['conflict_name', 'dyad_name', 'side_a', 'side_b', 'where_coordinates', 'country', 'region']) {
+    if (typeof ucdp[key] !== 'string' || ucdp[key].length === 0) errors.push(`${label} missing ${key}`);
+  }
+  if (!validateNullableString(ucdp.adm_1) || !validateNullableString(ucdp.adm_2) || !validateNullableString(ucdp.where_description)) errors.push(`${label} invalid location text fields`);
+  if (!UCDP_WHERE_PRECISION_LABELS[ucdp.where_prec]) errors.push(`${label} invalid where_prec`);
+  if (!UCDP_DATE_PRECISION_LABELS[ucdp.date_prec]) errors.push(`${label} invalid date_prec`);
+  if (![1, 2].includes(ucdp.event_clarity)) errors.push(`${label} invalid event_clarity`);
+  if (!validateIsoDateOnly(ucdp.date_start) || !validateIsoDateOnly(ucdp.date_end) || Date.parse(`${ucdp.date_start}T00:00:00Z`) > Date.parse(`${ucdp.date_end}T00:00:00Z`)) errors.push(`${label} invalid date_start/date_end`);
+  for (const key of ['deaths_a', 'deaths_b', 'deaths_civilians', 'deaths_unknown', 'low', 'best', 'high']) {
+    if (!validateNonNegativeInteger(ucdp[key])) errors.push(`${label} invalid fatality field ${key}`);
+  }
+  if (validateNonNegativeInteger(ucdp.deaths_a) && validateNonNegativeInteger(ucdp.deaths_b) && validateNonNegativeInteger(ucdp.deaths_civilians) && validateNonNegativeInteger(ucdp.deaths_unknown) && validateNonNegativeInteger(ucdp.best) && ucdp.deaths_a + ucdp.deaths_b + ucdp.deaths_civilians + ucdp.deaths_unknown !== ucdp.best) errors.push(`${label} fatality components do not sum to best`);
+  if (validateNonNegativeInteger(ucdp.low) && validateNonNegativeInteger(ucdp.best) && validateNonNegativeInteger(ucdp.high) && Math.max(ucdp.low, ucdp.best, ucdp.high) < 1) errors.push(`${label} violates UCDP minimum one-fatality event definition`);
+  if (!Number.isInteger(ucdp.number_of_sources) || ucdp.number_of_sources < -1) errors.push(`${label} invalid number_of_sources`);
+  if (typeof ucdp.source_article !== 'string' || ucdp.source_article.length === 0) errors.push(`${label} missing UCDP source_article provenance`);
+  for (const key of ['source_office', 'source_date', 'source_headline', 'source_original', 'gwnoa', 'gwnob']) {
+    if (!validateNullableString(ucdp[key])) errors.push(`${label} invalid ${key}`);
+  }
+  if (ucdp.dataset_version !== UCDP_GED_VERSION || ucdp.dataset_release !== UCDP_DATASET_RELEASE) errors.push(`${label} invalid dataset version provenance`);
+}
+
+function validateUcdpMeta(snapshot, errors) {
+  const meta = snapshot.ucdpMeta;
+  if (!meta || typeof meta !== 'object') {
+    errors.push('ucdpMeta missing or not an object');
+    return;
+  }
+  if (!['ok', 'unconfigured', 'degraded'].includes(meta.status)) errors.push('ucdpMeta invalid status');
+  if (meta.resource !== 'gedevents' || meta.version !== UCDP_GED_VERSION || meta.datasetRelease !== UCDP_DATASET_RELEASE) errors.push('ucdpMeta invalid endpoint/version provenance');
+  if (meta.apiEndpoint !== UCDP_API_URL) errors.push('ucdpMeta invalid API endpoint');
+  if (meta.codebook !== UCDP_CODEBOOK_URL) errors.push('ucdpMeta invalid codebook provenance');
+  if (!String(meta.authentication || '').includes('x-ucdp-access-token') || !String(meta.authentication || '').includes('never written')) errors.push('ucdpMeta missing honest authentication provenance');
+  for (const key of ['pageSize', 'maxPages', 'maxNormalizedEvents', 'pagesFetched', 'fetchedEventCount', 'uniqueCanonicalEventCount', 'validEventCount', 'ingestedEventCount', 'mergedEventCount', 'preservedPriorEventCount', 'omittedEventCount']) {
+    if (!validateNonNegativeInteger(meta[key])) errors.push(`ucdpMeta invalid ${key}`);
+  }
+  if (meta.totalCount !== null && !validateNonNegativeInteger(meta.totalCount)) errors.push('ucdpMeta invalid totalCount');
+  if (meta.totalPages !== null && !validateNonNegativeInteger(meta.totalPages)) errors.push('ucdpMeta invalid totalPages');
+  const reasons = meta.omittedByReason;
+  if (!reasons || typeof reasons !== 'object') {
+    errors.push('ucdpMeta omission reasons missing');
+  } else {
+    for (const key of ['missingCanonicalId', 'invalidCoordinates', 'invalidTime', 'invalidFatalityContract', 'invalidPrecisionContract', 'duplicateCanonicalId', 'highValueCap', 'mergeCap']) {
+      if (!validateNonNegativeInteger(reasons[key])) errors.push(`ucdpMeta invalid omission reason ${key}`);
+    }
+    if (Object.values(reasons).every(validateNonNegativeInteger) && meta.omittedEventCount !== Object.values(reasons).reduce((sum, value) => sum + value, 0)) errors.push('ucdpMeta omittedEventCount does not equal omission reasons');
+    if (meta.status === 'ok' && Object.values(reasons).every(validateNonNegativeInteger)) {
+      if (meta.fetchedEventCount !== meta.uniqueCanonicalEventCount + reasons.missingCanonicalId + reasons.duplicateCanonicalId) errors.push('ucdpMeta canonical dedupe count mismatch');
+      const invalidCount = reasons.invalidCoordinates + reasons.invalidTime + reasons.invalidFatalityContract + reasons.invalidPrecisionContract;
+      if (meta.uniqueCanonicalEventCount !== meta.validEventCount + invalidCount) errors.push('ucdpMeta normalization count mismatch');
+      if (meta.validEventCount !== meta.ingestedEventCount + reasons.highValueCap) errors.push('ucdpMeta high-value selection count mismatch');
+      if (meta.ingestedEventCount !== meta.mergedEventCount + reasons.mergeCap) errors.push('ucdpMeta merge count mismatch');
+    }
+  }
+  if (!Array.isArray(meta.requestUrls)) {
+    errors.push('ucdpMeta requestUrls missing or not an array');
+  } else if (meta.status === 'ok') {
+    if (meta.requestUrls.length !== meta.pagesFetched || meta.requestUrls.length === 0) errors.push('ucdpMeta requestUrls/page count mismatch');
+    meta.requestUrls.forEach((url, index) => {
+      if (!url.startsWith(`${UCDP_API_URL}?`) || !url.includes(`pagesize=${UCDP_PAGE_SIZE}`)) errors.push(`ucdpMeta request URL ${index + 1} lacks versioned paging provenance`);
+    });
+    if (meta.totalCount !== meta.fetchedEventCount) errors.push('ucdpMeta totalCount/fetched count mismatch');
+    if (meta.totalPages !== meta.pagesFetched) errors.push('ucdpMeta totalPages/pagesFetched mismatch');
+  }
+  const actualMerged = (snapshot.mapOfWarsEvents ?? []).filter((event) => currentUcdpIngestionKeys.has(canonicalMapOfWarsKey(event))).length;
+  if (meta.status === 'ok' && actualMerged !== meta.mergedEventCount) errors.push('ucdpMeta mergedEventCount does not match snapshot records');
+  if (!String(meta.selection || '').includes('high-value') || !String(meta.caveat || '').includes('preliminary')) errors.push('ucdpMeta missing selection or candidate caveat');
+  const configuredUcdpToken = process.env.UCDP_API_TOKEN?.trim();
+  if (configuredUcdpToken && JSON.stringify(snapshot).includes(configuredUcdpToken)) errors.push('UCDP token leaked into snapshot');
+}
+
 function validateSnapshot(snapshot) {
   const errors = [];
   for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'cyberVulnerabilities', 'internetOutages']) {
@@ -791,6 +1341,23 @@ function validateSnapshot(snapshot) {
   for (const item of snapshot.launches ?? []) validateCoordinate(item, 'launches', errors);
   for (const item of snapshot.naturalEvents ?? []) validateCoordinate(item, 'naturalEvents', errors);
   for (const item of snapshot.internetOutages ?? []) validateCoordinate(item, 'internetOutages', errors);
+  const canonicalMapOfWarsKeys = new Set();
+  for (const item of snapshot.mapOfWarsEvents ?? []) {
+    const label = `mapOfWarsEvents:${item.id || 'unknown'}`;
+    if (typeof item.id !== 'string' || item.id.length === 0) errors.push(`${label} missing id`);
+    if (!['battle', 'ship', 'outage', 'activation', 'launch'].includes(item.kind)) errors.push(`${label} invalid kind`);
+    if (!validCoordinatePair(item.lat, item.lon)) errors.push(`${label} invalid coordinate`);
+    if (!Number.isFinite(item.ts) || item.ts <= 0) errors.push(`${label} invalid timestamp`);
+    if (typeof item.title !== 'string' || item.title.length === 0) errors.push(`${label} missing title`);
+    if (typeof item.source !== 'string' || item.source.length === 0) errors.push(`${label} missing source`);
+    const canonicalKey = canonicalMapOfWarsKey(item);
+    if (canonicalKey) {
+      if (canonicalMapOfWarsKeys.has(canonicalKey)) errors.push(`${label} duplicate canonical key ${canonicalKey}`);
+      canonicalMapOfWarsKeys.add(canonicalKey);
+    }
+    if (item.ucdp !== undefined) validateUcdpOfficialRecord(item, label, errors);
+  }
+  validateUcdpMeta(snapshot, errors);
   for (const item of snapshot.internetOutages ?? []) {
     const label = `internetOutages:${item.entityType || 'unknown'}:${item.entityCode || 'unknown'}`;
     if (!['country', 'region'].includes(item.entityType)) errors.push(`${label} invalid entityType`);
@@ -852,4 +1419,5 @@ for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'new
 
 validateSnapshot(result);
 writeFileSync(outFile, JSON.stringify(result));
-console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.webcams.length} webcams, ${result.internetOutages.length} IODA outage detections (${result.internetOutageMeta.status})`);
+const ucdpConsoleSuffix = result.ucdpMeta.preservedPriorEventCount > 0 ? `, ${result.ucdpMeta.preservedPriorEventCount} preserved` : '';
+console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.ucdpMeta.mergedEventCount} UCDP official records (${result.ucdpMeta.status}${ucdpConsoleSuffix}), ${result.webcams.length} webcams, ${result.internetOutages.length} IODA outage detections (${result.internetOutageMeta.status})`);
