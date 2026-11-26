@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Cloud, Compass, Hexagon, Orbit, Pause, Plane, Play, Leaf, Radio, ScanLine, Signal, SlidersHorizontal, Tags, Waypoints } from "lucide-react";
-import type { CategoryGroup, SeverityKey, TimelineBucket, TimeWindowKey } from "@/types/conflict";
+import { Cloud, Compass, Download, Hexagon, Orbit, Pause, Plane, Play, Leaf, Radio, ScanLine, Signal, SlidersHorizontal, Tags, Waypoints } from "lucide-react";
+import type { CategoryGroup, ConflictEvent, SeverityKey, TimelineBucket, TimeWindowKey } from "@/types/conflict";
 import type { GodEyeLayerToggles } from "./GodEyeGlobe";
 import { CATEGORY_GROUP_META, SEVERITY_META } from "@/lib/conflictData";
 
@@ -14,6 +14,7 @@ interface ControlDeckProps {
   autoRotate: boolean;
   tourActive: boolean;
   timeline: TimelineBucket[];
+  events: ConflictEvent[];
   onTimeWindowChange: (window: TimeWindowKey) => void;
   onToggleCategoryGroup: (group: CategoryGroup) => void;
   onToggleSeverity: (severity: SeverityKey) => void;
@@ -41,6 +42,47 @@ const LAYER_CONTROLS: { key: keyof GodEyeLayerToggles; label: string; icon: type
   { key: "gpsInterference", label: "GPS", icon: Signal },
 ];
 
+function downloadFile(filename: string, content: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function csvCell(value: unknown): string {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function exportEvents(events: ConflictEvent[], format: "json" | "csv") {
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  if (format === "json") {
+    downloadFile(`godseye-incidents-${stamp}.json`, JSON.stringify(events, null, 2), "application/json");
+    return;
+  }
+  const header = ["id", "occurred_utc", "lat", "lng", "severity", "category", "country", "conflict", "killed", "counted_casualties", "displaced", "precision", "verified", "title", "sources"];
+  const rows = events.map((event) => [
+    event.id,
+    new Date(event.occurredAt).toISOString(),
+    event.lat,
+    event.lng,
+    event.severity,
+    event.category,
+    event.country,
+    event.conflict,
+    event.killed,
+    event.countedCasualties,
+    event.displaced,
+    event.precision,
+    event.verified,
+    event.title,
+    event.sources.map((source) => `${source.name} ${source.url}`).join(" | "),
+  ].map(csvCell).join(","));
+  downloadFile(`godseye-incidents-${stamp}.csv`, [header.map(csvCell).join(","), ...rows].join(String.fromCharCode(10)), "text/csv");
+}
+
 export default function ControlDeck({
   timeWindow,
   categoryGroups,
@@ -49,6 +91,7 @@ export default function ControlDeck({
   autoRotate,
   tourActive,
   timeline,
+  events,
   onTimeWindowChange,
   onToggleCategoryGroup,
   onToggleSeverity,
@@ -154,6 +197,25 @@ export default function ControlDeck({
             <Compass className="h-3.5 w-3.5" />
             Tour
           </button>
+
+          <div className="flex overflow-hidden rounded-sm border border-white/10">
+            <button
+              type="button"
+              onClick={() => exportEvents(events, "json")}
+              className="flex h-8 items-center gap-1.5 bg-white/[0.025] px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-white/46 transition hover:text-white/72"
+              title="Export filtered incidents as JSON"
+            >
+              <Download className="h-3.5 w-3.5" /> JSON
+            </button>
+            <button
+              type="button"
+              onClick={() => exportEvents(events, "csv")}
+              className="flex h-8 items-center gap-1.5 border-l border-white/10 bg-white/[0.025] px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-white/46 transition hover:text-white/72"
+              title="Export filtered incidents as CSV"
+            >
+              CSV
+            </button>
+          </div>
 
           <div className="relative">
             <button

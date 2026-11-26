@@ -355,6 +355,7 @@ export default function GodEyeCommandCenter() {
           autoRotate={autoRotate}
           tourActive={tourActive}
           timeline={timeline}
+          events={visibleEvents}
           onTimeWindowChange={handleTimeWindowChange}
           onToggleCategoryGroup={handleToggleCategoryGroup}
           onToggleSeverity={handleToggleSeverity}
