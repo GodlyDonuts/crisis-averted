@@ -13,7 +13,9 @@ import {
   normalizeMapOfWarsEvent,
 } from "@/lib/conflictData";
 import { useConflictEvents } from "@/hooks/useConflictEvents";
+import { useIncidentPlayback } from "@/hooks/useIncidentPlayback";
 import { useOsintSnapshot } from "@/hooks/useOsintSnapshot";
+import { measureIncidentTemporalCoverage } from "@/lib/incidentTime";
 import TopCommandBar from "./TopCommandBar";
 import TheaterList from "./TheaterList";
 import EventFeed from "./EventFeed";
@@ -111,6 +113,17 @@ export default function GodEyeCommandCenter() {
   }, [scopeEvents, filters.theater]);
   const summary = useMemo(() => summarizeEvents(visibleEvents), [visibleEvents]);
   const timeline = useMemo(() => buildTimeline(visibleEvents, 30), [visibleEvents]);
+  const corpusCoverage = useMemo(() => measureIncidentTemporalCoverage(events), [events]);
+  const playback = useIncidentPlayback(visibleEvents);
+  // Playback is a temporal lens on map/feed rendering only: theater aggregation,
+  // filter state, export scope, tour behavior, and the command summary continue to
+  // describe the full filtered scope rather than being destructively rewritten.
+  const temporalEvents = playback.active ? playback.events : visibleEvents;
+  const globePlaybackFrame = useMemo(() => {
+    if (!playback.active || !playback.frame) return null;
+    return { start: playback.frame.start, endExclusive: playback.frame.endExclusive, mode: playback.mode };
+  }, [playback.active, playback.frame, playback.mode]);
+  const pausePlayback = playback.pause;
 
   const selectedEvent = useMemo(() => {
     if (!selectedEventId) return null;
@@ -126,6 +139,7 @@ export default function GodEyeCommandCenter() {
 
   const handleEventSelect = useCallback((event: ConflictEvent) => {
     setAutoRotate(false);
+    pausePlayback();
     setSelectedAircraft(null);
     setSelectedCivilAircraft(null);
     setSelectedVessel(null);
@@ -136,7 +150,7 @@ export default function GodEyeCommandCenter() {
       altitude: 0.82,
       key: `event-${event.id}-${Date.now()}`,
     });
-  }, []);
+  }, [pausePlayback]);
 
   const handleAircraftSelect = useCallback((aircraft: MilitaryAircraft) => {
     setAutoRotate(false);
@@ -285,7 +299,7 @@ export default function GodEyeCommandCenter() {
     <main className="relative h-dvh w-full overflow-hidden bg-[#01040a] text-white">
       {globeUnavailable ? (
         <GlobeFallback
-          events={visibleEvents}
+          events={temporalEvents}
           theaters={theaters}
           militaryAircraft={osintSnapshot.militaryAircraft}
           naturalEvents={osintSnapshot.naturalEvents}
@@ -295,7 +309,7 @@ export default function GodEyeCommandCenter() {
       ) : (
         <GodEyeGlobe
           key={visualMode}
-          events={visibleEvents}
+          events={temporalEvents}
           theaters={theaters}
           militaryAircraft={osintSnapshot.militaryAircraft}
           aircraft={osintSnapshot.aircraft}
@@ -312,6 +326,8 @@ export default function GodEyeCommandCenter() {
           layers={layers}
           visualMode={visualMode}
           autoRotate={autoRotate}
+          playbackFrame={globePlaybackFrame}
+          reducedMotion={playback.reducedMotion}
           onEventSelect={handleEventSelect}
           onAircraftSelect={handleAircraftSelect}
           onCivilAircraftSelect={handleCivilAircraftSelect}
@@ -393,7 +409,7 @@ export default function GodEyeCommandCenter() {
             />
           ) : (
             <EventFeed
-              events={visibleEvents}
+              events={temporalEvents}
               selectedEventId={selectedEventId}
               onEventSelect={handleEventSelect}
             />
@@ -420,6 +436,8 @@ export default function GodEyeCommandCenter() {
           tourActive={tourActive}
           timeline={timeline}
           events={visibleEvents}
+          playback={playback}
+          corpusCoverage={corpusCoverage}
           onTimeWindowChange={handleTimeWindowChange}
           onToggleCategoryGroup={handleToggleCategoryGroup}
           onToggleSeverity={handleToggleSeverity}
@@ -429,7 +447,7 @@ export default function GodEyeCommandCenter() {
         />
 
         <MobileIntelSheet
-          events={visibleEvents}
+          events={temporalEvents}
           theaters={theaters}
           selectedEvent={selectedEvent}
           selectedTheater={selectedTheater}

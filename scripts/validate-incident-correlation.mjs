@@ -59,9 +59,16 @@ fs.writeFileSync(
   'export const assetPath = (value) => value;\n',
 );
 
+const incidentTimePath = transpileModule(
+  path.join(frontendDir, 'src', 'lib', 'incidentTime.ts'),
+  'incidentTime.mjs',
+);
 const correlationPath = transpileModule(
   path.join(frontendDir, 'src', 'lib', 'incidentCorrelation.ts'),
   'incidentCorrelation.mjs',
+  {
+    '@/lib/incidentTime': './incidentTime.mjs',
+  },
 );
 const conflictDataPath = transpileModule(
   path.join(frontendDir, 'src', 'lib', 'conflictData.ts'),
@@ -69,13 +76,16 @@ const conflictDataPath = transpileModule(
   {
     '@/lib/assets': './assets-stub.mjs',
     '@/lib/incidentCorrelation': './incidentCorrelation.mjs',
+    '@/lib/incidentTime': './incidentTime.mjs',
   },
 );
 
 const correlation = await import(`file://${correlationPath.replace(/\\/g, '/')}`);
 const conflictData = await import(`file://${conflictDataPath.replace(/\\/g, '/')}`);
+const incidentTime = await import(`file://${incidentTimePath.replace(/\\/g, '/')}`);
 
 const { correlateConflictEvents, extractEventFeatures, assessPair, resolveSourceFamily } = correlation;
+const { createSecondOccurrenceWindow } = incidentTime;
 
 // ---------------------------------------------------------------------------
 // Assertion plumbing
@@ -371,6 +381,40 @@ console.log('\nscenario 7: source family resolution');
   check('ucdp id inferred', resolveSourceFamily({ id: 'ucdp:42', sourceName: null }) === 'ucdp');
   check('lattice acled id inferred', resolveSourceFamily({ id: 'mow-acled-99', sourceName: null }) === 'acled');
   check('untyped record resolves unknown', resolveSourceFamily({ id: 'abcdef', sourceName: null }) === 'unknown');
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 7b: explicit exact-second midnight windows are not widened by the legacy lattice heuristic
+// ---------------------------------------------------------------------------
+console.log('\nscenario 7b: explicit exact-second midnight temporal precision');
+{
+  const preciseMidnight = makeEvent({
+    id: 'ucdp:explicit-second-midnight',
+    lat: 34.8,
+    lng: 36.7,
+    title: 'Precision strike hits bridge near Homs',
+    occurredAt: NOV19_MIDNIGHT,
+    occurrence: createSecondOccurrenceWindow(NOV19_MIDNIGHT),
+    sourceFamily: 'ucdp',
+    country: 'Syria',
+    conflict: 'Syrian conflict',
+    category: 'airstrike',
+  });
+  const noonReport = makeEvent({
+    id: 'w:noon-report',
+    lat: 34.801,
+    lng: 36.701,
+    title: 'Precision strike hits bridge near Homs',
+    occurredAt: NOV19_NOON,
+    sourceFamily: 'warheatmap',
+    country: 'Syria',
+    conflict: 'Syrian conflict',
+    category: 'airstrike',
+  });
+  const first = extractEventFeatures(preciseMidnight, 0);
+  const second = extractEventFeatures(noonReport, 1);
+  const assessment = assessPair(first, second);
+  check('explicit exact-second midnight does not widen into a day window', assessment.temporalScore <= 0.55 && assessment.timeGapHours > 11.9, `temporal=${assessment.temporalScore}, gap=${assessment.timeGapHours}`);
 }
 
 // ---------------------------------------------------------------------------

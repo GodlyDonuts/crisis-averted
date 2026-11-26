@@ -4,6 +4,7 @@ import { BadgeCheck, Copy, Crosshair, ExternalLink, GitMerge, MapPin, X } from "
 import type { ConflictEvent, ConflictTheater, IncidentCorrelationConfidence, OsintSnapshot } from "@/types/conflict";
 import { RegionalIntel } from "./RegionalIntel";
 import { estimateEventConfidence, formatCompact, formatRelativeTime, formatUtcTime, normalizeCategory, SEVERITY_META } from "@/lib/conflictData";
+import { formatUtcExact } from "@/lib/incidentTime";
 
 interface EventDetailPanelProps {
   event: ConflictEvent;
@@ -95,6 +96,8 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
   const severity = SEVERITY_META[event.severity];
   const threatIndex = Math.round(event.intensity * 100);
   const confidence = estimateEventConfidence(event);
+  const occurrence = event.occurrence;
+  const occurrenceIsUncertain = Boolean(occurrence && occurrence.precision !== "second");
   const ucdpFatalityIntervalDiscrepancy = Boolean(
     event.ucdp
     && typeof event.ucdp.low === "number"
@@ -107,6 +110,9 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
     const brief = [
       `INCIDENT BRIEF — ${event.title}`,
       `DTG: ${formatUtcTime(event.occurredAt)}`,
+      ...(occurrence ? [
+        `OCCURRENCE WINDOW: ${formatUtcExact(occurrence.start)} → ${formatUtcExact(occurrence.endExclusive)} end-exclusive · ${occurrence.label}`,
+      ] : []),
       `LOCATION: ${event.lat.toFixed(4)}, ${event.lng.toFixed(4)} (${event.country})`,
       `CATEGORY/SEVERITY: ${normalizeCategory(event.category)} / ${event.severity}`,
       `REPORTED KILLED: ${event.killed}; COUNTED CASUALTIES: ${event.countedCasualties}; DISPLACED: ${event.displaced}`,
@@ -181,6 +187,12 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
             <span>{formatRelativeTime(event.occurredAt)}</span>
             <span>{formatUtcTime(event.occurredAt)}</span>
           </div>
+          {occurrence ? (
+            <div className={`mt-2 rounded-sm border px-2 py-1.5 font-mono text-[9px] uppercase leading-relaxed tracking-[0.08em] ${occurrenceIsUncertain ? "border-sky-200/12 bg-sky-300/[0.045] text-sky-100/54" : "border-white/8 bg-white/[0.025] text-white/34"}`}>
+              <p>Occurrence window: {formatUtcExact(occurrence.start)} → {formatUtcExact(occurrence.endExclusive)} end-exclusive</p>
+              <p className="mt-0.5 normal-case tracking-normal text-white/38">{occurrence.label}</p>
+            </div>
+          ) : null}
           <p className="mt-2 font-mono text-[9px] uppercase leading-relaxed tracking-[0.1em] text-white/28">
             Severity, recency, casualties, displacement, precision, and verification contribute to this score.
           </p>

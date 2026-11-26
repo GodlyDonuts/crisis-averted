@@ -1,9 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Cloud, Compass, Download, Hexagon, Newspaper, Orbit, Pause, Plane, Play, Ship, Leaf, Radio, ScanLine, Signal, Radar, SlidersHorizontal, Tags, Waypoints, WifiOff } from "lucide-react";
+import { Clock3, Cloud, Compass, Download, Hexagon, Newspaper, Orbit, Pause, Plane, Play, Ship, Leaf, Radio, ScanLine, Signal, Radar, SlidersHorizontal, Tags, Waypoints, WifiOff } from "lucide-react";
 import type { CategoryGroup, ConflictEvent, SeverityKey, TimelineBucket, TimeWindowKey } from "@/types/conflict";
+import type { IncidentTemporalCoverage } from "@/lib/incidentTime";
+import type { IncidentPlaybackController } from "@/hooks/useIncidentPlayback";
 import type { GodEyeLayerToggles } from "./GodEyeGlobe";
+import IncidentPlaybackPanel from "./IncidentPlaybackPanel";
 import { CATEGORY_GROUP_META, SEVERITY_META } from "@/lib/conflictData";
 
 interface ControlDeckProps {
@@ -15,6 +18,8 @@ interface ControlDeckProps {
   tourActive: boolean;
   timeline: TimelineBucket[];
   events: ConflictEvent[];
+  playback: IncidentPlaybackController;
+  corpusCoverage: IncidentTemporalCoverage;
   onTimeWindowChange: (window: TimeWindowKey) => void;
   onToggleCategoryGroup: (group: CategoryGroup) => void;
   onToggleSeverity: (severity: SeverityKey) => void;
@@ -66,10 +71,14 @@ function exportEvents(events: ConflictEvent[], format: "json" | "csv") {
     downloadFile(`godseye-incidents-${stamp}.json`, JSON.stringify(events, null, 2), "application/json");
     return;
   }
-  const header = ["id", "occurred_utc", "lat", "lng", "severity", "category", "country", "conflict", "killed", "counted_casualties", "displaced", "precision", "verified", "title", "sources", "ucdp_release", "ucdp_code_status", "ucdp_side_a", "ucdp_side_b", "ucdp_low", "ucdp_best", "ucdp_high", "ucdp_date_start", "ucdp_date_end", "ucdp_where_prec", "ucdp_date_prec", "ucdp_source_count", "ucdp_source_article", "source_family", "canonical_incident_id", "correlation_confidence", "evidence_report_count", "independent_family_count", "contradiction_kinds", "evidence_member_ids"];
+  const header = ["id", "occurred_utc", "occurrence_start_utc", "occurrence_end_exclusive_utc", "occurrence_precision", "occurrence_basis", "lat", "lng", "severity", "category", "country", "conflict", "killed", "counted_casualties", "displaced", "precision", "verified", "title", "sources", "ucdp_release", "ucdp_code_status", "ucdp_side_a", "ucdp_side_b", "ucdp_low", "ucdp_best", "ucdp_high", "ucdp_date_start", "ucdp_date_end", "ucdp_where_prec", "ucdp_date_prec", "ucdp_source_count", "ucdp_source_article", "source_family", "canonical_incident_id", "correlation_confidence", "evidence_report_count", "independent_family_count", "contradiction_kinds", "evidence_member_ids"];
   const rows = events.map((event) => [
     event.id,
     new Date(event.occurredAt).toISOString(),
+    event.occurrence ? new Date(event.occurrence.start).toISOString() : "",
+    event.occurrence ? new Date(event.occurrence.endExclusive).toISOString() : "",
+    event.occurrence?.precision ?? "",
+    event.occurrence?.basis ?? "",
     event.lat,
     event.lng,
     event.severity,
@@ -116,6 +125,8 @@ export default function ControlDeck({
   tourActive,
   timeline,
   events,
+  playback,
+  corpusCoverage,
   onTimeWindowChange,
   onToggleCategoryGroup,
   onToggleSeverity,
@@ -128,26 +139,30 @@ export default function ControlDeck({
   const activeLayerCount = Object.values(layers).filter(Boolean).length;
 
   return (
-    <div className="godseye-panel pointer-events-auto absolute bottom-4 left-1/2 z-40 w-[min(780px,calc(100vw-2rem))] -translate-x-1/2 overflow-visible">
-      <div className="hidden border-b border-white/8 px-3 pb-1 pt-2 sm:block">
-        <div className="flex h-5 items-end gap-[2px]">
-          {timeline.map((bucket) => {
-            const height = Math.max(4, Math.round((bucket.count / maxCount) * 18));
-            return (
-              <div
-                key={bucket.key}
-                title={`${bucket.key}: ${bucket.count} incidents, ${bucket.critical} critical`}
-                className="relative flex-1 rounded-t-sm bg-amber-300/18 transition hover:bg-amber-200/50"
-                style={{ height }}
-              >
-                {bucket.critical > 0 && (
-                  <span className="absolute inset-x-0 top-0 h-[3px] rounded-t-sm bg-red-400/90" />
-                )}
-              </div>
-            );
-          })}
+    <div className={`godseye-panel pointer-events-auto absolute bottom-4 left-1/2 z-40 -translate-x-1/2 overflow-visible ${playback.active ? "w-[min(920px,calc(100vw-2rem))]" : "w-[min(780px,calc(100vw-2rem))]"}`}>
+      {playback.active ? (
+        <IncidentPlaybackPanel playback={playback} corpusCoverage={corpusCoverage} />
+      ) : (
+        <div className="hidden border-b border-white/8 px-3 pb-1 pt-2 sm:block">
+          <div className="flex h-5 items-end gap-[2px]">
+            {timeline.map((bucket) => {
+              const height = Math.max(4, Math.round((bucket.count / maxCount) * 18));
+              return (
+                <div
+                  key={bucket.key}
+                  title={`${bucket.key}: ${bucket.count} incidents, ${bucket.critical} critical`}
+                  className="relative flex-1 rounded-t-sm bg-amber-300/18 transition hover:bg-amber-200/50"
+                  style={{ height }}
+                >
+                  {bucket.critical > 0 && (
+                    <span className="absolute inset-x-0 top-0 h-[3px] rounded-t-sm bg-red-400/90" />
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="space-y-1.5 px-2.5 py-2">
         <div className="godseye-scrollbar flex items-center justify-start gap-1.5 overflow-x-auto px-1 pb-1 sm:flex-wrap sm:justify-center sm:overflow-visible sm:px-0 sm:pb-0">
@@ -205,6 +220,17 @@ export default function ControlDeck({
               </button>
             ))}
           </div>
+
+          <button
+            type="button"
+            onClick={playback.toggleActive}
+            aria-pressed={playback.active}
+            title="Deterministic incident temporal playback (keyboard: T)"
+            className={`flex h-8 items-center gap-1.5 rounded-sm border px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] transition ${playback.active ? "border-sky-200/30 bg-sky-300/[0.1] text-sky-100" : "border-white/10 bg-white/[0.025] text-white/42 hover:text-white/72"}`}
+          >
+            <Clock3 className="h-3.5 w-3.5" />
+            Time
+          </button>
 
           <button
             type="button"

@@ -5,7 +5,9 @@ import type {
   IncidentCorrelationConfidence,
   IncidentCorrelationStats,
   IncidentEvidenceMember,
+  IncidentTemporalPrecision,
 } from "@/types/conflict";
+import { resolveIncidentOccurrenceWindow } from "@/lib/incidentTime";
 
 /**
  * Deterministic, explainable cross-source incident correlation (catalog items 163/178).
@@ -188,6 +190,7 @@ export interface EventFeatures {
   cellY: number;
   windowStart: number;
   windowEnd: number;
+  windowPrecision: IncidentTemporalPrecision;
   titleTokens: Set<string>;
   actorTokens: Set<string>;
   conflictTokens: Set<string>;
@@ -196,13 +199,6 @@ export interface EventFeatures {
   hasDirectActors: boolean;
 }
 
-function parseIsoDay(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (!match) return null;
-  const ms = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  return Number.isFinite(ms) ? ms : null;
-}
 
 function extractActorTokens(event: ConflictEvent): { tokens: Set<string>; direct: boolean } {
   const tokens = new Set<string>();
@@ -237,21 +233,9 @@ export function extractEventFeatures(event: ConflictEvent, index: number): Event
   const lng = Math.min(180, Math.max(-180, event.lng));
   const cellX = Math.floor((lng + 180) / CELL_DEGREES) % X_CELLS;
   const cellY = Math.min(Y_CELLS - 1, Math.max(0, Math.floor((lat + 90) / CELL_DEGREES)));
-  let windowStart = event.occurredAt;
-  let windowEnd = event.occurredAt;
-  if (event.ucdp) {
-    const start = parseIsoDay(event.ucdp.date_start);
-    const end = parseIsoDay(event.ucdp.date_end);
-    if (start !== null && end !== null && start <= end) {
-      windowStart = start;
-      windowEnd = end + 24 * 36e5 - 1; // date_end is an inclusive UTC day in the GED contract
-    }
-  } else if (event.occurredAt > 0 && event.occurredAt % (24 * 36e5) === 0) {
-    // A timestamp exactly at a UTC midnight boundary is a modeling artifact of date-only
-    // source data (UCDP lattice rows, ACLED event_date), not a claim the incident happened at
-    // midnight. Treat it as the day-resolution window the publisher actually supplies.
-    windowEnd = event.occurredAt + 24 * 36e5 - 1;
-  }
+  const occurrence = resolveIncidentOccurrenceWindow(event);
+  const windowStart = occurrence?.start ?? event.occurredAt;
+  const windowEnd = occurrence ? occurrence.endExclusive - 1 : event.occurredAt;
   const actors = extractActorTokens(event);
   return {
     index,
@@ -261,6 +245,7 @@ export function extractEventFeatures(event: ConflictEvent, index: number): Event
     cellY,
     windowStart,
     windowEnd,
+    windowPrecision: occurrence?.precision ?? "second",
     titleTokens: tokenize(event.title, TITLE_STOPWORDS),
     actorTokens: actors.tokens,
     conflictTokens: tokenize(event.conflict || "", TITLE_STOPWORDS),
@@ -335,9 +320,10 @@ export function assessPair(a: EventFeatures, b: EventFeatures): PairAssessment {
   // shared incident time; small gaps are consistent with timezone/reporting slack; gaps beyond
   // a day are dominated by distinct same-theatre incidents.
   let temporalScore = gapHours <= 0 ? 1 : gapHours <= 6 ? 0.7 : gapHours <= 12 ? 0.55 : gapHours <= 24 ? 0.3 : gapHours <= 48 ? 0.1 : 0;
-  // Most source datasets are day-resolution: sharing a UTC calendar day is meaningful even when
-  // exact hours are modeling artifacts rather than measurements.
-  if (temporalScore < 0.6 && gapHours > 0) {
+  // Sharing a UTC calendar day is meaningful only when at least one side is genuinely
+  // day-or-coarser resolution. It must not widen an explicit exact-second claim into a
+  // day-sized modeling artifact.
+  if (temporalScore < 0.6 && gapHours > 0 && (a.windowPrecision !== "second" || b.windowPrecision !== "second")) {
     const dayA = Math.floor(a.event.occurredAt / (24 * 36e5));
     const dayB = Math.floor(b.event.occurredAt / (24 * 36e5));
     if (dayA === dayB) temporalScore = 0.6;

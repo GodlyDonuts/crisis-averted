@@ -46,7 +46,7 @@ export default function EventFeed({ events, selectedEventId, onEventSelect }: Ev
       <div className="godseye-scrollbar min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {feedEvents.length === 0 ? (
           <div className="px-3 py-8 text-center font-mono text-xs uppercase tracking-[0.16em] text-white/28">
-            No incidents match current filters
+            No incidents in current scope or playback frame
           </div>
         ) : feedEvents.map((event) => {
           const selected = event.id === selectedEventId;
@@ -62,7 +62,12 @@ export default function EventFeed({ events, selectedEventId, onEventSelect }: Ev
               <div className="pl-2">
                 <div className="flex items-center justify-between gap-3 font-mono text-[10px] uppercase tracking-[0.14em]">
                   <span style={{ color: severity.color }}>{severity.label}</span>
-                  <span className="shrink-0 text-white/30">{formatRelativeTime(event.occurredAt)}</span>
+                  <span
+                    className={`shrink-0 ${event.occurrence && event.occurrence.precision !== "second" ? "text-sky-100/42" : "text-white/30"}`}
+                    title={event.occurrence ? event.occurrence.label : "publisher timestamp precision unavailable"}
+                  >
+                    {event.occurrence && event.occurrence.precision !== "second" ? "±" : ""}{formatRelativeTime(event.occurredAt)}
+                  </span>
                 </div>
                 <h3 className="mt-1.5 line-clamp-2 text-[13px] font-medium leading-snug text-white/88">
                   {event.title}

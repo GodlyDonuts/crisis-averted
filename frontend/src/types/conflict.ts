@@ -9,6 +9,23 @@ export type CategoryGroup =
 
 export type TimeWindowKey = "24h" | "7d" | "30d" | "all";
 
+/**
+ * Source-supported occurrence interval for one incident. `start` is inclusive and
+ * `endExclusive` is exclusive, so exact frame-containment tests never need to infer
+ * a duration or interpolate a time inside the interval. A "second" record means the
+ * publisher supplied a timestamp; day/range records are uncertainty intervals, not
+ * claims that the incident persisted for the whole interval.
+ */
+export interface IncidentOccurrenceWindow {
+  start: number;
+  endExclusive: number;
+  precision: "second" | "day" | "range";
+  basis: "publisher-second" | "publisher-day" | "publisher-range" | "inferred-day";
+  label: string;
+}
+
+export type IncidentTemporalPrecision = IncidentOccurrenceWindow["precision"];
+
 export interface ConflictSource {
   name: string;
   url: string;
@@ -166,6 +183,8 @@ export interface ConflictEvent {
   sourceUrl: string | null;
   sources: ConflictSource[];
   intensity: number;
+  /** Source-supported occurrence interval used by deterministic temporal playback. Legacy or test records may omit it; consumers then fall back to conservative inference. */
+  occurrence?: IncidentOccurrenceWindow;
   ucdp?: UcdpGedEventMetadata;
   /** Publisher family assigned at normalization time; legacy records may omit it and are resolved as "unknown". */
   sourceFamily?: ConflictSourceFamily;

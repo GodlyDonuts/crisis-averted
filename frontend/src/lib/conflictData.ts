@@ -15,6 +15,7 @@ import type {
 } from "@/types/conflict";
 import { assetPath } from "@/lib/assets";
 import { correlateConflictEvents } from "@/lib/incidentCorrelation";
+import { createDayOccurrenceWindow, createSecondOccurrenceWindow, createUcdpOccurrenceWindow } from "@/lib/incidentTime";
 
 const LIVE_EVENTS_URL = "https://warheatmap.app/functions/eventsLite";
 const FALLBACK_EVENTS_URL = assetPath("/data/conflict-fallback.json");
@@ -107,12 +108,17 @@ export function normalizeMapOfWarsEvent(raw: MapOfWarsRawEvent): ConflictEvent |
   // metadata or lattice ids) are curated UCDP content; ACLED rows carry their own id namespace;
   // everything else in the lattice is Map of Wars editorial records.
   const sourceFamily: ConflictSourceFamily = canonicalUcdpId ? "ucdp" : raw.id.startsWith("acled-") || raw.source === "ACLED" ? "acled" : "mapofwars";
+  const occurrence = createUcdpOccurrenceWindow(ucdp?.date_start, ucdp?.date_end, ucdp?.date_prec)
+    ?? (occurredAt % (24 * 36e5) === 0
+      ? createDayOccurrenceWindow(occurredAt, "inferred-day")
+      : createSecondOccurrenceWindow(occurredAt));
   return {
     id: canonicalUcdpId ? `ucdp:${canonicalUcdpId}` : `mow-${raw.id}`, lat: raw.lat, lng: raw.lon, precision: ucdp?.where_prec ?? null, severity, category,
     categoryGroup: CATEGORY_GROUP_MAP[category] ?? "security", date: ucdp?.date_end || new Date(occurredAt).toISOString().slice(0, 10), occurredAt,
     updatedAt: occurredAt, killed: casualties, countedCasualties: casualties, displaced: 0, country, conflict, theater,
     region: ucdp?.region || "Global", title: raw.note || title, detail: raw.detail || null, verified: ucdp ? ucdp.code_status?.toLowerCase() === "clear" : raw.source === "UCDP", sourceName: raw.source || null, sourceUrl: raw.url || null,
     sources: raw.url ? [{ name: raw.source || "Map of Wars", url: raw.url }] : [], intensity, sourceFamily,
+    ...(occurrence ? { occurrence } : {}),
     ...(ucdp ? { ucdp } : {}),
   };
 }
@@ -157,7 +163,11 @@ export function normalizeWarHeatmapEvent(raw: WarHeatmapRawEvent): ConflictEvent
 
   const severity = severityFromCode(raw.s);
   const category = raw.c || "other";
-  const occurredAt = raw.et ? raw.et * 1000 : parseEventDate(raw.d);
+  const hasPublisherTimestamp = typeof raw.et === "number" && Number.isFinite(raw.et) && raw.et > 0;
+  const occurredAt = hasPublisherTimestamp ? (raw.et ?? 0) * 1000 : parseEventDate(raw.d);
+  const occurrence = hasPublisherTimestamp
+    ? createSecondOccurrenceWindow(occurredAt)
+    : createDayOccurrenceWindow(occurredAt, "publisher-day");
   const updatedAt = raw.u ? raw.u * 1000 : occurredAt;
   const killed = Math.max(0, safeNumber(raw.k));
   const countedCasualties = Math.max(0, safeNumber(raw.x));
@@ -214,6 +224,7 @@ export function normalizeWarHeatmapEvent(raw: WarHeatmapRawEvent): ConflictEvent
     sources,
     intensity,
     sourceFamily: "warheatmap",
+    ...(occurrence ? { occurrence } : {}),
   };
 }
 

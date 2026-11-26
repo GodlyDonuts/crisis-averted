@@ -30,6 +30,7 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import type { ConflictEvent, ConflictTheater, GdeltGeoNewsMention, IodaInternetOutage, MilitaryAircraft, OsintAircraft, OsintLaunch, OsintNaturalEvent, OsintSatellite, OsintVessel, GpsInterferenceCell, SeverityKey } from "@/types/conflict";
 import { degreesLat, degreesLong, eciToGeodetic, gstime, propagate, twoline2satrec } from "satellite.js";
 import { classifyAircraftRole, escapeHtml, formatRelativeTime, naturalEventColor, normalizeCategory, normalizeTheaterName, SEVERITY_META } from "@/lib/conflictData";
+import { formatUtcExact, resolveIncidentOccurrenceWindow, type PlaybackMode } from "@/lib/incidentTime";
 
 export type GodEyeVisualMode = "cinematic" | "satellite";
 
@@ -57,6 +58,12 @@ export interface GodEyeFocusTarget {
   key: string;
 }
 
+export interface GodEyePlaybackFrame {
+  start: number;
+  endExclusive: number;
+  mode: PlaybackMode;
+}
+
 interface GodEyeGlobeProps {
   events: ConflictEvent[];
   theaters: ConflictTheater[];
@@ -75,6 +82,8 @@ interface GodEyeGlobeProps {
   layers: GodEyeLayerToggles;
   visualMode: GodEyeVisualMode;
   autoRotate: boolean;
+  playbackFrame?: GodEyePlaybackFrame | null;
+  reducedMotion?: boolean;
   onEventSelect: (event: ConflictEvent) => void;
   onAircraftSelect: (aircraft: MilitaryAircraft) => void;
   onCivilAircraftSelect: (aircraft: OsintAircraft) => void;
@@ -509,6 +518,26 @@ function severityPointRadius(event: ConflictEvent, selected: boolean): number {
   return base + event.intensity * 0.042;
 }
 
+function colorWithAlpha(hexColor: string, alpha: number): string {
+  const hex = hexColor.replace("#", "");
+  if (!/^[0-9a-f]{6}$/i.test(hex)) return hexColor;
+  const red = parseInt(hex.slice(0, 2), 16);
+  const green = parseInt(hex.slice(2, 4), 16);
+  const blue = parseInt(hex.slice(4, 6), 16);
+  return `rgba(${red},${green},${blue},${alpha})`;
+}
+
+function unresolvedWindowIntersectsPlaybackFrame(event: ConflictEvent, playbackFrame: GodEyePlaybackFrame | null | undefined): boolean {
+  if (!playbackFrame) return false;
+  const occurrence = resolveIncidentOccurrenceWindow(event);
+  return Boolean(
+    occurrence
+    && occurrence.precision !== "second"
+    && occurrence.start < playbackFrame.endExclusive
+    && occurrence.endExclusive > playbackFrame.start
+  );
+}
+
 function buildSignalArcs(events: ConflictEvent[], theaters: ConflictTheater[], selectedTheater: ConflictTheater | null): SignalArc[] {
   const relevantTheaters = selectedTheater ? [selectedTheater] : theaters.slice(0, 3);
   const arcs: SignalArc[] = [];
@@ -565,6 +594,8 @@ export default function GodEyeGlobe({
   layers,
   visualMode,
   autoRotate,
+  playbackFrame = null,
+  reducedMotion = false,
   onEventSelect,
   onAircraftSelect,
   onCivilAircraftSelect,
@@ -1022,7 +1053,13 @@ export default function GodEyeGlobe({
     const globe = globeRef.current;
     if (!globe) return;
 
-    const pointColor = (event: ConflictEvent) => SEVERITY_META[event.severity].color;
+    const pointColor = (event: ConflictEvent) => {
+      const baseColor = SEVERITY_META[event.severity].color;
+      return unresolvedWindowIntersectsPlaybackFrame(event, playbackFrame)
+        ? colorWithAlpha(baseColor, 0.48)
+        : baseColor;
+    };
+    const transitionMs = (duration: number) => reducedMotion ? 0 : duration;
 
     if (layers.density && events.length > 1) {
       globe
@@ -1030,7 +1067,11 @@ export default function GodEyeGlobe({
         .heatmapPoints("points")
         .heatmapPointLat("lat")
         .heatmapPointLng("lng")
-        .heatmapPointWeight((event) => 0.22 + (event as ConflictEvent).intensity * 1.12)
+        .heatmapPointWeight((event) => {
+          const conflictEvent = event as ConflictEvent;
+          const unresolvedWeight = unresolvedWindowIntersectsPlaybackFrame(conflictEvent, playbackFrame) ? 0.58 : 1;
+          return (0.22 + conflictEvent.intensity * 1.12) * unresolvedWeight;
+        })
         .heatmapBandwidth(1.42)
         .heatmapColorSaturation(1.35)
         .heatmapBaseAltitude(GLOBE_RADIUS_ALTITUDE * 0.35)
@@ -1041,7 +1082,7 @@ export default function GodEyeGlobe({
           if (t > 0.48) return `rgba(255,138,0,${alpha * 0.82})`;
           return `rgba(64,210,255,${alpha * 0.58})`;
         })
-        .heatmapsTransitionDuration(450);
+        .heatmapsTransitionDuration(transitionMs(450));
     } else {
       globe.heatmapsData([]);
     }
@@ -1078,7 +1119,7 @@ export default function GodEyeGlobe({
         })
         .pathStroke((path: object) => (path as BorderPath).kind === "aircraft" ? 0.28 : (path as BorderPath).kind === "gps" ? 0.34 : (path as BorderPath).kind === "internetOutage" ? 0.24 : 0.15)
         .pathResolution(2)
-        .pathTransitionDuration(300);
+        .pathTransitionDuration(transitionMs(300));
     } else {
       globe.pathsData([]);
     }
@@ -1116,7 +1157,10 @@ export default function GodEyeGlobe({
           return 1.55 + conflictEvent.intensity * 3.15;
         })
         .ringPropagationSpeed((event) => 0.7 + (event as ConflictEvent).intensity * 1.15)
-        .ringRepeatPeriod((event) => selectedEvent?.id === (event as ConflictEvent).id ? 950 : 1750 + (1 - (event as ConflictEvent).intensity) * 1200)
+        .ringRepeatPeriod((event) => {
+          if (reducedMotion) return -1; // globe.gl emits one static ring instead of an endlessly repeating ripple.
+          return selectedEvent?.id === (event as ConflictEvent).id ? 950 : 1750 + (1 - (event as ConflictEvent).intensity) * 1200;
+        })
         .ringResolution(32);
     } else {
       globe.ringsData([]);
@@ -1140,9 +1184,14 @@ export default function GodEyeGlobe({
         .arcCircularResolution(8)
         .arcDashLength(0.36)
         .arcDashGap(0.72)
-        .arcDashInitialGap(() => Math.random())
-        .arcDashAnimateTime(2400)
-        .arcsTransitionDuration(400);
+        .arcDashInitialGap((arc) => {
+          const id = (arc as SignalArc).id;
+          let hash = 0;
+          for (let index = 0; index < id.length; index += 1) hash = (hash * 31 + id.charCodeAt(index)) >>> 0;
+          return (hash % 1000) / 1000;
+        })
+        .arcDashAnimateTime(reducedMotion ? 0 : 2400)
+        .arcsTransitionDuration(transitionMs(400));
     } else {
       globe.arcsData([]);
     }
@@ -1176,7 +1225,7 @@ export default function GodEyeGlobe({
         .labelIncludeDot(true)
         .labelDotRadius((theater) => selectedTheater?.slug === (theater as ConflictTheater).slug ? 0.34 : 0.2)
         .labelDotOrientation("top")
-        .labelsTransitionDuration(350)
+        .labelsTransitionDuration(transitionMs(350))
         .onLabelClick((label) => {
           const theater = label as ConflictTheater;
           onTheaterSelect(theater);
@@ -1201,10 +1250,10 @@ export default function GodEyeGlobe({
       .pointLng("lng")
       .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.016 : (point as GlobePointObject).objectKind === "vessel" ? 0.007 : (point as GlobePointObject).objectKind === "satellite" ? Math.min(0.22, 0.035 + ((point as OsintSatellite & { altitudeKm: number }).altitudeKm / 22000)) : (point as GlobePointObject).objectKind === "launch" ? 0.015 : (point as GlobePointObject).objectKind === "internetOutage" ? 0.017 : (point as GlobePointObject).objectKind === "gdeltNews" ? 0.013 : (point as GlobePointObject).objectKind === "natural" ? 0.014 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
       .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? classifyAircraftRole((point as MilitaryAircraft).aircraftType).color : (point as GlobePointObject).objectKind === "civilAircraft" ? ((point as OsintAircraft).operatorClass.includes("cargo") ? "#f0a84f" : "#9fb7a8") : (point as GlobePointObject).objectKind === "satellite" ? "#d8c77f" : (point as GlobePointObject).objectKind === "vessel" ? ((point as OsintVessel).vesselClass === "Tanker" ? "#d59b6a" : (point as OsintVessel).vesselClass === "Cargo" ? "#7da6a1" : "#8f9b7d") : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? "#75bdd1" : "#548498") : (point as GlobePointObject).objectKind === "gdeltNews" ? (GDELT_NEWS_PRECISION_RANK[(point as GdeltNewsLocationMarker).coordinatePrecision] === 2 ? "#9fb0c9" : "#6d7a91") : (point as GlobePointObject).objectKind === "natural" ? naturalEventColor(point as OsintNaturalEvent) : pointColor(point as ConflictEvent))
-      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.035 : (point as GlobePointObject).objectKind === "vessel" ? 0.038 : (point as GlobePointObject).objectKind === "satellite" ? 0.046 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? 0.066 : 0.047) : (point as GlobePointObject).objectKind === "gdeltNews" ? Math.min(0.074, 0.032 + Math.log1p((point as GdeltNewsLocationMarker).articles.length) * 0.014) : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
+      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.035 : (point as GlobePointObject).objectKind === "vessel" ? 0.038 : (point as GlobePointObject).objectKind === "satellite" ? 0.046 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? 0.066 : 0.047) : (point as GlobePointObject).objectKind === "gdeltNews" ? Math.min(0.074, 0.032 + Math.log1p((point as GdeltNewsLocationMarker).articles.length) * 0.014) : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id) * (unresolvedWindowIntersectsPlaybackFrame(point as ConflictEvent, playbackFrame) ? 0.84 : 1))
       .pointResolution(9)
       .pointsMerge(false)
-      .pointsTransitionDuration(320)
+      .pointsTransitionDuration(transitionMs(320))
       .pointLabel((point) => {
         if ((point as GlobePointObject).objectKind === "aircraft") {
           const aircraft = point as MilitaryAircraft;
@@ -1244,11 +1293,17 @@ export default function GodEyeGlobe({
         const corroboration = conflictEvent.incident && conflictEvent.incident.memberCount > 1
           ? `<div class="godseye-tooltip__meta">${conflictEvent.incident.memberCount} linked reports · ${conflictEvent.incident.independentFamilyCount} independent source ${conflictEvent.incident.independentFamilyCount === 1 ? "family" : "families"} · ${escapeHtml(conflictEvent.incident.confidence)}</div>`
           : "";
+        const occurrence = resolveIncidentOccurrenceWindow(conflictEvent);
+        const unresolvedNow = unresolvedWindowIntersectsPlaybackFrame(conflictEvent, playbackFrame);
+        const occurrenceLine = occurrence
+          ? `<div class="godseye-tooltip__meta">Time window ${formatUtcExact(occurrence.start)} → ${formatUtcExact(occurrence.endExclusive)} end-exclusive · ${escapeHtml(occurrence.label)}${unresolvedNow ? " · current playback frame intersects this unresolved interval" : ""}</div>`
+          : "";
         return `
           <div class="godseye-tooltip">
             <div class="godseye-tooltip__eyebrow" style="color:${severity.color}">${severity.label.toUpperCase()} / ${escapeHtml(normalizeCategory(conflictEvent.category)).toUpperCase()}</div>
             <div class="godseye-tooltip__title">${escapeHtml(conflictEvent.title)}</div>
             <div class="godseye-tooltip__meta">${escapeHtml(conflictEvent.country)} · ${escapeHtml(conflictEvent.conflict)} · ${formatRelativeTime(conflictEvent.occurredAt)}</div>
+            ${occurrenceLine}
             ${corroboration}
           </div>
         `;
@@ -1284,7 +1339,7 @@ export default function GodEyeGlobe({
           });
           return button;
         })
-        .htmlTransitionDuration(300);
+        .htmlTransitionDuration(transitionMs(300));
     } else {
       globe.htmlElementsData([]);
     }
@@ -1294,9 +1349,12 @@ export default function GodEyeGlobe({
     detailLevel,
     interactiveEvents,
     militaryAircraft,
+    aircraft,
+    vessels,
     aircraftTracks,
     civilAircraftTracks,
     vesselTracks,
+    satellitePositions,
     gpsInterferencePaths,
     internetOutageMarkers,
     internetOutagePaths,
@@ -1312,8 +1370,12 @@ export default function GodEyeGlobe({
     layers,
     onEventSelect,
     onAircraftSelect,
+    onCivilAircraftSelect,
+    onVesselSelect,
     onTheaterSelect,
     visualMode,
+    playbackFrame,
+    reducedMotion,
   ]);
 
   return (
