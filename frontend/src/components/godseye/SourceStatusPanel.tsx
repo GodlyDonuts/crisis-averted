@@ -12,6 +12,15 @@ interface SourceStatusPanelProps {
   onClose: () => void;
 }
 
+
+function newestAge(values: Array<string | null | undefined>): string {
+  const newest = values.reduce((latest, value) => {
+    const time = value ? Date.parse(value) : 0;
+    return Number.isFinite(time) && time > latest ? time : latest;
+  }, 0);
+  return newest ? formatRelativeTime(newest) : "no timestamps";
+}
+
 function Row({ label, value, warn = false }: { label: string; value: string; warn?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-4 border-b border-white/7 px-3 py-2 last:border-b-0">
@@ -42,8 +51,8 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
         <Row label="Conflict feeds" value={conflictSource === "live" ? `Live · ${lastUpdated ? formatRelativeTime(lastUpdated) : "syncing"}` : "Cached fallback"} warn={conflictSource !== "live"} />
         <Row label="Snapshot age" value={snapshotAge} />
         <Row label="Military aircraft" value={String(snapshot.militaryAircraft.length)} />
-        <Row label="Civil aviation tracks" value={String(snapshot.aircraft.length)} />
-        <Row label="AIS vessels" value={String(snapshot.vessels.length)} />
+        <Row label="Civil aviation tracks" value={`${snapshot.aircraft.length} · newest ${newestAge(snapshot.aircraft.map((item) => item.lastContact))}`} />
+        <Row label="AIS vessels" value={`${snapshot.vessels.length} · newest ${newestAge(snapshot.vessels.map((item) => item.timestamp))}`} />
         <Row label="Tracked satellites" value={String(snapshot.satellites.length)} />
         <Row label="News articles" value={String(snapshot.news.length)} />
         <Row label="Launch pads" value={String(snapshot.launches.length)} />

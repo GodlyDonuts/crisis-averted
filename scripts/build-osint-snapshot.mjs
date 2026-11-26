@@ -375,6 +375,40 @@ try {
 } catch (error) { result.errors.push(`Natural events: ${error.message}`); }
 
 
+
+if (process.env.FIRMS_MAP_KEY) {
+  try {
+    const csv = await getText(`https://firms.modaps.eosdis.nasa.gov/api/area/csv/${process.env.FIRMS_MAP_KEY}/VIIRS_SNPP_NRT/world/1`, 30000);
+    const lines = csv.trim().split(String.fromCharCode(10));
+    const fires = lines.slice(1).map((line) => {
+      const columns = line.split(',');
+      const lat = Number(columns[0]);
+      const lng = Number(columns[1]);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      const acqDate = columns[5] || '';
+      const acqTime = String(columns[6] || '').padStart(4, '0');
+      const frp = Number(columns[12]);
+      return {
+        id: `firms-${lat}-${lng}-${acqDate}-${acqTime}`,
+        title: `VIIRS active fire detection${Number.isFinite(frp) ? ` — ${frp.toFixed(1)} MW FRP` : ''}`,
+        category: 'NASA FIRMS active fire',
+        kind: 'wildfire',
+        lat, lng,
+        occurredAt: acqDate ? new Date(`${acqDate}T${acqTime.slice(0, 2)}:${acqTime.slice(2)}:00Z`).toISOString() : null,
+        magnitude: Number.isFinite(frp) ? frp : null,
+        magnitudeUnit: 'MW FRP',
+        url: 'https://firms.modaps.eosdis.nasa.gov/',
+      };
+    }).filter(Boolean).sort((a, b) => (b.magnitude || 0) - (a.magnitude || 0)).slice(0, 180);
+    result.naturalEvents = [...result.naturalEvents, ...fires]
+      .filter((event, index, array) => array.findIndex((candidate) => candidate.id === event.id) === index)
+      .slice(0, 130);
+    result.sources.firms = 'NASA FIRMS VIIRS S-NPP near-real-time active fires';
+  } catch (error) { result.errors.push(`NASA FIRMS: ${error.message}`); }
+} else {
+  result.errors.push('NASA FIRMS: FIRMS_MAP_KEY not configured; active-fire layer unavailable');
+}
+
 try {
   const payload = await getJson('https://mapofwars.org/api/events', 24000);
   result.mapOfWarsEvents = (payload.events ?? [])
@@ -460,6 +494,33 @@ if (process.env.WINDY_WEBCAMS_KEY) {
   } catch (error) { result.errors.push(`Windy Webcams: ${error.message}`); }
 }
 
+
+function validateCoordinate(item, label, errors) {
+  if (!Number.isFinite(item.lat) || item.lat < -90 || item.lat > 90 || !Number.isFinite(item.lng) || item.lng < -180 || item.lng > 180) {
+    errors.push(`${label}:${item.id || item.name || item.title || 'unknown'} invalid coordinate`);
+  }
+}
+
+function validateSnapshot(snapshot) {
+  const errors = [];
+  for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'cyberVulnerabilities']) {
+    if (!Array.isArray(snapshot[key])) errors.push(`${key} missing or not an array`);
+  }
+  for (const item of snapshot.militaryAircraft ?? []) validateCoordinate(item, 'militaryAircraft', errors);
+  for (const item of snapshot.aircraft ?? []) validateCoordinate(item, 'aircraft', errors);
+  for (const item of snapshot.vessels ?? []) validateCoordinate(item, 'vessels', errors);
+  for (const item of snapshot.launches ?? []) validateCoordinate(item, 'launches', errors);
+  for (const item of snapshot.naturalEvents ?? []) validateCoordinate(item, 'naturalEvents', errors);
+  for (const item of snapshot.satellites ?? []) {
+    if (!item.line1?.startsWith('1 ') || !item.line2?.startsWith('2 ') || !item.name || !item.catalogNumber) errors.push(`satellites:${item.id || 'unknown'} invalid TLE contract`);
+  }
+  for (const item of snapshot.news ?? []) {
+    if (!item.title || !/^https?:\/\//.test(item.url || '')) errors.push(`news:${item.title || 'unknown'} invalid article contract`);
+  }
+  if (!snapshot.fetchedAt || Number.isNaN(Date.parse(snapshot.fetchedAt))) errors.push('fetchedAt invalid');
+  if (errors.length > 0) throw new Error(`Snapshot contract validation failed: ${errors.slice(0, 8).join('; ')}`);
+}
+
 for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'cyberVulnerabilities']) {
   if (result[key].length === 0 && Array.isArray(previousSnapshot[key]) && previousSnapshot[key].length > 0) {
     result[key] = previousSnapshot[key];
@@ -467,5 +528,6 @@ for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'new
   }
 }
 
+validateSnapshot(result);
 writeFileSync(outFile, JSON.stringify(result));
 console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.webcams.length} webcams`);
