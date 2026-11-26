@@ -80,7 +80,7 @@ export default function TopCommandBar({
               </span>
             </div>
             <p className="mt-0.5 hidden truncate font-mono text-[10px] uppercase tracking-[0.22em] text-amber-100/38 sm:block">
-              Global conflict surveillance
+              PUBLIC OSINT · NOT FOR OPERATIONAL USE
             </p>
           </div>
         </div>
@@ -113,10 +113,10 @@ export default function TopCommandBar({
               type="button"
               onClick={() => onVisualModeChange("cinematic")}
               className={`flex h-10 items-center gap-2 px-3 font-mono text-[11px] uppercase tracking-[0.14em] transition ${visualMode === "cinematic" ? "bg-amber-300/16 text-amber-100" : "bg-white/[0.025] text-white/42 hover:text-white/70"}`}
-              title="Cinematic day/night Earth"
+              title="Operational day/night Earth"
             >
               <Globe2 className="h-4 w-4" />
-              Cinema
+              Operational
             </button>
             <button
               type="button"
@@ -134,6 +134,7 @@ export default function TopCommandBar({
             onClick={onRefresh}
             className="flex h-10 w-10 items-center justify-center rounded-sm border border-white/10 bg-white/[0.03] text-white/55 transition hover:border-amber-200/25 hover:text-amber-100"
             title={lastUpdated ? `Last updated ${formatRelativeTime(lastUpdated)}` : "Refresh intelligence"}
+            aria-label="Refresh intelligence"
           >
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
           </button>

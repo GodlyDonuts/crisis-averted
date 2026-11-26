@@ -26,7 +26,7 @@ export function TargetLockOverlay({ event }: TargetLockOverlayProps) {
         />
       </div>
       <div className="absolute left-1/2 top-full mt-1 w-max -translate-x-1/2 text-center font-mono text-[9px] uppercase tracking-[0.24em] text-amber-100/58">
-        <div style={{ color: severity.color }}>Target lock / {event.severity}</div>
+        <div style={{ color: severity.color }}>Selected report / {event.severity}</div>
         <div className="mt-1 text-white/35">{event.lat.toFixed(3)}° / {event.lng.toFixed(3)}°</div>
       </div>
     </div>

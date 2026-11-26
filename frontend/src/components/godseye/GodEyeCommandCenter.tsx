@@ -46,7 +46,7 @@ const DEFAULT_LAYERS: GodEyeLayerToggles = {
   theaterLabels: true,
   borders: true,
   clouds: true,
-  orbitalAssets: true,
+  orbitalAssets: false,
   aircraft: true,
   environmental: false,
   gpsInterference: true,

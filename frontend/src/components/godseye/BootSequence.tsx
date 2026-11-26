@@ -9,10 +9,10 @@ interface BootSequenceProps {
 }
 
 const BOOT_LINES = [
-  "ESTABLISHING ORBITAL RENDERING LATTICE",
-  "CALIBRATING SOLAR TERMINATOR",
-  "INGESTING GLOBAL INCIDENT SIGNALS",
-  "RESOLVING THEATER PRIORITY MATRIX",
+  "LOADING PUBLIC INCIDENT REPORTS",
+  "PREPARING WEBGL GLOBE RENDERER",
+  "LOADING CACHED OSINT SNAPSHOT",
+  "VALIDATING GEOSPATIAL ACCELERATOR",
 ];
 
 export default function BootSequence({ loading, source }: BootSequenceProps) {
@@ -41,7 +41,7 @@ export default function BootSequence({ loading, source }: BootSequenceProps) {
           <Crosshair className="h-9 w-9 text-amber-100/78" strokeWidth={1.3} />
         </div>
         <h2 className="mt-5 font-mono text-lg font-semibold uppercase tracking-[0.36em] text-white">God&apos;s Eye</h2>
-        <p className="mt-2 px-3 font-mono text-[9px] uppercase leading-relaxed tracking-[0.18em] sm:text-[10px] sm:tracking-[0.28em] text-amber-100/38">Global conflict observation lattice</p>
+        <p className="mt-2 px-3 font-mono text-[9px] uppercase leading-relaxed tracking-[0.18em] sm:text-[10px] sm:tracking-[0.28em] text-amber-100/38">Public OSINT common operating picture</p>
         <div className="mt-7 w-full space-y-2 text-left font-mono text-[9px] uppercase tracking-[0.1em] sm:text-[10px] sm:tracking-[0.18em]">
           {BOOT_LINES.map((line, index) => {
             const active = loading || !source ? index < 3 : true;
