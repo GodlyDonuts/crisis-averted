@@ -3,6 +3,8 @@
 import { Activity, AlertTriangle, Database, X } from "lucide-react";
 import type { IncidentCorrelationStats, NvdConfiguration, NvdCvssMetric, OsintSnapshot } from "@/types/conflict";
 import { formatRelativeTime } from "@/lib/conflictData";
+import { useGlobeRenderStatus } from "@/hooks/useGlobeRenderStatus";
+import type { GlobeRenderStatusStore } from "@/lib/globeRendering";
 
 interface SourceStatusPanelProps {
   snapshot: OsintSnapshot;
@@ -10,6 +12,9 @@ interface SourceStatusPanelProps {
   conflictError: string | null;
   lastUpdated: number | null;
   correlation?: IncidentCorrelationStats | null;
+  renderStatusStore: GlobeRenderStatusStore;
+  reducedEffects: boolean;
+  onReducedEffectsChange: (enabled: boolean) => void;
   onClose: () => void;
 }
 
@@ -83,7 +88,8 @@ function Row({ label, value, warn = false }: { label: string; value: string; war
   );
 }
 
-export function SourceStatusPanel({ snapshot, conflictSource, conflictError, lastUpdated, correlation, onClose }: SourceStatusPanelProps) {
+export function SourceStatusPanel({ snapshot, conflictSource, conflictError, lastUpdated, correlation, renderStatusStore, reducedEffects, onReducedEffectsChange, onClose }: SourceStatusPanelProps) {
+  const renderStatus = useGlobeRenderStatus(renderStatusStore);
   const snapshotAge = snapshot.fetchedAt ? formatRelativeTime(Date.parse(snapshot.fetchedAt)) : "not loaded";
   const outageMeta = snapshot.internetOutageMeta;
   const outageWindowEnd = outageMeta?.queryWindow.until ? formatRelativeTime(outageMeta.queryWindow.until * 1000) : "unknown";
@@ -286,6 +292,36 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
           </p>
         </div>
       ) : null}
+
+      <div className="border-t border-white/8 px-4 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/34">
+            <Activity className="h-3.5 w-3.5" /> Adaptive render budget
+          </div>
+          <button type="button" onClick={() => onReducedEffectsChange(!reducedEffects)} className={`rounded-sm border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.12em] ${reducedEffects ? "border-amber-200/30 bg-amber-300/10 text-amber-100" : "border-white/10 bg-white/[0.03] text-white/45"}`}>
+            Reduced effects {reducedEffects ? "on" : "off"}
+          </button>
+        </div>
+        {renderStatus ? (
+          <div className="mt-2 space-y-1.5 text-[11px] leading-relaxed text-white/54">
+            <p>
+              {renderStatus.detailLabel} · {renderStatus.adaptationLabel} · quality {renderStatus.qualityTier} · pixel ratio {renderStatus.pixelRatio.toFixed(2)} ×
+              {renderStatus.frameP80Ms ? ` · p80 frame ${renderStatus.frameP80Ms.toFixed(1)} ms` : " · frame budget warming up"}.
+            </p>
+            <p>
+              Rendering {renderStatus.renderedTotal.toLocaleString()} adaptive objects across accounted layers; {renderStatus.omittedTotal.toLocaleString()} records are omitted from this render only and remain in filtering, playback, inspection, permalink, and export state. {renderStatus.batchingLabel}.
+            </p>
+            <details className="rounded-sm border border-white/8 bg-white/[0.025] px-2 py-1.5">
+              <summary className="cursor-pointer font-mono text-[9px] uppercase tracking-[0.14em] text-white/38 hover:text-white/62">Exact adaptive render counts</summary>
+              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[9px] text-white/42">
+                {Object.entries(renderStatus.accounts).map(([key, account]) => (
+                  <div key={key} className="flex justify-between gap-2"><span>{key}</span><span>{account.rendered}/{account.total}{account.omitted ? ` · ${account.omitted} omitted` : ""}</span></div>
+                ))}
+              </div>
+            </details>
+          </div>
+        ) : <p className="mt-2 text-[11px] text-white/38">Globe render diagnostics are not yet available.</p>}
+      </div>
 
       <div className="border-t border-white/8 px-4 py-3">
         <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/34">

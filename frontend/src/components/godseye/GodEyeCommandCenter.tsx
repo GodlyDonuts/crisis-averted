@@ -18,6 +18,7 @@ import { useOsintSnapshot } from "@/hooks/useOsintSnapshot";
 import { useDomainConvergence } from "@/hooks/useDomainConvergence";
 import { useWatchRules } from "@/hooks/useWatchRules";
 import { useOperatorUrlStateSync } from "@/hooks/useOperatorUrlStateSync";
+import { useGlobeRenderStatusStore } from "@/hooks/useGlobeRenderStatus";
 import { analyzeEscalationSurge } from "@/lib/escalationSurge";
 import { evaluateWatchRules } from "@/lib/watchRules";
 import { measureIncidentTemporalCoverage } from "@/lib/incidentTime";
@@ -89,6 +90,8 @@ export default function GodEyeCommandCenter() {
   const [selectedVessel, setSelectedVessel] = useState<OsintVessel | null>(null);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
   const [globeUnavailable, setGlobeUnavailable] = useState(false);
+  const [reducedEffects, setReducedEffects] = useState(false);
+  const globeRenderStatusStore = useGlobeRenderStatusStore();
   const [theaterPanelOpen, setTheaterPanelOpen] = useState(true);
   const [incidentPanelOpen, setIncidentPanelOpen] = useState(true);
   const [convergenceOpen, setConvergenceOpen] = useState(false);
@@ -479,6 +482,9 @@ export default function GodEyeCommandCenter() {
 
   const getInitialCamera = useCallback(() => cameraRef.current, []);
 
+  const handleGlobeRenderStatus = useCallback((status: Parameters<typeof globeRenderStatusStore.publish>[0]) => {
+    globeRenderStatusStore.publish(status);
+  }, [globeRenderStatusStore]);
   const handleGlobeRenderFailure = useCallback(() => setGlobeUnavailable(true), []);
 
   const handleEventSelect = useCallback((event: ConflictEvent) => {
@@ -675,6 +681,11 @@ export default function GodEyeCommandCenter() {
           autoRotate={autoRotate}
           playbackFrame={globePlaybackFrame}
           reducedMotion={playback.reducedMotion}
+          reducedEffects={reducedEffects}
+          selectedMilitaryAircraft={selectedAircraft}
+          selectedCivilAircraft={selectedCivilAircraft}
+          selectedVessel={selectedVessel}
+          onRenderStatus={handleGlobeRenderStatus}
           onEventSelect={handleEventSelect}
           onAircraftSelect={handleAircraftSelect}
           onCivilAircraftSelect={handleCivilAircraftSelect}
@@ -712,6 +723,9 @@ export default function GodEyeCommandCenter() {
             conflictError={error}
             lastUpdated={lastUpdated}
             correlation={correlation}
+            renderStatusStore={globeRenderStatusStore}
+            reducedEffects={reducedEffects}
+            onReducedEffectsChange={setReducedEffects}
             onClose={() => setSourcePanelOpen(false)}
           />
         ) : null}

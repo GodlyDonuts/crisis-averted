@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Globe, { type GlobeInstance } from "globe.gl";
-import { cellToBoundary } from "h3-js";
+import { cellToBoundary, cellToLatLng } from "h3-js";
 import { loadGodseyeWasm, type GodseyeWasmCore } from "@/lib/godseyeWasm";
 import {
   ACESFilmicToneMapping,
   AdditiveBlending,
   BufferGeometry,
+  CanvasTexture,
   Color,
   DoubleSide,
   Line,
@@ -31,6 +32,28 @@ import type { ConflictEvent, ConflictTheater, GdeltGeoNewsMention, IodaInternetO
 import { degreesLat, degreesLong, eciToGeodetic, gstime, propagate, twoline2satrec } from "satellite.js";
 import { classifyAircraftRole, escapeHtml, formatRelativeTime, naturalEventColor, normalizeCategory, normalizeTheaterName, SEVERITY_META } from "@/lib/conflictData";
 import { formatUtcExact, resolveIncidentOccurrenceWindow, type PlaybackMode } from "@/lib/incidentTime";
+import {
+  FrameBudgetController,
+  accountForCappedLayer,
+  accountFromSelection,
+  cachedTrackProjectionFor,
+  createBatchedParticleGroups,
+  detectDeviceQualityTier,
+  detailLevelForAltitude,
+  globeRenderQualityProfile,
+  moreConstrainedTier,
+  particleSizeForPointRadius,
+  renderDetailLabel,
+  resampleTrackPoints,
+  resolveAdaptivePixelRatio,
+  resolveTextureAnisotropy,
+  selectAdaptiveEvents,
+  selectViewportAdaptiveItems,
+  summarizeRenderAccounts,
+  type BatchedParticleEntry,
+  type GodEyeRenderStatus,
+  type RenderQualityTier,
+} from "@/lib/globeRendering";
 
 export type GodEyeVisualMode = "cinematic" | "satellite";
 
@@ -89,6 +112,12 @@ interface GodEyeGlobeProps {
   autoRotate: boolean;
   playbackFrame?: GodEyePlaybackFrame | null;
   reducedMotion?: boolean;
+  /** Operator-controlled effects reduction. Adaptive frame-budget protection remains active regardless. */
+  reducedEffects?: boolean;
+  selectedMilitaryAircraft?: MilitaryAircraft | null;
+  selectedCivilAircraft?: OsintAircraft | null;
+  selectedVessel?: OsintVessel | null;
+  onRenderStatus?: (status: GodEyeRenderStatus) => void;
   onEventSelect: (event: ConflictEvent) => void;
   onAircraftSelect: (aircraft: MilitaryAircraft) => void;
   onCivilAircraftSelect: (aircraft: OsintAircraft) => void;
@@ -332,43 +361,6 @@ function disposeDayNightMaterial(material: ShaderMaterial | null) {
   material.dispose();
 }
 
-function aircraftTrackPaths(aircraft: Array<Pick<MilitaryAircraft, "lat" | "lng" | "track" | "speed" | "callsign">>, minSpeed = 70, horizonHours = 0.28, label = "PROJECTED MILITARY TRACK", color = "#b8c29a", maximum = 180): BorderPath[] {
-  return aircraft
-    .filter((item) => typeof item.track === "number" && typeof item.speed === "number" && item.speed > minSpeed)
-    .slice(0, maximum)
-    .map((item) => {
-      const distanceNm = Math.min(260, (item.speed ?? 0) * horizonHours);
-      const angularDistance = distanceNm / 3440.065;
-      const bearing = ((item.track ?? 0) * Math.PI) / 180;
-      const lat1 = (item.lat * Math.PI) / 180;
-      const lng1 = (item.lng * Math.PI) / 180;
-      const lat2 = Math.asin(Math.sin(lat1) * Math.cos(angularDistance) + Math.cos(lat1) * Math.sin(angularDistance) * Math.cos(bearing));
-      const lng2 = lng1 + Math.atan2(
-        Math.sin(bearing) * Math.sin(angularDistance) * Math.cos(lat1),
-        Math.cos(angularDistance) - Math.sin(lat1) * Math.sin(lat2)
-      );
-      const endLat = (lat2 * 180) / Math.PI;
-      let endLng = ((lng2 * 180) / Math.PI + 540) % 360 - 180;
-      if (Math.abs(endLng - item.lng) > 180) endLng = item.lng;
-      const points: [number, number, number][] = [];
-      for (let step = 0; step <= 7; step += 1) {
-        const t = step / 7;
-        points.push([
-          item.lat + (endLat - item.lat) * t,
-          item.lng + (endLng - item.lng) * t,
-          0.018 + t * 0.004,
-        ]);
-      }
-      return {
-        points,
-        intensity: 0,
-        kind: "aircraft" as const,
-        trackColor: color,
-        tooltip: `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:${color}">${label}</div><div class="godseye-tooltip__title">${escapeHtml(item.callsign)}</div><div class="godseye-tooltip__meta">${Math.round(item.speed ?? 0)} kt · ${Math.round(item.track ?? 0)}° · short-horizon dead reckoning</div></div>`,
-      };
-    });
-}
-
 function formatUnixSecondsUtc(seconds: number): string {
   return new Date(seconds * 1000).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "Z");
 }
@@ -545,7 +537,7 @@ function unresolvedWindowIntersectsPlaybackFrame(event: ConflictEvent, playbackF
   );
 }
 
-function buildSignalArcs(events: ConflictEvent[], theaters: ConflictTheater[], selectedTheater: ConflictTheater | null): SignalArc[] {
+function buildSignalArcs(events: ConflictEvent[], theaters: ConflictTheater[], selectedTheater: ConflictTheater | null, maximum = 22): SignalArc[] {
   const relevantTheaters = selectedTheater ? [selectedTheater] : theaters.slice(0, 3);
   const arcs: SignalArc[] = [];
 
@@ -572,7 +564,58 @@ function buildSignalArcs(events: ConflictEvent[], theaters: ConflictTheater[], s
     }
   }
 
-  return arcs.slice(0, 22);
+  return arcs.slice(0, maximum);
+}
+
+type TaggedGlobeObject<T extends object, Kind extends GlobePointObject["objectKind"]> = T & { objectKind: Kind };
+const globeObjectKindCache = new WeakMap<object, Map<string, object>>();
+
+/** Stable object identity across viewport-density recomputation; inputs are immutable snapshot/filter records. */
+function tagGlobeObject<T extends object, Kind extends GlobePointObject["objectKind"]>(item: T, objectKind: Kind): TaggedGlobeObject<T, Kind> {
+  let byKind = globeObjectKindCache.get(item);
+  if (!byKind) {
+    byKind = new Map();
+    globeObjectKindCache.set(item, byKind);
+  }
+  const cached = byKind.get(objectKind);
+  if (cached) return cached as TaggedGlobeObject<T, Kind>;
+  const tagged = Object.assign({}, item, { objectKind }) as TaggedGlobeObject<T, Kind>;
+  byKind.set(objectKind, tagged);
+  return tagged;
+}
+
+function globeObjectAltitude(point: GlobePointObject): number {
+  if (point.objectKind === "aircraft") return 0.018;
+  if (point.objectKind === "civilAircraft") return 0.016;
+  if (point.objectKind === "vessel") return 0.007;
+  if (point.objectKind === "satellite") return Math.min(0.22, 0.035 + (point.altitudeKm / 22000));
+  if (point.objectKind === "launch") return 0.015;
+  if (point.objectKind === "internetOutage") return 0.017;
+  if (point.objectKind === "gdeltNews") return 0.013;
+  if (point.objectKind === "natural") return 0.014;
+  return GLOBE_RADIUS_ALTITUDE + (point.intensity * 0.006);
+}
+
+function transportTrackPath(
+  owner: object,
+  input: { lat: number; lng: number; track: number | null | undefined; speed: number | null | undefined },
+  label: string,
+  color: string,
+  sampleCount: number,
+  minSpeed: number,
+  horizonHours: number,
+  title: string,
+  engineLabel = "short-horizon dead reckoning",
+): BorderPath | null {
+  const points = cachedTrackProjectionFor(owner, input, { minSpeed, horizonHours, sampleCount });
+  if (!points) return null;
+  return {
+    points,
+    intensity: 0,
+    kind: "aircraft",
+    trackColor: color,
+    tooltip: `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:${color}">${label}</div><div class="godseye-tooltip__title">${escapeHtml(title)}</div><div class="godseye-tooltip__meta">${Math.round(input.speed ?? 0)} kt · ${Math.round(input.track ?? 0)}° · ${engineLabel}</div></div>`,
+  };
 }
 
 function buildOrbitPosition(radius: number, angle: number, inclination: number): Vector3 {
@@ -604,6 +647,11 @@ export default function GodEyeGlobe({
   autoRotate,
   playbackFrame = null,
   reducedMotion = false,
+  reducedEffects = false,
+  selectedMilitaryAircraft = null,
+  selectedCivilAircraft = null,
+  selectedVessel = null,
+  onRenderStatus,
   onEventSelect,
   onAircraftSelect,
   onCivilAircraftSelect,
@@ -622,6 +670,25 @@ export default function GodEyeGlobe({
   const getInitialCameraRef = useRef(getInitialCamera);
   const onCameraChangeRef = useRef(onCameraChange);
   const [countryFeatures, setCountryFeatures] = useState<CountryFeature[]>([]);
+  const bloomPassRef = useRef<UnrealBloomPass | null>(null);
+  const earthTexturesRef = useRef<Texture[]>([]);
+  const particleTexturesRef = useRef<Map<string, CanvasTexture>>(new Map());
+  const frameBudgetRef = useRef<FrameBudgetController | null>(null);
+  const reducedEffectsRef = useRef(reducedEffects);
+  const [deviceQualityTier] = useState<RenderQualityTier>(() => {
+    if (typeof window === "undefined") return "full";
+    const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
+    return detectDeviceQualityTier({
+      coarsePointer: window.matchMedia("(pointer: coarse)").matches,
+      narrowViewport: Math.min(window.innerWidth, window.innerHeight) < 760,
+      hardwareConcurrency: navigator.hardwareConcurrency,
+      deviceMemory: (navigator as Navigator & { deviceMemory?: number }).deviceMemory,
+      saveData: connection?.saveData,
+    });
+  });
+  const [runtimeQualityTier, setRuntimeQualityTier] = useState<RenderQualityTier>(deviceQualityTier);
+  const qualityTier = reducedEffects ? moreConstrainedTier(runtimeQualityTier, "constrained") : runtimeQualityTier;
+  const qualityTierRef = useRef<RenderQualityTier>(qualityTier);
 
   useEffect(() => {
     getInitialCameraRef.current = getInitialCamera;
@@ -630,6 +697,14 @@ export default function GodEyeGlobe({
   useEffect(() => {
     onCameraChangeRef.current = onCameraChange;
   }, [onCameraChange]);
+
+  useEffect(() => {
+    qualityTierRef.current = qualityTier;
+  }, [qualityTier]);
+
+  useEffect(() => {
+    reducedEffectsRef.current = reducedEffects;
+  }, [reducedEffects]);
 
   useEffect(() => {
     let active = true;
@@ -661,32 +736,18 @@ export default function GodEyeGlobe({
     });
   }, [affectedCountries, countryFeatures]);
 
-  const detailLevel = viewFocus.altitude < 0.62 ? 2 : viewFocus.altitude < 1.35 ? 1 : 0;
-  const interactiveEvents = useMemo(() => {
-    const maxEvents = detailLevel === 2 ? 430 : detailLevel === 1 ? 320 : 190;
-    let ordered: ConflictEvent[];
-    const wasmSelection = wasmCore?.selectRegionalEvents(events, viewFocus.lat, viewFocus.lng, viewFocus.altitude);
-    if (wasmSelection) {
-      ordered = wasmSelection.map((index) => events[index]).filter(Boolean);
-    } else {
-      let regionalPool = events;
-      if (detailLevel > 0) {
-        const radiusDegrees = detailLevel === 2 ? 30 : 58;
-        regionalPool = events.filter((event) => {
-          const meanLat = ((event.lat + viewFocus.lat) / 2) * Math.PI / 180;
-          const dLat = event.lat - viewFocus.lat;
-          const wrappedLngDiff = ((event.lng - viewFocus.lng + 540) % 360) - 180;
-      const dLng = wrappedLngDiff * Math.cos(meanLat);
-          return Math.sqrt(dLat * dLat + dLng * dLng) <= radiusDegrees;
-        });
-      }
-      ordered = [...regionalPool]
-        .sort((a, b) => (b.intensity - a.intensity) || (b.occurredAt - a.occurredAt))
-        .slice(0, maxEvents);
-    }
-    if (selectedEvent && !ordered.some((event) => event.id === selectedEvent.id)) ordered.unshift(selectedEvent);
-    return ordered;
-  }, [events, detailLevel, viewFocus.lat, viewFocus.lng, viewFocus.altitude, wasmCore, selectedEvent]);
+  const detailLevel = detailLevelForAltitude(viewFocus.altitude);
+  const renderProfile = useMemo(() => globeRenderQualityProfile(qualityTier, detailLevel), [qualityTier, detailLevel]);
+  const incidentSelection = useMemo(() => selectAdaptiveEvents(
+    events,
+    viewFocus.lat,
+    viewFocus.lng,
+    detailLevel,
+    renderProfile.caps.incidents,
+    selectedEvent ? [selectedEvent] : [],
+  ), [events, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.incidents, selectedEvent]);
+  const interactiveEvents = incidentSelection.selected;
+
 
   const alertEvents = useMemo(() => {
     return [...events]
@@ -719,39 +780,71 @@ export default function GodEyeGlobe({
     });
   }, [satellites, orbitTick]);
 
+  const militarySelection = useMemo(() => selectViewportAdaptiveItems(militaryAircraft, {
+    focusLat: viewFocus.lat,
+    focusLng: viewFocus.lng,
+    detailLevel,
+    cap: renderProfile.caps.militaryAircraft,
+    preserve: selectedMilitaryAircraft ? [selectedMilitaryAircraft] : [],
+  }), [militaryAircraft, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.militaryAircraft, selectedMilitaryAircraft]);
+  const civilAircraftSelection = useMemo(() => selectViewportAdaptiveItems(aircraft, {
+    focusLat: viewFocus.lat,
+    focusLng: viewFocus.lng,
+    detailLevel,
+    cap: renderProfile.caps.civilAircraft,
+    preserve: selectedCivilAircraft ? [selectedCivilAircraft] : [],
+  }), [aircraft, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.civilAircraft, selectedCivilAircraft]);
+  const vesselSelection = useMemo(() => selectViewportAdaptiveItems(vessels, {
+    focusLat: viewFocus.lat,
+    focusLng: viewFocus.lng,
+    detailLevel,
+    cap: renderProfile.caps.vessels,
+    preserve: selectedVessel ? [selectedVessel] : [],
+  }), [vessels, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.vessels, selectedVessel]);
+
   const aircraftTracks = useMemo(() => {
-    const wasmTracks = wasmCore?.aircraftTrackGeometry(militaryAircraft);
-    if (!wasmTracks) return aircraftTrackPaths(militaryAircraft);
-    return wasmTracks.map((track) => {
-      const item = militaryAircraft[track.sourceIndex];
-      return {
-        points: track.points,
+    const selected = militarySelection.selected;
+    const wasmTracks = wasmCore?.aircraftTrackGeometry(selected);
+    if (!wasmTracks) {
+      return selected.flatMap((item) => {
+        const path = transportTrackPath(item, item, "PROJECTED MILITARY TRACK", "#b8c29a", renderProfile.trackSampleCount, 70, 0.28, item.callsign);
+        return path ? [path] : [];
+      });
+    }
+    return wasmTracks.flatMap((track) => {
+      const item = selected[track.sourceIndex];
+      if (!item) return [];
+      return [{
+        points: resampleTrackPoints(track.points, renderProfile.trackSampleCount),
         intensity: 0,
         kind: "aircraft" as const,
         trackColor: "#b8c29a",
         tooltip: `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#b8c29a">PROJECTED MILITARY TRACK</div><div class="godseye-tooltip__title">${escapeHtml(item.callsign)}</div><div class="godseye-tooltip__meta">${Math.round(item.speed ?? 0)} kt · ${Math.round(item.track ?? 0)}° · Rust/WASM dead reckoning</div></div>`,
-      };
+      }];
     });
-  }, [militaryAircraft, wasmCore]);
-  const civilAircraftTracks = useMemo(() => aircraftTrackPaths(
-    aircraft.map((item) => ({ lat: item.lat, lng: item.lng, track: item.track, speed: item.speed, callsign: item.callsign })),
-    90,
-    0.2,
-    "PROJECTED CIVIL AVIATION TRACK",
-    "#9fb7a8",
-    150,
-  ), [aircraft]);
-  const vesselTracks = useMemo(() => aircraftTrackPaths(
-    vessels.map((item) => ({ lat: item.lat, lng: item.lng, track: item.course, speed: item.speed, callsign: item.name })),
-    3,
-    3.5,
-    "PROJECTED VESSEL TRACK",
-    "#7da6a1",
-    180,
-  ), [vessels]);
+  }, [militarySelection, wasmCore, renderProfile.trackSampleCount]);
+  const civilAircraftTracks = useMemo(() => civilAircraftSelection.selected.flatMap((item) => {
+    const path = transportTrackPath(item, item, "PROJECTED CIVIL AVIATION TRACK", "#9fb7a8", renderProfile.trackSampleCount, 90, 0.2, item.callsign);
+    return path ? [path] : [];
+  }), [civilAircraftSelection, renderProfile.trackSampleCount]);
+  const vesselTracks = useMemo(() => vesselSelection.selected.flatMap((item) => {
+    const input = { lat: item.lat, lng: item.lng, track: item.course, speed: item.speed };
+    const path = transportTrackPath(item, input, "PROJECTED VESSEL TRACK", "#7da6a1", renderProfile.trackSampleCount, 3, 3.5, item.name);
+    return path ? [path] : [];
+  }), [vesselSelection, renderProfile.trackSampleCount]);
 
+  const gpsInterferenceCenters = useMemo(() => gpsInterference.map((cell) => {
+    const [lat, lng] = cellToLatLng(cell.hex);
+    return { ...cell, lat, lng };
+  }), [gpsInterference]);
+  const gpsSelection = useMemo(() => selectViewportAdaptiveItems(gpsInterferenceCenters, {
+    focusLat: viewFocus.lat,
+    focusLng: viewFocus.lng,
+    detailLevel,
+    cap: renderProfile.caps.gpsInterference,
+  }), [gpsInterferenceCenters, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.gpsInterference]);
   const gpsInterferencePaths = useMemo((): BorderPath[] => {
-    return gpsInterference.map((cell) => {
+    return gpsSelection.selected.map((cell) => {
       const boundary = cellToBoundary(cell.hex);
       const ring = [...boundary, boundary[0]];
       return {
@@ -761,11 +854,46 @@ export default function GodEyeGlobe({
         tooltip: `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#ff8a00">GPS/GNSS INTERFERENCE</div><div class="godseye-tooltip__title">${Math.round(cell.affectedShare * 100)}% affected aircraft</div><div class="godseye-tooltip__meta">${cell.badAircraft}/${cell.aircraftCount} aircraft reporting interference · gpsjam.org</div></div>`,
       };
     });
-  }, [gpsInterference]);
+  }, [gpsSelection]);
   const internetOutageMarkers = useMemo(() => buildInternetOutageMarkers(internetOutages), [internetOutages]);
-  const internetOutagePaths = useMemo(() => internetOutageReticlePaths(internetOutageMarkers), [internetOutageMarkers]);
-  const gdeltNewsMarkers = useMemo(() => buildGdeltNewsMarkers(gdeltGeoNews), [gdeltGeoNews]);
-  const signalArcs = useMemo(() => buildSignalArcs(events, theaters, selectedTheater), [events, theaters, selectedTheater]);
+  const internetOutageSelection = useMemo(() => selectViewportAdaptiveItems(internetOutageMarkers, {
+    focusLat: viewFocus.lat,
+    focusLng: viewFocus.lng,
+    detailLevel,
+    cap: renderProfile.caps.internetOutages,
+  }), [internetOutageMarkers, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.internetOutages]);
+  const internetOutagePaths = useMemo(() => internetOutageReticlePaths(internetOutageSelection.selected), [internetOutageSelection]);
+  const gdeltNewsMarkers = useMemo(() => buildGdeltNewsMarkers(gdeltGeoNews).sort((a, b) =>
+    (GDELT_NEWS_PRECISION_RANK[b.coordinatePrecision] - GDELT_NEWS_PRECISION_RANK[a.coordinatePrecision])
+    || (b.articles.length - a.articles.length)
+    || b.latestSlotTime.localeCompare(a.latestSlotTime)
+    || a.key.localeCompare(b.key)
+  ), [gdeltGeoNews]);
+  const gdeltNewsSelection = useMemo(() => selectViewportAdaptiveItems(gdeltNewsMarkers, {
+    focusLat: viewFocus.lat,
+    focusLng: viewFocus.lng,
+    detailLevel,
+    cap: renderProfile.caps.gdeltGeoNews,
+  }), [gdeltNewsMarkers, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.gdeltGeoNews]);
+  const naturalSelection = useMemo(() => selectViewportAdaptiveItems(naturalEvents, {
+    focusLat: viewFocus.lat,
+    focusLng: viewFocus.lng,
+    detailLevel,
+    cap: renderProfile.caps.naturalEvents,
+  }), [naturalEvents, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.naturalEvents]);
+  const satelliteSelection = useMemo(() => selectViewportAdaptiveItems(satellitePositions, {
+    focusLat: viewFocus.lat,
+    focusLng: viewFocus.lng,
+    detailLevel,
+    cap: renderProfile.caps.satellites,
+  }), [satellitePositions, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.satellites]);
+  const launchSelection = useMemo(() => selectViewportAdaptiveItems(launches, {
+    focusLat: viewFocus.lat,
+    focusLng: viewFocus.lng,
+    detailLevel,
+    cap: renderProfile.caps.launches,
+  }), [launches, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.launches]);
+  const signalArcs = useMemo(() => buildSignalArcs(events, theaters, selectedTheater, renderProfile.caps.signalArcs), [events, theaters, selectedTheater, renderProfile.caps.signalArcs]);
 
   // Load country boundaries locally once.
   useEffect(() => {
@@ -795,7 +923,7 @@ export default function GodEyeGlobe({
     const globe = new Globe(container, {
       animateIn: false,
       rendererConfig: {
-        antialias: true,
+        antialias: qualityTierRef.current === "full" || qualityTierRef.current === "balanced",
         alpha: false,
         powerPreference: "high-performance",
       },
@@ -811,7 +939,7 @@ export default function GodEyeGlobe({
     if (visualMode === "satellite") {
       globe
         .globeTileEngineUrl((x, y, level) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${level}/${y}/${x}`)
-        .globeTileEngineMaxLevel(17);
+        .globeTileEngineMaxLevel(globeRenderQualityProfile(qualityTierRef.current, 0).satelliteTileMaxLevel);
     }
 
     globeRef.current = globe;
@@ -820,7 +948,7 @@ export default function GodEyeGlobe({
     renderer.toneMapping = ACESFilmicToneMapping;
     renderer.toneMappingExposure = visualMode === "satellite" ? 0.84 : 0.92;
     renderer.outputColorSpace = SRGBColorSpace;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(resolveAdaptivePixelRatio(window.devicePixelRatio || 1, globe.pointOfView().altitude ?? 2.2, qualityTierRef.current));
 
     if (visualMode === "satellite") {
       for (const light of globe.lights()) {
@@ -836,6 +964,8 @@ export default function GodEyeGlobe({
       0.32,
       0.68
     );
+    bloomPass.enabled = qualityTierRef.current === "full" || qualityTierRef.current === "balanced";
+    bloomPassRef.current = bloomPass;
     composer.addPass(bloomPass);
 
     const controls = globe.controls();
@@ -851,7 +981,7 @@ export default function GodEyeGlobe({
     let lastFocusUpdate = 0;
     globe.onZoom((pov) => {
       const altitude = pov.altitude ?? 2.2;
-      const desiredPixelRatio = Math.min(window.devicePixelRatio || 1, altitude < 0.62 ? 2 : altitude < 1.35 ? 1.6 : 1.25);
+      const desiredPixelRatio = resolveAdaptivePixelRatio(window.devicePixelRatio || 1, altitude, qualityTierRef.current);
       if (Math.abs(desiredPixelRatio - activePixelRatio) > 0.08) {
         activePixelRatio = desiredPixelRatio;
         renderer.setPixelRatio(desiredPixelRatio);
@@ -898,14 +1028,16 @@ export default function GodEyeGlobe({
       ]).then(([dayTexture, nightTexture, waterTexture, bumpTexture]) => {
         if (cancelled || !globeRef.current) return;
         const maxAnisotropy = globeRef.current.renderer().capabilities.getMaxAnisotropy();
+        const textureAnisotropy = resolveTextureAnisotropy(qualityTierRef.current, detailLevelForAltitude(globeRef.current.pointOfView().altitude ?? 2.2), maxAnisotropy);
         dayTexture.colorSpace = SRGBColorSpace;
         nightTexture.colorSpace = SRGBColorSpace;
         waterTexture.colorSpace = SRGBColorSpace;
-        dayTexture.anisotropy = Math.min(8, maxAnisotropy);
-        nightTexture.anisotropy = Math.min(8, maxAnisotropy);
-        waterTexture.anisotropy = Math.min(8, maxAnisotropy);
-        bumpTexture.anisotropy = Math.min(8, maxAnisotropy);
+        dayTexture.anisotropy = textureAnisotropy;
+        nightTexture.anisotropy = textureAnisotropy;
+        waterTexture.anisotropy = textureAnisotropy;
+        bumpTexture.anisotropy = textureAnisotropy;
 
+        earthTexturesRef.current = [dayTexture, nightTexture, waterTexture, bumpTexture];
         const material = createDayNightMaterial(dayTexture, nightTexture, waterTexture, bumpTexture);
         const setSunPosition = () => {
           material.uniforms.sunPosition.value.set(...solarPositionAt(new Date()));
@@ -919,12 +1051,13 @@ export default function GodEyeGlobe({
       }).catch((error) => console.error("Unable to initialize Earth shader", error));
     }
 
-    // Volumetric-feeling cloud shell.
-    new TextureLoader().load(assetPath("/textures/clouds.png"), (cloudTexture) => {
+    // Volumetric-feeling cloud shell. Minimal devices skip the large texture/geometry entirely.
+    const initialCloudSegments = globeRenderQualityProfile(qualityTierRef.current, 0).cloudSegments;
+    if (initialCloudSegments > 0) new TextureLoader().load(assetPath("/textures/clouds.png"), (cloudTexture) => {
       if (cancelled || !globeRef.current) return;
       cloudTexture.colorSpace = SRGBColorSpace;
       const clouds = new Mesh(
-        new SphereGeometry(globe.getGlobeRadius() * 1.0065, 56, 56),
+        new SphereGeometry(globe.getGlobeRadius() * 1.0065, initialCloudSegments, initialCloudSegments),
         new MeshPhongMaterial({
           map: cloudTexture,
           transparent: true,
@@ -991,17 +1124,25 @@ export default function GodEyeGlobe({
         orbitObjects.push({ mesh: satellite, orbitLine, beam, beamGeometry, ...definition });
       }
 
+      frameBudgetRef.current = new FrameBudgetController({ initialTier: deviceQualityTier });
       let frame = 0;
-      const animate = () => {
+      let previousFrameTime: number | null = null;
+      const animate = (frameTime: number) => {
         const now = performance.now();
+        if (previousFrameTime !== null) {
+          const transition = frameBudgetRef.current?.sample(frameTime - previousFrameTime);
+          if (transition) setRuntimeQualityTier((current) => current === transition.tier ? current : transition.tier);
+        }
+        previousFrameTime = frameTime;
         if (cloudsRef.current) {
-          cloudsRef.current.rotation.y += 0.000115;
-          cloudsRef.current.visible = layersRef.current.clouds;
+          cloudsRef.current.rotation.y += reducedEffectsRef.current || qualityTierRef.current === "minimal" ? 0 : 0.000115;
+          cloudsRef.current.visible = layersRef.current.clouds && !reducedEffectsRef.current && qualityTierRef.current !== "minimal";
           const altitude = globe.pointOfView().altitude ?? 2.2;
           const proximityFade = Math.min(1, Math.max(0.16, (altitude - 0.28) / 1.15));
           const baseOpacity = visualMode === "satellite" ? 0.07 : 0.17;
           const cloudMaterial = cloudsRef.current.material as MeshPhongMaterial;
-          cloudMaterial.opacity = baseOpacity * proximityFade;
+          const cloudScale = globeRenderQualityProfile(qualityTierRef.current, 0).cloudOpacityScale;
+          cloudMaterial.opacity = baseOpacity * proximityFade * cloudScale;
         }
 
         for (const orbit of orbitObjects) {
@@ -1046,12 +1187,15 @@ export default function GodEyeGlobe({
         }
         cloudsRef.current = null;
       }
+      bloomPassRef.current = null;
+      earthTexturesRef.current = [];
+      frameBudgetRef.current = null;
       globe._destructor?.();
       globeRef.current = null;
     };
     // The globe is intentionally recreated only when the rendering mode changes.
     // Data layers are applied in separate effects below.
-  }, [visualMode, onRenderFailure]);
+  }, [visualMode, onRenderFailure, deviceQualityTier]);
 
   useEffect(() => {
     layersRef.current = layers;
@@ -1074,213 +1218,21 @@ export default function GodEyeGlobe({
     );
   }, [focusTarget]);
 
-  // Apply event density, alert beacons, signal arcs, theater labels, boundaries and interactive points.
-  useEffect(() => {
-    const globe = globeRef.current;
-    if (!globe) return;
-
-    const pointColor = (event: ConflictEvent) => {
-      const baseColor = SEVERITY_META[event.severity].color;
-      return unresolvedWindowIntersectsPlaybackFrame(event, playbackFrame)
-        ? colorWithAlpha(baseColor, 0.48)
-        : baseColor;
-    };
-    const transitionMs = (duration: number) => reducedMotion ? 0 : duration;
-
-    if (layers.density && events.length > 1) {
-      globe
-        .heatmapsData([{ points: events }])
-        .heatmapPoints("points")
-        .heatmapPointLat("lat")
-        .heatmapPointLng("lng")
-        .heatmapPointWeight((event) => {
-          const conflictEvent = event as ConflictEvent;
-          const unresolvedWeight = unresolvedWindowIntersectsPlaybackFrame(conflictEvent, playbackFrame) ? 0.58 : 1;
-          return (0.22 + conflictEvent.intensity * 1.12) * unresolvedWeight;
-        })
-        .heatmapBandwidth(1.42)
-        .heatmapColorSaturation(1.35)
-        .heatmapBaseAltitude(GLOBE_RADIUS_ALTITUDE * 0.35)
-        .heatmapTopAltitude(GLOBE_RADIUS_ALTITUDE * 1.4)
-        .heatmapColorFn(() => (t: number) => {
-          const alpha = Math.min(0.42, 0.04 + t * 0.38);
-          if (t > 0.78) return `rgba(255,45,85,${alpha})`;
-          if (t > 0.48) return `rgba(255,138,0,${alpha * 0.82})`;
-          return `rgba(64,210,255,${alpha * 0.58})`;
-        })
-        .heatmapsTransitionDuration(transitionMs(450));
-    } else {
-      globe.heatmapsData([]);
-    }
-
-    globe.polygonsData([]);
-    const activePaths = [
-      ...(layers.borders ? borderPaths : []),
-      ...(layers.aircraft ? aircraftTracks : []),
-      ...(layers.civilAviation ? civilAircraftTracks : []),
-      ...(layers.maritime ? vesselTracks : []),
-      ...(layers.gpsInterference ? gpsInterferencePaths : []),
-      ...(layers.internetOutages ? internetOutagePaths : []),
-    ];
-    if (activePaths.length > 0) {
-      globe
-        .pathsData(activePaths)
-        .pathPoints("points")
-        .pathPointLat((point) => (point as [number, number, number])[0])
-        .pathPointLng((point) => (point as [number, number, number])[1])
-        .pathPointAlt((point) => (point as [number, number, number])[2])
-        .pathLabel((path: object) => (path as BorderPath).tooltip ?? "")
-        .pathColor((path: object) => {
-          const border = path as BorderPath;
-          if (border.kind === "gps") {
-            if (border.intensity > 0.1) return "rgba(255,45,85,0.5)";
-            if (border.intensity > 0.04) return "rgba(255,138,0,0.36)";
-            return "rgba(255,209,102,0.24)";
-          }
-          if (border.kind === "internetOutage") return "rgba(117,189,209,0.42)";
-          if (border.kind === "aircraft") return ["rgba(184,194,154,0)", border.trackColor ? `${border.trackColor}57` : "rgba(184,194,154,0.34)"];
-          return border.intensity > 0.08
-            ? `rgba(255,96,110,${0.13 + border.intensity * 0.18})`
-            : "rgba(148,210,255,0.105)";
-        })
-        .pathStroke((path: object) => (path as BorderPath).kind === "aircraft" ? 0.28 : (path as BorderPath).kind === "gps" ? 0.34 : (path as BorderPath).kind === "internetOutage" ? 0.24 : 0.15)
-        .pathResolution(2)
-        .pathTransitionDuration(transitionMs(300));
-    } else {
-      globe.pathsData([]);
-    }
-
-    if (layers.beacons) {
-      const beaconEvents = events
-        .filter((event) => event.severity === "critical" || event.severity === "high" || event.intensity > 0.62)
-        .sort((a, b) => (b.intensity - a.intensity) || (b.occurredAt - a.occurredAt))
-        .slice(0, 42);
-
-      const allRings = selectedEvent && !beaconEvents.some((event) => event.id === selectedEvent.id)
-        ? [...beaconEvents, selectedEvent]
-        : beaconEvents;
-
-      globe
-        .ringsData(allRings)
-        .ringLat("lat")
-        .ringLng("lng")
-        .ringAltitude(0.006)
-        .ringColor((event: object) => {
-          const conflictEvent = event as ConflictEvent;
-          const color = SEVERITY_META[conflictEvent.severity].color;
-          return (t: number) => {
-            const alpha = Math.sqrt(1 - t) * (selectedEvent?.id === conflictEvent.id ? 0.94 : 0.58);
-            const hex = color.replace("#", "");
-            const r = parseInt(hex.slice(0, 2), 16);
-            const g = parseInt(hex.slice(2, 4), 16);
-            const b = parseInt(hex.slice(4, 6), 16);
-            return `rgba(${r},${g},${b},${alpha})`;
-          };
-        })
-        .ringMaxRadius((event) => {
-          const conflictEvent = event as ConflictEvent;
-          if (selectedEvent?.id === conflictEvent.id) return 7.2;
-          return 1.55 + conflictEvent.intensity * 3.15;
-        })
-        .ringPropagationSpeed((event) => 0.7 + (event as ConflictEvent).intensity * 1.15)
-        .ringRepeatPeriod((event) => {
-          if (reducedMotion) return -1; // globe.gl emits one static ring instead of an endlessly repeating ripple.
-          return selectedEvent?.id === (event as ConflictEvent).id ? 950 : 1750 + (1 - (event as ConflictEvent).intensity) * 1200;
-        })
-        .ringResolution(32);
-    } else {
-      globe.ringsData([]);
-    }
-
-    if (layers.signals) {
-      globe
-        .arcsData(signalArcs)
-        .arcStartLat("startLat")
-        .arcStartLng("startLng")
-        .arcEndLat("endLat")
-        .arcEndLng("endLng")
-        .arcColor((arc: object) => {
-          const signal = arc as SignalArc;
-          const color = SEVERITY_META[signal.severity].color;
-          return ["rgba(214,168,79,0.018)", color];
-        })
-        .arcAltitude((arc) => (arc as SignalArc).altitude)
-        .arcStroke(0.24)
-        .arcCurveResolution(28)
-        .arcCircularResolution(8)
-        .arcDashLength(0.36)
-        .arcDashGap(0.72)
-        .arcDashInitialGap((arc) => {
-          const id = (arc as SignalArc).id;
-          let hash = 0;
-          for (let index = 0; index < id.length; index += 1) hash = (hash * 31 + id.charCodeAt(index)) >>> 0;
-          return (hash % 1000) / 1000;
-        })
-        .arcDashAnimateTime(reducedMotion ? 0 : 2400)
-        .arcsTransitionDuration(transitionMs(400));
-    } else {
-      globe.arcsData([]);
-    }
-
-    if (layers.theaterLabels) {
-      const orderedTheaters = selectedTheater
-        ? [selectedTheater, ...theaters.filter((theater) => theater.slug !== selectedTheater.slug)]
-        : theaters;
-      const labelTheaters: ConflictTheater[] = [];
-      for (const theater of orderedTheaters) {
-        const maxLabels = detailLevel === 2 ? 16 : detailLevel === 1 ? 12 : 8;
-        if (labelTheaters.length >= maxLabels) break;
-        const isolated = labelTheaters.every((existing) => {
-          const avgLat = ((existing.lat + theater.lat) / 2) * Math.PI / 180;
-          const dLat = existing.lat - theater.lat;
-          const dLng = (existing.lng - theater.lng) * Math.cos(avgLat);
-          const minimumSeparation = detailLevel === 2 ? 4.2 : detailLevel === 1 ? 7.2 : 11.5;
-          return Math.sqrt(dLat * dLat + dLng * dLng) >= minimumSeparation;
-        });
-        if (isolated || theater.slug === selectedTheater?.slug) labelTheaters.push(theater);
-      }
-      globe
-        .labelsData(labelTheaters)
-        .labelLat("lat")
-        .labelLng("lng")
-        .labelText((theater) => normalizeTheaterName((theater as ConflictTheater).name))
-        .labelColor((theater) => selectedTheater?.slug === (theater as ConflictTheater).slug ? "#ffffff" : "#8ed8ff")
-        .labelAltitude(0.022)
-        .labelSize((theater) => selectedTheater?.slug === (theater as ConflictTheater).slug ? 1.28 : 0.92)
-        .labelResolution(3)
-        .labelIncludeDot(true)
-        .labelDotRadius((theater) => selectedTheater?.slug === (theater as ConflictTheater).slug ? 0.34 : 0.2)
-        .labelDotOrientation("top")
-        .labelsTransitionDuration(transitionMs(350))
-        .onLabelClick((label) => {
-          const theater = label as ConflictTheater;
-          onTheaterSelect(theater);
-        });
-    } else {
-      globe.labelsData([]);
-    }
-
-    globe
-      .pointsData([
-        ...interactiveEvents.map((event) => ({ ...event, objectKind: "event" as const })),
-        ...(layers.aircraft ? militaryAircraft.slice(0, detailLevel === 2 ? 240 : detailLevel === 1 ? 190 : 120).map((item) => ({ ...item, objectKind: "aircraft" as const })) : []),
-        ...(layers.civilAviation ? aircraft.slice(0, detailLevel === 2 ? 700 : detailLevel === 1 ? 480 : 260).map((item) => ({ ...item, objectKind: "civilAircraft" as const })) : []),
-        ...(layers.maritime ? vessels.slice(0, detailLevel === 2 ? 900 : detailLevel === 1 ? 650 : 380).map((vessel) => ({ ...vessel, objectKind: "vessel" as const })) : []),
-        ...(layers.orbitalAssets ? satellitePositions.map((satellite) => ({ ...satellite, objectKind: "satellite" as const })) : []),
-        ...(layers.orbitalAssets ? launches.slice(0, 24).map((launch) => ({ ...launch, objectKind: "launch" as const })) : []),
-        ...(layers.environmental ? naturalEvents.slice(0, 70).map((event) => ({ ...event, objectKind: "natural" as const })) : []),
-        ...(layers.internetOutages ? internetOutageMarkers.map((marker) => ({ ...marker, objectKind: "internetOutage" as const })) : []),
-        ...(layers.gdeltGeoNews ? gdeltNewsMarkers.map((marker) => ({ ...marker, objectKind: "gdeltNews" as const })) : []),
-      ] as GlobePointObject[])
-      .pointLat("lat")
-      .pointLng("lng")
-      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.016 : (point as GlobePointObject).objectKind === "vessel" ? 0.007 : (point as GlobePointObject).objectKind === "satellite" ? Math.min(0.22, 0.035 + ((point as OsintSatellite & { altitudeKm: number }).altitudeKm / 22000)) : (point as GlobePointObject).objectKind === "launch" ? 0.015 : (point as GlobePointObject).objectKind === "internetOutage" ? 0.017 : (point as GlobePointObject).objectKind === "gdeltNews" ? 0.013 : (point as GlobePointObject).objectKind === "natural" ? 0.014 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
-      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? classifyAircraftRole((point as MilitaryAircraft).aircraftType).color : (point as GlobePointObject).objectKind === "civilAircraft" ? ((point as OsintAircraft).operatorClass.includes("cargo") ? "#f0a84f" : "#9fb7a8") : (point as GlobePointObject).objectKind === "satellite" ? "#d8c77f" : (point as GlobePointObject).objectKind === "vessel" ? ((point as OsintVessel).vesselClass === "Tanker" ? "#d59b6a" : (point as OsintVessel).vesselClass === "Cargo" ? "#7da6a1" : "#8f9b7d") : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? "#75bdd1" : "#548498") : (point as GlobePointObject).objectKind === "gdeltNews" ? (GDELT_NEWS_PRECISION_RANK[(point as GdeltNewsLocationMarker).coordinatePrecision] === 2 ? "#9fb0c9" : "#6d7a91") : (point as GlobePointObject).objectKind === "natural" ? naturalEventColor(point as OsintNaturalEvent) : pointColor(point as ConflictEvent))
-      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.035 : (point as GlobePointObject).objectKind === "vessel" ? 0.038 : (point as GlobePointObject).objectKind === "satellite" ? 0.046 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? 0.066 : 0.047) : (point as GlobePointObject).objectKind === "gdeltNews" ? Math.min(0.074, 0.032 + Math.log1p((point as GdeltNewsLocationMarker).articles.length) * 0.014) : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id) * (unresolvedWindowIntersectsPlaybackFrame(point as ConflictEvent, playbackFrame) ? 0.84 : 1))
-      .pointResolution(9)
-      .pointsMerge(false)
-      .pointsTransitionDuration(transitionMs(320))
-      .pointLabel((point) => {
+  // Shared transition/tooltip/click callbacks keep per-layer effects narrow and preserve point identity.
+  const transitionMs = useCallback((duration: number) => reducedMotion ? 0 : duration, [reducedMotion]);
+  const pointColor = useCallback((event: ConflictEvent) => {
+    const baseColor = SEVERITY_META[event.severity].color;
+    return unresolvedWindowIntersectsPlaybackFrame(event, playbackFrame) ? colorWithAlpha(baseColor, 0.48) : baseColor;
+  }, [playbackFrame]);
+  const ringBeaconCandidates = useMemo(() => events
+    .filter((event) => event.severity === "critical" || event.severity === "high" || event.intensity > 0.62)
+    .sort((a, b) => (b.intensity - a.intensity) || (b.occurredAt - a.occurredAt) || a.id.localeCompare(b.id)),
+  [events]);
+  const ringBeaconEvents = useMemo(() => {
+    const capped = ringBeaconCandidates.slice(0, renderProfile.caps.ringBeacons);
+    return selectedEvent && !capped.some((event) => event.id === selectedEvent.id) ? [...capped, selectedEvent] : capped;
+  }, [ringBeaconCandidates, renderProfile.caps.ringBeacons, selectedEvent]);
+  const globeObjectTooltip = useCallback((point: GlobePointObject): string => {
         if ((point as GlobePointObject).objectKind === "aircraft") {
           const aircraft = point as MilitaryAircraft;
           const role = classifyAircraftRole(aircraft.aircraftType);
@@ -1333,13 +1285,282 @@ export default function GodEyeGlobe({
             ${corroboration}
           </div>
         `;
-      })
-      .onPointClick((event) => {
+      }, [playbackFrame]);
+  const handlePointObjectClick = useCallback((event: object) => {
         if ((event as GlobePointObject).objectKind === "event") onEventSelect(event as ConflictEvent);
         if ((event as GlobePointObject).objectKind === "aircraft") onAircraftSelect(event as MilitaryAircraft);
         if ((event as GlobePointObject).objectKind === "civilAircraft") onCivilAircraftSelect(event as OsintAircraft);
         if ((event as GlobePointObject).objectKind === "vessel") onVesselSelect(event as OsintVessel);
-      });
+      }, [onAircraftSelect, onCivilAircraftSelect, onEventSelect, onVesselSelect]);
+
+  // Density heatmap updates independently of markers, paths, and transport layers.
+  useEffect(() => {
+    const globe = globeRef.current;
+    if (!globe) return;
+
+    if (layers.density && events.length > 1) {
+      globe
+        .heatmapsData([{ points: events }])
+        .heatmapPoints("points")
+        .heatmapPointLat("lat")
+        .heatmapPointLng("lng")
+        .heatmapPointWeight((event) => {
+          const conflictEvent = event as ConflictEvent;
+          const unresolvedWeight = unresolvedWindowIntersectsPlaybackFrame(conflictEvent, playbackFrame) ? 0.58 : 1;
+          return (0.22 + conflictEvent.intensity * 1.12) * unresolvedWeight;
+        })
+        .heatmapBandwidth(1.42)
+        .heatmapColorSaturation(1.35)
+        .heatmapBaseAltitude(GLOBE_RADIUS_ALTITUDE * 0.35)
+        .heatmapTopAltitude(GLOBE_RADIUS_ALTITUDE * 1.4)
+        .heatmapColorFn(() => (t: number) => {
+          const alpha = Math.min(0.42, 0.04 + t * 0.38);
+          if (t > 0.78) return `rgba(255,45,85,${alpha})`;
+          if (t > 0.48) return `rgba(255,138,0,${alpha * 0.82})`;
+          return `rgba(64,210,255,${alpha * 0.58})`;
+        })
+        .heatmapsTransitionDuration(transitionMs(450));
+    } else {
+      globe.heatmapsData([]);
+    }
+
+  }, [events, layers.density, playbackFrame, transitionMs, pointColor, visualMode]);
+
+  // Borders and vector projections use adaptive resolution without cross-layer playback churn.
+  useEffect(() => {
+    const globe = globeRef.current;
+    if (!globe) return;
+
+    globe.polygonsData([]);
+    const activePaths = [
+      ...(layers.borders ? borderPaths : []),
+      ...(layers.aircraft ? aircraftTracks : []),
+      ...(layers.civilAviation ? civilAircraftTracks : []),
+      ...(layers.maritime ? vesselTracks : []),
+      ...(layers.gpsInterference ? gpsInterferencePaths : []),
+      ...(layers.internetOutages ? internetOutagePaths : []),
+    ];
+    if (activePaths.length > 0) {
+      globe
+        .pathsData(activePaths)
+        .pathPoints("points")
+        .pathPointLat((point) => (point as [number, number, number])[0])
+        .pathPointLng((point) => (point as [number, number, number])[1])
+        .pathPointAlt((point) => (point as [number, number, number])[2])
+        .pathLabel((path: object) => (path as BorderPath).tooltip ?? "")
+        .pathColor((path: object) => {
+          const border = path as BorderPath;
+          if (border.kind === "gps") {
+            if (border.intensity > 0.1) return "rgba(255,45,85,0.5)";
+            if (border.intensity > 0.04) return "rgba(255,138,0,0.36)";
+            return "rgba(255,209,102,0.24)";
+          }
+          if (border.kind === "internetOutage") return "rgba(117,189,209,0.42)";
+          if (border.kind === "aircraft") return ["rgba(184,194,154,0)", border.trackColor ? `${border.trackColor}57` : "rgba(184,194,154,0.34)"];
+          return border.intensity > 0.08
+            ? `rgba(255,96,110,${0.13 + border.intensity * 0.18})`
+            : "rgba(148,210,255,0.105)";
+        })
+        .pathStroke((path: object) => (path as BorderPath).kind === "aircraft" ? 0.28 : (path as BorderPath).kind === "gps" ? 0.34 : (path as BorderPath).kind === "internetOutage" ? 0.24 : 0.15)
+        .pathResolution(renderProfile.pathResolution)
+        .pathTransitionDuration(transitionMs(300));
+    } else {
+      globe.pathsData([]);
+    }
+
+  }, [layers.borders, layers.aircraft, layers.civilAviation, layers.maritime, layers.gpsInterference, layers.internetOutages, borderPaths, aircraftTracks, civilAircraftTracks, vesselTracks, gpsInterferencePaths, internetOutagePaths, renderProfile.pathResolution, transitionMs, visualMode]);
+
+  // Alert rings are independently capped and can be slowed or made static by the frame budget.
+  useEffect(() => {
+    const globe = globeRef.current;
+    if (!globe) return;
+
+    if (layers.beacons) {
+      globe
+        .ringsData(ringBeaconEvents)
+        .ringLat("lat")
+        .ringLng("lng")
+        .ringAltitude(0.006)
+        .ringColor((event: object) => {
+          const conflictEvent = event as ConflictEvent;
+          const color = SEVERITY_META[conflictEvent.severity].color;
+          return (t: number) => {
+            const alpha = Math.sqrt(1 - t) * (selectedEvent?.id === conflictEvent.id ? 0.94 : 0.58);
+            const hex = color.replace("#", "");
+            const r = parseInt(hex.slice(0, 2), 16);
+            const g = parseInt(hex.slice(2, 4), 16);
+            const b = parseInt(hex.slice(4, 6), 16);
+            return `rgba(${r},${g},${b},${alpha})`;
+          };
+        })
+        .ringMaxRadius((event) => {
+          const conflictEvent = event as ConflictEvent;
+          if (selectedEvent?.id === conflictEvent.id) return 7.2;
+          return 1.55 + conflictEvent.intensity * 3.15;
+        })
+        .ringPropagationSpeed((event) => 0.7 + (event as ConflictEvent).intensity * 1.15)
+        .ringRepeatPeriod((event) => {
+          if (reducedMotion || reducedEffects || renderProfile.ringAnimation === "static") return -1;
+          const base = selectedEvent?.id === (event as ConflictEvent).id ? 950 : 1750 + (1 - (event as ConflictEvent).intensity) * 1200;
+          return renderProfile.ringAnimation === "slow" ? base * 2.4 : base;
+        })
+        .ringResolution(renderProfile.ringResolution);
+    } else {
+      globe.ringsData([]);
+    }
+
+  }, [layers.beacons, ringBeaconEvents, selectedEvent, reducedMotion, reducedEffects, renderProfile.ringAnimation, renderProfile.ringResolution, visualMode]);
+
+  // Signal arcs update independently of point and ring layers.
+  useEffect(() => {
+    const globe = globeRef.current;
+    if (!globe) return;
+
+    if (layers.signals) {
+      globe
+        .arcsData(signalArcs)
+        .arcStartLat("startLat")
+        .arcStartLng("startLng")
+        .arcEndLat("endLat")
+        .arcEndLng("endLng")
+        .arcColor((arc: object) => {
+          const signal = arc as SignalArc;
+          const color = SEVERITY_META[signal.severity].color;
+          return ["rgba(214,168,79,0.018)", color];
+        })
+        .arcAltitude((arc) => (arc as SignalArc).altitude)
+        .arcStroke(0.24)
+        .arcCurveResolution(renderProfile.arcCurveResolution)
+        .arcCircularResolution(renderProfile.arcCircularResolution)
+        .arcDashLength(0.36)
+        .arcDashGap(0.72)
+        .arcDashInitialGap((arc) => {
+          const id = (arc as SignalArc).id;
+          let hash = 0;
+          for (let index = 0; index < id.length; index += 1) hash = (hash * 31 + id.charCodeAt(index)) >>> 0;
+          return (hash % 1000) / 1000;
+        })
+        .arcDashAnimateTime(reducedMotion || reducedEffects ? 0 : 2400)
+        .arcsTransitionDuration(transitionMs(400));
+    } else {
+      globe.arcsData([]);
+    }
+
+  }, [layers.signals, signalArcs, renderProfile.arcCurveResolution, renderProfile.arcCircularResolution, reducedMotion, reducedEffects, transitionMs, visualMode]);
+
+  // Theater labels are density capped independently of incident points.
+  useEffect(() => {
+    const globe = globeRef.current;
+    if (!globe) return;
+
+    if (layers.theaterLabels) {
+      const orderedTheaters = selectedTheater
+        ? [selectedTheater, ...theaters.filter((theater) => theater.slug !== selectedTheater.slug)]
+        : theaters;
+      const labelTheaters: ConflictTheater[] = [];
+      for (const theater of orderedTheaters) {
+        const maxLabels = renderProfile.caps.theaterLabels;
+        if (labelTheaters.length >= maxLabels) break;
+        const isolated = labelTheaters.every((existing) => {
+          const avgLat = ((existing.lat + theater.lat) / 2) * Math.PI / 180;
+          const dLat = existing.lat - theater.lat;
+          const dLng = (existing.lng - theater.lng) * Math.cos(avgLat);
+          const minimumSeparation = detailLevel === 2 ? 4.2 : detailLevel === 1 ? 7.2 : 11.5;
+          return Math.sqrt(dLat * dLat + dLng * dLng) >= minimumSeparation;
+        });
+        if (isolated || theater.slug === selectedTheater?.slug) labelTheaters.push(theater);
+      }
+      globe
+        .labelsData(labelTheaters)
+        .labelLat("lat")
+        .labelLng("lng")
+        .labelText((theater) => normalizeTheaterName((theater as ConflictTheater).name))
+        .labelColor((theater) => selectedTheater?.slug === (theater as ConflictTheater).slug ? "#ffffff" : "#8ed8ff")
+        .labelAltitude(0.022)
+        .labelSize((theater) => selectedTheater?.slug === (theater as ConflictTheater).slug ? 1.28 : 0.92)
+        .labelResolution(renderProfile.labelResolution)
+        .labelIncludeDot(true)
+        .labelDotRadius((theater) => selectedTheater?.slug === (theater as ConflictTheater).slug ? 0.34 : 0.2)
+        .labelDotOrientation("top")
+        .labelsTransitionDuration(transitionMs(350))
+        .onLabelClick((label) => {
+          const theater = label as ConflictTheater;
+          onTheaterSelect(theater);
+        });
+    } else {
+      globe.labelsData([]);
+    }
+
+  }, [layers.theaterLabels, theaters, selectedTheater, detailLevel, renderProfile.caps.theaterLabels, renderProfile.labelResolution, transitionMs, onTheaterSelect, visualMode]);
+
+  // Incident and auxiliary point meshes remain individually inspectable.
+  useEffect(() => {
+    const globe = globeRef.current;
+    if (!globe) return;
+
+    globe
+      .pointsData([
+        ...interactiveEvents.map((event) => tagGlobeObject(event, "event")),
+        ...(layers.orbitalAssets ? satelliteSelection.selected.map((satellite) => tagGlobeObject(satellite, "satellite")) : []),
+        ...(layers.orbitalAssets ? launchSelection.selected.map((launch) => tagGlobeObject(launch, "launch")) : []),
+        ...(layers.environmental ? naturalSelection.selected.map((event) => tagGlobeObject(event, "natural")) : []),
+        ...(layers.internetOutages ? internetOutageSelection.selected.map((marker) => tagGlobeObject(marker, "internetOutage")) : []),
+        ...(layers.gdeltGeoNews ? gdeltNewsSelection.selected.map((marker) => tagGlobeObject(marker, "gdeltNews")) : []),
+      ] as GlobePointObject[])
+      .pointLat("lat")
+      .pointLng("lng")
+      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.016 : (point as GlobePointObject).objectKind === "vessel" ? 0.007 : (point as GlobePointObject).objectKind === "satellite" ? Math.min(0.22, 0.035 + ((point as OsintSatellite & { altitudeKm: number }).altitudeKm / 22000)) : (point as GlobePointObject).objectKind === "launch" ? 0.015 : (point as GlobePointObject).objectKind === "internetOutage" ? 0.017 : (point as GlobePointObject).objectKind === "gdeltNews" ? 0.013 : (point as GlobePointObject).objectKind === "natural" ? 0.014 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
+      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? classifyAircraftRole((point as MilitaryAircraft).aircraftType).color : (point as GlobePointObject).objectKind === "civilAircraft" ? ((point as OsintAircraft).operatorClass.includes("cargo") ? "#f0a84f" : "#9fb7a8") : (point as GlobePointObject).objectKind === "satellite" ? "#d8c77f" : (point as GlobePointObject).objectKind === "vessel" ? ((point as OsintVessel).vesselClass === "Tanker" ? "#d59b6a" : (point as OsintVessel).vesselClass === "Cargo" ? "#7da6a1" : "#8f9b7d") : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? "#75bdd1" : "#548498") : (point as GlobePointObject).objectKind === "gdeltNews" ? (GDELT_NEWS_PRECISION_RANK[(point as GdeltNewsLocationMarker).coordinatePrecision] === 2 ? "#9fb0c9" : "#6d7a91") : (point as GlobePointObject).objectKind === "natural" ? naturalEventColor(point as OsintNaturalEvent) : pointColor(point as ConflictEvent))
+      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.035 : (point as GlobePointObject).objectKind === "vessel" ? 0.038 : (point as GlobePointObject).objectKind === "satellite" ? 0.046 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? 0.066 : 0.047) : (point as GlobePointObject).objectKind === "gdeltNews" ? Math.min(0.074, 0.032 + Math.log1p((point as GdeltNewsLocationMarker).articles.length) * 0.014) : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id) * (unresolvedWindowIntersectsPlaybackFrame(point as ConflictEvent, playbackFrame) ? 0.84 : 1))
+      .pointResolution(renderProfile.pointResolution)
+      .pointsMerge(false)
+      .pointsTransitionDuration(transitionMs(320))
+      .pointLabel((point) => globeObjectTooltip(point as GlobePointObject))
+      .onPointClick(handlePointObjectClick);
+
+  }, [interactiveEvents, layers.orbitalAssets, layers.environmental, layers.internetOutages, layers.gdeltGeoNews, satelliteSelection, launchSelection, naturalSelection, internetOutageSelection, gdeltNewsSelection, selectedEvent, playbackFrame, detailLevel, renderProfile.pointResolution, transitionMs, pointColor, globeObjectTooltip, handlePointObjectClick, visualMode]);
+
+  const transportParticleGroups = useMemo(() => {
+    const entries: BatchedParticleEntry<GlobePointObject>[] = [];
+    if (layers.aircraft) for (const item of militarySelection.selected) entries.push({ item: tagGlobeObject(item, "aircraft"), kind: "aircraft", color: classifyAircraftRole(item.aircraftType).color, size: particleSizeForPointRadius(0.052) });
+    if (layers.civilAviation) for (const item of civilAircraftSelection.selected) entries.push({ item: tagGlobeObject(item, "civilAircraft"), kind: "civilAircraft", color: item.operatorClass.includes("cargo") ? "#f0a84f" : "#9fb7a8", size: particleSizeForPointRadius(0.035) });
+    if (layers.maritime) for (const item of vesselSelection.selected) entries.push({ item: tagGlobeObject(item, "vessel"), kind: "vessel", color: item.vesselClass === "Tanker" ? "#d59b6a" : item.vesselClass === "Cargo" ? "#7da6a1" : "#8f9b7d", size: particleSizeForPointRadius(0.038) });
+    return createBatchedParticleGroups(entries);
+  }, [layers.aircraft, layers.civilAviation, layers.maritime, militarySelection, civilAircraftSelection, vesselSelection]);
+  const particleTexture = useCallback((color: string) => {
+    const cached = particleTexturesRef.current.get(color);
+    if (cached) return cached;
+    const canvas = document.createElement("canvas");
+    canvas.width = 64; canvas.height = 64;
+    const context = canvas.getContext("2d");
+    if (context) { context.fillStyle = color; context.beginPath(); context.arc(32, 32, 25, 0, Math.PI * 2); context.fill(); }
+    const texture = new CanvasTexture(canvas);
+    particleTexturesRef.current.set(color, texture);
+    return texture;
+  }, []);
+
+  // Batched transport contacts: one THREE.Points buffer per visual class while retaining indexed clicks.
+  useEffect(() => {
+    const globe = globeRef.current;
+    if (!globe) return;
+    globe
+      .particlesData(transportParticleGroups)
+      .particlesList((group) => group as GlobePointObject[])
+      .particleLat("lat")
+      .particleLng("lng")
+      .particleAltitude((point) => globeObjectAltitude(point as GlobePointObject))
+      .particlesSize((group) => (group as { particleSize: number }).particleSize)
+      .particlesSizeAttenuation(true)
+      .particlesTexture((group) => particleTexture((group as { particleColor: string }).particleColor))
+      .particleLabel((point) => globeObjectTooltip(point as GlobePointObject))
+      .onParticleClick(handlePointObjectClick);
+    return () => { globeRef.current?.particlesData([]); };
+  }, [transportParticleGroups, particleTexture, globeObjectTooltip, handlePointObjectClick, visualMode]);
+
+  // HTML alert beacons update only when beacon state or selection changes.
+  useEffect(() => {
+    const globe = globeRef.current;
+    if (!globe) return;
 
     if (layers.beacons) {
       globe
@@ -1368,41 +1589,65 @@ export default function GodEyeGlobe({
         .htmlTransitionDuration(transitionMs(300));
     } else {
       globe.htmlElementsData([]);
+    }  }, [layers.beacons, alertEvents, selectedEvent, transitionMs, onEventSelect, visualMode]);
+
+  // Publish exact adaptive-render accounting outside React playback state; rendering caps never alter export/filter state.
+  useEffect(() => {
+    if (!onRenderStatus) return;
+    const accounts = {
+      incidents: accountFromSelection(incidentSelection),
+      militaryAircraft: accountFromSelection(militarySelection),
+      civilAircraft: accountFromSelection(civilAircraftSelection),
+      vessels: accountFromSelection(vesselSelection),
+      satellites: accountFromSelection(satelliteSelection),
+      launches: accountFromSelection(launchSelection),
+      naturalEvents: accountFromSelection(naturalSelection),
+      gpsInterference: accountFromSelection(gpsSelection),
+      internetOutages: accountFromSelection(internetOutageSelection),
+      gdeltGeoNews: accountFromSelection(gdeltNewsSelection),
+      ringBeacons: accountForCappedLayer(ringBeaconCandidates.length, ringBeaconEvents.length, renderProfile.caps.ringBeacons),
+      htmlAlertMarkers: accountForCappedLayer(events.filter((event) => event.severity === "critical" || event.severity === "high").length, alertEvents.length, renderProfile.caps.htmlAlertMarkers),
+    };
+    const totals = summarizeRenderAccounts(accounts);
+    const frame = frameBudgetRef.current?.snapshot();
+    onRenderStatus({
+      qualityTier,
+      runtimeQualityTier,
+      detailLevel,
+      detailLabel: renderDetailLabel(detailLevel),
+      reducedEffects,
+      pixelRatio: resolveAdaptivePixelRatio(window.devicePixelRatio || 1, viewFocus.altitude, qualityTier),
+      frameP80Ms: frame?.p80Ms ?? null,
+      frameWindows: frame?.windowsCompleted ?? 0,
+      adaptationLabel: reducedEffects ? "reduced effects operator override" : runtimeQualityTier !== deviceQualityTier ? "frame-budget adapted" : `${qualityTier} adaptive detail`,
+      batchingLabel: "transport contacts batched as GPU point sprites; incident cylinders remain individually inspectable",
+      accounts,
+      ...totals,
+    });
+  }, [onRenderStatus, incidentSelection, militarySelection, civilAircraftSelection, vesselSelection, satelliteSelection, launchSelection, naturalSelection, gpsSelection, internetOutageSelection, gdeltNewsSelection, ringBeaconCandidates.length, ringBeaconEvents.length, renderProfile.caps.ringBeacons, renderProfile.caps.htmlAlertMarkers, events, alertEvents.length, qualityTier, runtimeQualityTier, detailLevel, reducedEffects, viewFocus.altitude, deviceQualityTier]);
+
+  // Deterministic quality application: high-DPI budget, bloom, texture filtering, and satellite tile ceilings.
+  useEffect(() => {
+    const globe = globeRef.current;
+    if (!globe) return;
+    globe.renderer().setPixelRatio(resolveAdaptivePixelRatio(window.devicePixelRatio || 1, viewFocus.altitude, qualityTier));
+    if (bloomPassRef.current) {
+      bloomPassRef.current.enabled = renderProfile.enableBloom && !reducedEffects;
+      bloomPassRef.current.strength = (visualMode === "satellite" ? 0.16 : 0.3) * renderProfile.bloomStrengthScale;
     }
-  }, [
-    events,
-    theaters,
-    detailLevel,
-    interactiveEvents,
-    militaryAircraft,
-    aircraft,
-    vessels,
-    aircraftTracks,
-    civilAircraftTracks,
-    vesselTracks,
-    satellitePositions,
-    gpsInterferencePaths,
-    internetOutageMarkers,
-    internetOutagePaths,
-    gdeltNewsMarkers,
-    launches,
-    naturalEvents,
-    alertEvents,
-    signalArcs,
-    affectedCountries,
-    borderPaths,
-    selectedEvent,
-    selectedTheater,
-    layers,
-    onEventSelect,
-    onAircraftSelect,
-    onCivilAircraftSelect,
-    onVesselSelect,
-    onTheaterSelect,
-    visualMode,
-    playbackFrame,
-    reducedMotion,
-  ]);
+    const anisotropy = resolveTextureAnisotropy(qualityTier, detailLevel, globe.renderer().capabilities.getMaxAnisotropy());
+    // eslint-disable-next-line react-hooks/immutability -- three.js texture uniforms are imperative renderer resources, not React state.
+    for (const texture of earthTexturesRef.current) texture.anisotropy = anisotropy;
+    if (visualMode === "satellite") globe.globeTileEngineMaxLevel(renderProfile.satelliteTileMaxLevel);
+    containerRef.current?.setAttribute("data-render-quality", qualityTier);
+    containerRef.current?.setAttribute("data-reduced-effects", reducedEffects ? "true" : "false");
+  }, [viewFocus.altitude, qualityTier, renderProfile, reducedEffects, detailLevel, visualMode]);
+
+  useEffect(() => () => {
+    for (const texture of particleTexturesRef.current.values()) texture.dispose();
+    particleTexturesRef.current.clear();
+  }, []);
+
 
   return (
     <div className="absolute inset-0 overflow-hidden bg-black">
