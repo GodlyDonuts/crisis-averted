@@ -50,10 +50,12 @@ import {
   resolveTextureAnisotropy,
   satellitePropagationIntervalMs,
   selectAdaptiveEvents,
+  selectAdaptiveEventsFromSpatialPage,
   selectViewportAdaptiveItems,
   summarizeRenderAccounts,
   tagGlobeObject,
   untagGlobeObject,
+  viewportRadiusDegreesForDetail,
   type BatchedParticleEntry,
   type GodEyeRenderStatus,
   type RenderQualityTier,
@@ -761,14 +763,42 @@ export default function GodEyeGlobe({
 
   const detailLevel = detailLevelForAltitude(viewFocus.altitude);
   const renderProfile = useMemo(() => globeRenderQualityProfile(qualityTier, detailLevel), [qualityTier, detailLevel]);
-  const incidentSelection = useMemo(() => selectAdaptiveEvents(
-    events,
-    viewFocus.lat,
-    viewFocus.lng,
-    detailLevel,
-    renderProfile.caps.incidents,
-    selectedEvent ? [selectedEvent] : [],
-  ), [events, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.incidents, selectedEvent]);
+  // Incident rows are copied into the resident WASM store only when the immutable snapshot/filter
+  // array identity changes. Camera movement reuses that store; malformed/trapped WASM contracts
+  // fall through to the canonical JavaScript scanner below without changing selection semantics.
+  const wasmIncidentPriorityOrder = useMemo(
+    () => wasmCore?.prepareIncidentEvents(events) ?? null,
+    [wasmCore, events],
+  );
+  const incidentSelection = useMemo(() => {
+    const preserve = selectedEvent ? [selectedEvent] : [];
+    const cap = renderProfile.caps.incidents;
+    if (wasmCore && wasmIncidentPriorityOrder && wasmCore.incidentStoreMatches(events)) {
+      // Forced preserved rows never consume regular cap slots in the canonical algorithm. Ask
+      // WASM for at most one extra priority candidate per preserved row, then discard the forced
+      // indices during composition; this keeps even a top-priority selected incident from
+      // starving the regular page while preserving exact ordering and accounting.
+      const queryCap = Math.min(events.length, Math.max(0, Math.floor(cap)) + preserve.length);
+      const page = wasmCore.queryIncidentViewport({
+        focusLat: viewFocus.lat,
+        focusLng: viewFocus.lng,
+        radiusDegrees: viewportRadiusDegreesForDetail(detailLevel),
+        cap: queryCap,
+      });
+      const accelerated = page
+        ? selectAdaptiveEventsFromSpatialPage(events, wasmIncidentPriorityOrder, page, { cap, preserve })
+        : null;
+      if (accelerated) return accelerated;
+    }
+    return selectAdaptiveEvents(
+      events,
+      viewFocus.lat,
+      viewFocus.lng,
+      detailLevel,
+      cap,
+      preserve,
+    );
+  }, [events, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.incidents, selectedEvent, wasmCore, wasmIncidentPriorityOrder]);
   const interactiveEvents = incidentSelection.selected;
 
 

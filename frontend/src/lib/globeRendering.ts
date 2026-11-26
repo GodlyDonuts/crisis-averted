@@ -190,6 +190,11 @@ const VIEWPORT_RADIUS_BY_DETAIL: Record<RenderDetailLevel, number | null> = {
   2: 30,
 };
 
+/** Canonical viewport radius contract shared by the JS fallback and the WASM spatial index. */
+export function viewportRadiusDegreesForDetail(detailLevel: RenderDetailLevel): number | null {
+  return VIEWPORT_RADIUS_BY_DETAIL[detailLevel];
+}
+
 const POINT_RESOLUTION: Record<RenderQualityTier, number> = { full: 9, balanced: 8, constrained: 6, minimal: 5 };
 const PATH_RESOLUTION: Record<RenderQualityTier, number> = { full: 2, balanced: 2, constrained: 1, minimal: 1 };
 const RING_RESOLUTION: Record<RenderQualityTier, number> = { full: 32, balanced: 24, constrained: 16, minimal: 12 };
@@ -334,7 +339,7 @@ export function selectViewportAdaptiveItems<T extends GeoPointLike>(
 ): AdaptiveViewportSelection<T> {
   const cap = Math.max(0, Math.floor(options.cap));
   const radius = options.viewportRadiusDegrees === undefined
-    ? VIEWPORT_RADIUS_BY_DETAIL[options.detailLevel]
+    ? viewportRadiusDegreesForDetail(options.detailLevel)
     : options.viewportRadiusDegrees;
   const keyOf = options.keyOf;
 
@@ -409,17 +414,36 @@ export interface RenderRankedEvent extends GeoPointLike {
 
 const rankedEventsCache = new WeakMap<object, unknown[]>();
 
+/**
+ * Canonical incident priority comparator. The `||` chaining is deliberate: NaN intensity or
+ * time differences are falsy in JavaScript and therefore fall through exactly as they did in
+ * the historical render ordering. Stable array sorting then preserves input order for total ties.
+ */
+export function compareRenderRankedEvents<T extends RenderRankedEvent>(a: T, b: T): number {
+  return (b.intensity - a.intensity)
+    || (b.occurredAt - a.occurredAt)
+    || String(a.id ?? "").localeCompare(String(b.id ?? ""));
+}
+
 /** Cached incident priority order; sorting once removes per-camera O(n log n) extraction churn. */
 export function rankEventsForRender<T extends RenderRankedEvent>(events: readonly T[]): T[] {
   const cached = rankedEventsCache.get(events);
   if (cached) return cached as T[];
-  const ranked = [...events].sort((a, b) =>
-    (b.intensity - a.intensity)
-    || (b.occurredAt - a.occurredAt)
-    || String(a.id ?? "").localeCompare(String(b.id ?? ""))
-  );
+  const ranked = [...events].sort(compareRenderRankedEvents);
   rankedEventsCache.set(events, ranked);
   return ranked;
+}
+
+/**
+ * Priority order as source-array indices. This is the index-based twin of
+ * `rankEventsForRender`: both use the same comparator and JavaScript's stable sort, so equal
+ * keys retain source order in both representations. The WASM loader consumes this permutation
+ * once and can thereafter return compact source indices without serializing incident rows.
+ */
+export function rankEventIndicesForRender<T extends RenderRankedEvent>(events: readonly T[]): number[] {
+  return events
+    .map((_, index) => index)
+    .sort((a, b) => compareRenderRankedEvents(events[a], events[b]));
 }
 
 export function selectAdaptiveEvents<T extends RenderRankedEvent>(
@@ -439,6 +463,113 @@ export function selectAdaptiveEvents<T extends RenderRankedEvent>(
     // Incident records carry stable ids across feed refreshes; fall back to object identity.
     keyOf: (item) => item.id ?? item,
   });
+}
+
+/**
+ * Compact spatial-result page returned by an accelerator. `indices` contains source-array
+ * indices in canonical incident-priority order, already viewport-filtered and sliced to the
+ * caller-requested cap. The two spatial counts describe the complete input, not merely the
+ * returned page, so adaptive omission accounting remains exact.
+ */
+export interface PrioritizedIncidentSpatialPage {
+  indices: ArrayLike<number>;
+  viewportCandidates: number;
+  outsideViewport: number;
+}
+
+export interface IncidentSpatialPageCompositionOptions<T> {
+  cap: number;
+  preserve?: T[];
+}
+
+/**
+ * Composes a compact accelerated spatial page into the exact public selection contract.
+ *
+ * This function deliberately reuses the preservation/key semantics of
+ * `selectViewportAdaptiveItems`: a preserved incident resolves to the first same-key input row
+ * in priority order, fresh input rows replace stale preserved object identities, unmatched
+ * preserved rows remain overlay ghosts, forced rows never occupy a regular cap slot, and
+ * source/omitted accounting excludes ghosts. Any malformed accelerator page returns `null`
+ * so callers can fall back to the canonical JavaScript scan instead of compromising semantics.
+ */
+export function selectAdaptiveEventsFromSpatialPage<T extends RenderRankedEvent>(
+  events: readonly T[],
+  priorityOrder: readonly number[],
+  page: PrioritizedIncidentSpatialPage,
+  options: IncidentSpatialPageCompositionOptions<T>,
+): AdaptiveViewportSelection<T> | null {
+  if (priorityOrder.length !== events.length) return null;
+  if (!Number.isFinite(options.cap)) return null;
+  if (!Number.isSafeInteger(page.viewportCandidates) || !Number.isSafeInteger(page.outsideViewport)) return null;
+  if (page.viewportCandidates < 0 || page.outsideViewport < 0) return null;
+  if (page.viewportCandidates + page.outsideViewport !== events.length) return null;
+
+  const cap = Math.max(0, Math.floor(options.cap));
+  const keyOf = (item: T): unknown => item.id ?? item;
+
+  // Duplicate the generic algorithm's preserved-key de-duplication exactly.
+  const preserved: T[] = [];
+  const seenPreservedKeys = new Set<unknown>();
+  for (const item of options.preserve ?? []) {
+    const key = keyOf(item);
+    if (!seenPreservedKeys.has(key)) {
+      seenPreservedKeys.add(key);
+      preserved.push(item);
+    }
+  }
+
+  // Keys are matched in priority order, not source order. This matters only for adversarial
+  // duplicate ids, and matching it keeps even those inputs byte-for-byte compatible with the
+  // JavaScript fallback. When nothing is preserved the map is not built at all.
+  const forcedInputIndexes = new Set<number>();
+  const forcedInputItems = new Set<T>();
+  const preservedRenderOrder: T[] = [];
+  if (preserved.length > 0) {
+    const inputIndexByKey = new Map<unknown, number>();
+    for (const sourceIndex of priorityOrder) {
+      if (!Number.isInteger(sourceIndex) || sourceIndex < 0 || sourceIndex >= events.length) return null;
+      const item = events[sourceIndex];
+      const key = keyOf(item);
+      if (!inputIndexByKey.has(key)) inputIndexByKey.set(key, sourceIndex);
+    }
+
+    for (const item of preserved) {
+      const matchIndex = inputIndexByKey.get(keyOf(item));
+      if (matchIndex !== undefined) {
+        if (!forcedInputIndexes.has(matchIndex)) {
+          forcedInputIndexes.add(matchIndex);
+          forcedInputItems.add(events[matchIndex]);
+          preservedRenderOrder.push(events[matchIndex]);
+        }
+      } else {
+        preservedRenderOrder.push(item);
+      }
+    }
+  }
+
+  const regular: T[] = [];
+  const seenPageIndexes = new Set<number>();
+  for (let offset = 0; offset < page.indices.length; offset += 1) {
+    const sourceIndex = page.indices[offset];
+    if (!Number.isInteger(sourceIndex) || sourceIndex < 0 || sourceIndex >= events.length) return null;
+    if (forcedInputIndexes.has(sourceIndex) || forcedInputItems.has(events[sourceIndex]) || seenPageIndexes.has(sourceIndex)) continue;
+    seenPageIndexes.add(sourceIndex);
+    if (regular.length < cap) regular.push(events[sourceIndex]);
+  }
+
+  const selected = [...preservedRenderOrder, ...regular];
+  const sourceRendered = regular.length + forcedInputItems.size;
+  return {
+    selected,
+    total: events.length,
+    rendered: selected.length,
+    sourceRendered,
+    omitted: Math.max(0, events.length - sourceRendered),
+    viewportCandidates: page.viewportCandidates,
+    outsideViewport: page.outsideViewport,
+    forcedIncluded: preserved.length,
+    cap,
+  };
 }
 
 export interface TrackProjectionInput extends GeoPointLike {

@@ -10,7 +10,8 @@
     "lint": "eslint",
     "validate:url-state": "node ../scripts/validate-operator-url-state.mjs",
     "validate:osint-chunks": "node ../scripts/validate-osint-chunks.mjs",
-    "validate:source-governance": "node ../scripts/validate-source-governance.mjs"
+    "validate:source-governance": "node ../scripts/validate-source-governance.mjs",
+    "validate:wasm-spatial": "node ../scripts/validate-wasm-spatial-index.mjs"
   },
   "dependencies": {
     "@elevenlabs/react": "^0.14.0",
