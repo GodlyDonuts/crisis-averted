@@ -74,7 +74,7 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
       <div className="godseye-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-4">
         <div className="rounded-sm border border-amber-200/12 bg-amber-300/[0.045] p-3">
           <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.18em] text-amber-100/44">
-            <span>Priority score</span>
+            <span>Priority score · heuristic</span>
             <span>{threatIndex}/100</span>
           </div>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
@@ -84,6 +84,9 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
             <span>{formatRelativeTime(event.occurredAt)}</span>
             <span>{formatUtcTime(event.occurredAt)}</span>
           </div>
+          <p className="mt-2 font-mono text-[9px] uppercase leading-relaxed tracking-[0.1em] text-white/28">
+            Severity, recency, casualties, displacement, precision, and verification contribute to this score.
+          </p>
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-2">

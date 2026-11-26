@@ -200,6 +200,42 @@ export function normalizeWarHeatmapEvent(raw: WarHeatmapRawEvent): ConflictEvent
   };
 }
 
+function normalizedTitleKey(title: string): string {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function approximateDistanceKm(a: ConflictEvent, b: ConflictEvent): number {
+  const lat1 = a.lat * Math.PI / 180;
+  const lat2 = b.lat * Math.PI / 180;
+  const dLat = lat2 - lat1;
+  const dLng = (b.lng - a.lng) * Math.PI / 180;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+export function dedupeConflictEvents(events: ConflictEvent[]): ConflictEvent[] {
+  const kept: ConflictEvent[] = [];
+  const seenIds = new Set<string>();
+  const byTitle = new Map<string, ConflictEvent[]>();
+  for (const event of [...events].sort((a, b) => b.intensity - a.intensity || b.occurredAt - a.occurredAt)) {
+    if (seenIds.has(event.id)) continue;
+    seenIds.add(event.id);
+    const titleKey = normalizedTitleKey(event.title);
+    const candidates = titleKey.length > 12 ? byTitle.get(titleKey) ?? [] : [];
+    const duplicate = candidates.some((existing) =>
+      Math.abs(existing.occurredAt - event.occurredAt) <= 24 * 36e5 &&
+      approximateDistanceKm(existing, event) <= 35
+    );
+    if (duplicate) continue;
+    kept.push(event);
+    if (titleKey.length > 12) {
+      candidates.push(event);
+      byTitle.set(titleKey, candidates);
+    }
+  }
+  return kept.sort((a, b) => b.occurredAt - a.occurredAt);
+}
+
 export interface ConflictDataResult {
   events: ConflictEvent[];
   source: "live" | "fallback";
@@ -239,16 +275,16 @@ export async function loadConflictEvents(snapshotEvents: ConflictEvent[] = []): 
   } else if (warHeatmap.status === "rejected") errors.push(`WarHeatMap: ${warHeatmap.reason instanceof Error ? warHeatmap.reason.message : "unavailable"}`);
 
   if (liveEventCount > 0) {
-    return { events: events.sort((a, b) => b.occurredAt - a.occurredAt).slice(0, 2600), source: "live", error: errors.join(" · ") || null, fetchedAt };
+    return { events: dedupeConflictEvents(events).slice(0, 2600), source: "live", error: errors.join(" · ") || null, fetchedAt };
   }
   if (events.length > 0) {
-    return { events: events.sort((a, b) => b.occurredAt - a.occurredAt).slice(0, 2600), source: "fallback", error: errors.join(" · ") || "Using cached OSINT snapshot", fetchedAt };
+    return { events: dedupeConflictEvents(events).slice(0, 2600), source: "fallback", error: errors.join(" · ") || "Using cached OSINT snapshot", fetchedAt };
   }
 
   try {
     const payload = await fetchJsonWithTimeout(FALLBACK_EVENTS_URL, 8000) as { events?: WarHeatmapRawEvent[] };
     const fallbackEvents = (payload.events ?? []).map(normalizeWarHeatmapEvent).filter((event): event is ConflictEvent => event !== null);
-    return { events: [...fallbackEvents, ...snapshotEvents].sort((a, b) => b.occurredAt - a.occurredAt), source: "fallback", error: errors.join(" · ") || "Live feeds unavailable", fetchedAt };
+    return { events: dedupeConflictEvents([...fallbackEvents, ...snapshotEvents]), source: "fallback", error: errors.join(" · ") || "Live feeds unavailable", fetchedAt };
   } catch (fallbackError) {
     return { events: [], source: "fallback", error: fallbackError instanceof Error ? fallbackError.message : "Unable to load conflict data", fetchedAt };
   }

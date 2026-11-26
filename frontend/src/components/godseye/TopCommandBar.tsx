@@ -51,6 +51,13 @@ export default function TopCommandBar({
 }: TopCommandBarProps) {
   const utcTime = useUtcClock();
   const searchRef = useRef<HTMLInputElement>(null);
+  const [draftQuery, setDraftQuery] = useState(query);
+
+  useEffect(() => {
+    if (draftQuery === query) return undefined;
+    const timeout = window.setTimeout(() => onQueryChange(draftQuery), 250);
+    return () => window.clearTimeout(timeout);
+  }, [draftQuery, query, onQueryChange]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -100,8 +107,8 @@ export default function TopCommandBar({
             <Search className="pointer-events-none absolute left-3 h-4 w-4 text-amber-100/35" />
             <input
               ref={searchRef}
-              value={query}
-              onChange={(event) => onQueryChange(event.target.value)}
+              value={draftQuery}
+              onChange={(event) => setDraftQuery(event.target.value)}
               placeholder="Search incidents, countries or theaters…"
               className="h-10 w-full rounded-sm border border-amber-200/12 bg-white/[0.035] pl-9 pr-14 font-mono text-xs text-white outline-none transition placeholder:text-white/25 focus:border-amber-200/35 focus:bg-amber-400/[0.055]"
             />

@@ -74,10 +74,13 @@ export default function GodEyeCommandCenter() {
 
 
   useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setAutoRotate(false);
-      setTourActive(false);
-    }
+    const timeout = window.setTimeout(() => {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        setAutoRotate(false);
+        setTourActive(false);
+      }
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, []);
 
   useEffect(() => {
