@@ -2,7 +2,6 @@ use crate::correlation::{correlate_loaded_incidents, IncidentCorrelationStats};
 use crate::data::{
     parse_osint_snapshot, snapshot_revision, unix_time_now, Incident, OsintSnapshot,
 };
-use crate::playback::IncidentPlaybackAnalyses;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
@@ -158,9 +157,9 @@ pub struct ActiveSnapshot {
     pub snapshot: OsintSnapshot,
     /// Canonical incidents correlated inside the refresh worker, keeping the render thread interactive.
     pub incidents: Vec<Incident>,
-    /// Deterministic playback grids precomputed beside correlation in the worker. Resolution
-    /// changes in the UI therefore never rebuild sparse temporal membership on the render thread.
-    pub playback_analyses: IncidentPlaybackAnalyses,
+    /// Temporal playback grids are deliberately not prebuilt here: they analyze the operator's
+    /// filtered scope rather than the full corpus, so the filter pipeline rebuilds them through
+    /// its own generationed worker when the refreshed corpus lands.
     pub correlation_stats: IncidentCorrelationStats,
     pub revision: String,
     pub received_unix: f64,
@@ -313,12 +312,10 @@ fn run_cycle(
         let received_unix = unix_time_now();
         let correlation =
             correlate_loaded_incidents(fallback_incidents, &success.snapshot, received_unix);
-        let playback_analyses = IncidentPlaybackAnalyses::build(&correlation.incidents);
         ActiveSnapshot {
             source: success.kind,
             detail: success.detail,
             revision: snapshot_revision(&success.snapshot),
-            playback_analyses,
             incidents: correlation.incidents,
             correlation_stats: correlation.stats,
             snapshot: success.snapshot,

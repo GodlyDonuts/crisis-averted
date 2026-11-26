@@ -1910,12 +1910,16 @@ mod tests {
         assert_eq!(extraction.mode, PlaybackMode::Cumulative);
         assert!(extraction.event_indices.len() > 1000);
 
+        // The analysis in this test is built over the full corpus, so the scope remap is the
+        // identity permutation; filtered-scope remapping is covered in filter.rs tests.
+        let identity_scope: Vec<u32> = (0..correlated.incidents.len() as u32).collect();
         let rebuild_started = Instant::now();
         let mut total_mesh_bytes = 0usize;
         const REBUILD_ITERATIONS: usize = 60;
         for _ in 0..REBUILD_ITERATIONS {
             let cache = crate::build_playback_visual_cache(
                 &correlated.incidents,
+                &identity_scope,
                 &extraction,
                 controller.extraction_version(),
             );
