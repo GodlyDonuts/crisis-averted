@@ -898,3 +898,186 @@ export interface OsintWebcam {
   detailUrl: string | null;
   playerUrl: string | null;
 }
+
+/* ------------------------------------------------------------------------- */
+/* Multi-domain convergence intelligence (catalog batch 7)                    */
+/* ------------------------------------------------------------------------- */
+
+/**
+ * Evidence domains participating in multi-domain convergence analysis. The conflict
+ * incident is the anchor entity; every other domain is evidence/context. Orbital objects
+ * are deliberately absent: propagated satellite positions sweep the globe continuously,
+ * so spatial proximity to a terrestrial incident carries no discriminating evidence and
+ * including them would manufacture coincidence. Space launches (fixed pads, published
+ * windows) are the appropriate orbital-domain evidence and are included instead.
+ */
+export type ConvergenceDomain =
+  | "gnss-interference"
+  | "military-aviation"
+  | "civil-aviation"
+  | "ais-vessel"
+  | "space-launch"
+  | "environmental-event"
+  | "connectivity-outage"
+  | "media-attention";
+
+/**
+ * Measurement family an evidence domain belongs to. Corroboration counting uses families,
+ * not raw domains, because domains sharing a sensor ecosystem are not independent of each
+ * other: gpsjam.org interference grids are derived from aircraft navigation-quality
+ * reports, so GNSS interference and aviation positions are facets of one aviation-derived
+ * measurement family and can never corroborate each other.
+ */
+export type ConvergenceEvidenceFamily =
+  | "aviation-derived"
+  | "maritime-ais"
+  | "spaceflight-schedule"
+  | "environmental-sensors"
+  | "network-measurement"
+  | "media-attention";
+
+/**
+ * Card-level convergence classification. These labels describe evidence geometry only —
+ * never causality, intent, or operational attribution:
+ * - corroboration: spatial-temporal alignments qualified in at least two independent
+ *   non-media measurement families.
+ * - correlation: alignments qualified in exactly one independent measurement family.
+ * - coincidence: spatial-temporal overlap exists but nothing qualified as independent
+ *   evidence — structurally expected co-occurrence (dense civil aviation, long-scheduled
+ *   launches), weak evidence, or media-attention-only alignment. Media attention is
+ *   derivative of the same event ecosystem as conflict reporting and is never independent
+ *   corroboration, so media-only cards are coincidence-class with that reasoning attached.
+ * Evidence gaps are not a classification; they are annotated per card and per analysis.
+ */
+export type ConvergenceClassification = "corroboration" | "correlation" | "coincidence";
+
+/** A domain whose evidence could not be evaluated at all, with the reason. Absence of a
+ *  converging observation is NOT a gap — a gap means the data needed to look was missing. */
+export interface ConvergenceEvidenceGap {
+  domain: ConvergenceDomain;
+  reason: string;
+}
+
+/** One independent evidence factor inside a pairwise assessment. `score` null means the
+ *  evidence is structurally absent (e.g. no magnitude supplied); absent evidence contributes
+ *  zero at full weight and is never renormalized upward. */
+export interface ConvergenceFactor {
+  key: "spatial" | "temporal" | "strength" | "squawk" | "significance" | "proximity";
+  score: number | null;
+  weight: number;
+  rationale: string;
+}
+
+/** Provenance of the single domain observation behind a finding. */
+export interface ConvergenceFindingProvenance {
+  source: string;
+  url: string | null;
+  observedAt: string | null;
+  note: string | null;
+}
+
+/**
+ * One deterministic pairwise spatial-temporal assessment between the anchor incident and
+ * a single domain observation. Everything needed to reproduce the verdict is carried here:
+ * distances, times, per-factor scores with weights, and ordered rationale lines.
+ */
+export interface ConvergencePairFinding {
+  observationId: string;
+  domain: ConvergenceDomain;
+  family: ConvergenceEvidenceFamily;
+  /** Short human-readable identity of the observation (vessel name, outage entity, hex cell, article location). */
+  label: string;
+  detail: string | null;
+  url: string | null;
+  /** Raw great-circle distance between the incident fix and the observation reference point, km. */
+  distanceKm: number;
+  /** Distance after subtracting native area radius (GNSS hex cells); the distance the evidence actually supports. */
+  effectiveDistanceKm: number;
+  /** Hours between the temporal windows; 0 means they overlap. */
+  timeGapHours: number;
+  /** Weighted sum of positive evidence, 0..1. */
+  score: number;
+  /** Score met the pair-type qualification bar and any pair-specific structural requirements. */
+  qualifies: boolean;
+  /** False when the pair type is structurally coincidence-only (launches) or fails a discriminating-evidence requirement. */
+  countsAsEvidence: boolean;
+  factors: ConvergenceFactor[];
+  rationale: string[];
+  provenance: ConvergenceFindingProvenance;
+}
+
+/** All findings between the anchor incident and one evidence domain, best-first. */
+export interface ConvergenceDomainAlignment {
+  domain: ConvergenceDomain;
+  family: ConvergenceEvidenceFamily;
+  /** Whether this domain is allowed to count toward independent corroboration. Media attention never does. */
+  independent: boolean;
+  bestScore: number;
+  qualifies: boolean;
+  /** Observations inside the hard spatial-temporal gates. */
+  findingCount: number;
+  qualifyingFindingCount: number;
+  /** Strongest findings retained for drill-down (qualifying first, then score, deterministic). */
+  findings: ConvergencePairFinding[];
+  /** Domain-level caveat, e.g. regional AIS coverage or snapshot-instant aviation positions. Null when none applies. */
+  coverageNote: string | null;
+}
+
+/**
+ * Multi-domain convergence card for one anchor incident. The card is a co-occurrence
+ * digest: it never asserts that the aligned observations caused, enabled, or are otherwise
+ * operationally related to the incident.
+ */
+export interface IncidentConvergenceCard {
+  eventId: string;
+  algorithmVersion: string;
+  classification: ConvergenceClassification;
+  /** One-line deterministic explanation of why this classification was assigned. */
+  classificationReason: string;
+  /** Ranking device only — not a probability. Exact formula is documented in uncertaintyNotes. */
+  convergenceIndex: number;
+  independentFamilyCount: number;
+  qualifyingDomainCount: number;
+  /** Domains with at least one finding inside the gates, strongest first. */
+  domains: ConvergenceDomainAlignment[];
+  /** Independent non-media measurement families that qualified, sorted. */
+  independentFamilies: ConvergenceEvidenceFamily[];
+  evidenceGaps: ConvergenceEvidenceGap[];
+  uncertaintyNotes: string[];
+  disclaimer: string;
+}
+
+/** Deterministic statistics of one convergence analysis pass. */
+export interface DomainConvergenceStats {
+  algorithmVersion: string;
+  anchorEventCount: number;
+  eligibleAnchorCount: number;
+  ineligibleAnchorCount: number;
+  observationsByDomain: Record<ConvergenceDomain, number>;
+  candidatePairCount: number;
+  evaluatedPairCount: number;
+  findingCount: number;
+  qualifyingFindingCount: number;
+  cardCount: number;
+  corroborationCount: number;
+  correlationCount: number;
+  coincidenceCount: number;
+  /** Country-scope connectivity pair evaluations performed through exact canonicalized
+   *  country-name matches. Mismatched rows are never spuriously evaluated — they simply
+   *  never become candidates — so no rejection counting is needed. */
+  countryScopeEvaluationCount: number;
+  elapsedMs: number;
+}
+
+export interface DomainConvergenceAnalysis {
+  algorithmVersion: string;
+  /** Cards sorted by convergenceIndex descending then event id ascending. Only incidents
+   *  with at least one in-gate finding receive a card; absence of a card means no
+   *  spatial-temporal overlap was found, which is not evidence of absence. */
+  cards: IncidentConvergenceCard[];
+  /** Analysis-level evidence gaps (domain sources empty/unavailable in the loaded snapshot). */
+  gaps: ConvergenceEvidenceGap[];
+  /** Global caveats that apply to every card, e.g. snapshot-instant transport positions. */
+  globalNotes: string[];
+  stats: DomainConvergenceStats;
+}

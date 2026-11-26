@@ -15,6 +15,7 @@ import {
 import { useConflictEvents } from "@/hooks/useConflictEvents";
 import { useIncidentPlayback } from "@/hooks/useIncidentPlayback";
 import { useOsintSnapshot } from "@/hooks/useOsintSnapshot";
+import { useDomainConvergence } from "@/hooks/useDomainConvergence";
 import { measureIncidentTemporalCoverage } from "@/lib/incidentTime";
 import TopCommandBar from "./TopCommandBar";
 import TheaterList from "./TheaterList";
@@ -28,6 +29,7 @@ import { AircraftDetailPanel } from "./AircraftDetailPanel";
 import { TransportDetailPanel } from "./TransportDetailPanel";
 import { SourceStatusPanel } from "./SourceStatusPanel";
 import { GlobeFallback } from "./GlobeFallback";
+import { ConvergenceInspector } from "./ConvergenceInspector";
 import BootSequence from "./BootSequence";
 import type { GodEyeFocusTarget, GodEyeLayerToggles, GodEyeVisualMode } from "./GodEyeGlobe";
 
@@ -81,6 +83,7 @@ export default function GodEyeCommandCenter() {
   const [globeUnavailable, setGlobeUnavailable] = useState(false);
   const [theaterPanelOpen, setTheaterPanelOpen] = useState(true);
   const [incidentPanelOpen, setIncidentPanelOpen] = useState(true);
+  const [convergenceOpen, setConvergenceOpen] = useState(false);
   const [selectedTheaterSlug, setSelectedTheaterSlug] = useState<string | null>(null);
   const [focusTarget, setFocusTarget] = useState<GodEyeFocusTarget | null>(null);
 
@@ -124,6 +127,26 @@ export default function GodEyeCommandCenter() {
     return { start: playback.frame.start, endExclusive: playback.frame.endExclusive, mode: playback.mode };
   }, [playback.active, playback.frame, playback.mode]);
   const pausePlayback = playback.pause;
+
+  // Multi-domain convergence is computed over the full filter scope (not the playback
+  // frame): the engine's temporal gates already align evidence honestly in time, so a
+  // historical playback frame cannot manufacture anachronistic aviation/AIS alignments.
+  // The inspector then applies the playback lens as a display filter over card membership.
+  const convergence = useDomainConvergence(visibleEvents, osintSnapshot);
+  const eventsById = useMemo(() => {
+    const map = new Map<string, ConflictEvent>();
+    for (const event of visibleEvents) map.set(event.id, event);
+    return map;
+  }, [visibleEvents]);
+  const convergenceCards = useMemo(() => {
+    if (!playback.active) return convergence.analysis.cards;
+    const inFrame = new Set(temporalEvents.map((event) => event.id));
+    return convergence.analysis.cards.filter((card) => inFrame.has(card.eventId));
+  }, [playback.active, convergence.analysis.cards, temporalEvents]);
+  const selectedConvergenceCard = useMemo(() => {
+    if (!selectedEventId) return null;
+    return convergence.cardsByEventId.get(selectedEventId) ?? null;
+  }, [convergence.cardsByEventId, selectedEventId]);
 
   const selectedEvent = useMemo(() => {
     if (!selectedEventId) return null;
@@ -404,8 +427,19 @@ export default function GodEyeCommandCenter() {
               event={selectedEvent}
               theater={theaters.find((theater) => theater.slug === selectedEvent.theater) ?? null}
               snapshot={osintSnapshot}
+              convergenceCard={selectedConvergenceCard}
               onClose={() => setSelectedEventId(null)}
               onTheaterFocus={isolateTheater}
+            />
+          ) : convergenceOpen ? (
+            <ConvergenceInspector
+              analysis={convergence.analysis}
+              cards={convergenceCards}
+              scopeCardCount={convergence.analysis.cards.length}
+              playbackActive={playback.active}
+              eventsById={eventsById}
+              onSelectEvent={handleEventSelect}
+              onClose={() => setConvergenceOpen(false)}
             />
           ) : (
             <EventFeed
@@ -438,10 +472,13 @@ export default function GodEyeCommandCenter() {
           events={visibleEvents}
           playback={playback}
           corpusCoverage={corpusCoverage}
+          convergenceOpen={convergenceOpen}
+          convergenceCardCount={convergenceCards.length}
           onTimeWindowChange={handleTimeWindowChange}
           onToggleCategoryGroup={handleToggleCategoryGroup}
           onToggleSeverity={handleToggleSeverity}
           onToggleLayer={handleToggleLayer}
+          onToggleConvergence={() => setConvergenceOpen((open) => !open)}
           onAutoRotateChange={setAutoRotate}
           onTourActiveChange={setTourActive}
         />

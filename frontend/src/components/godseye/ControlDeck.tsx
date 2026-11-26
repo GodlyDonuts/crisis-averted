@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Clock3, Cloud, Compass, Download, Hexagon, Newspaper, Orbit, Pause, Plane, Play, Ship, Leaf, Radio, ScanLine, Signal, Radar, SlidersHorizontal, Tags, Waypoints, WifiOff } from "lucide-react";
+import { Clock3, Cloud, Compass, Download, Hexagon, Network, Newspaper, Orbit, Pause, Plane, Play, Ship, Leaf, Radio, ScanLine, Signal, Radar, SlidersHorizontal, Tags, Waypoints, WifiOff } from "lucide-react";
 import type { CategoryGroup, ConflictEvent, SeverityKey, TimelineBucket, TimeWindowKey } from "@/types/conflict";
 import type { IncidentTemporalCoverage } from "@/lib/incidentTime";
 import type { IncidentPlaybackController } from "@/hooks/useIncidentPlayback";
@@ -20,10 +20,13 @@ interface ControlDeckProps {
   events: ConflictEvent[];
   playback: IncidentPlaybackController;
   corpusCoverage: IncidentTemporalCoverage;
+  convergenceOpen?: boolean;
+  convergenceCardCount?: number;
   onTimeWindowChange: (window: TimeWindowKey) => void;
   onToggleCategoryGroup: (group: CategoryGroup) => void;
   onToggleSeverity: (severity: SeverityKey) => void;
   onToggleLayer: (layer: keyof GodEyeLayerToggles) => void;
+  onToggleConvergence?: () => void;
   onAutoRotateChange: (value: boolean) => void;
   onTourActiveChange: (value: boolean) => void;
 }
@@ -127,10 +130,13 @@ export default function ControlDeck({
   events,
   playback,
   corpusCoverage,
+  convergenceOpen = false,
+  convergenceCardCount = 0,
   onTimeWindowChange,
   onToggleCategoryGroup,
   onToggleSeverity,
   onToggleLayer,
+  onToggleConvergence,
   onAutoRotateChange,
   onTourActiveChange,
 }: ControlDeckProps) {
@@ -231,6 +237,22 @@ export default function ControlDeck({
             <Clock3 className="h-3.5 w-3.5" />
             Time
           </button>
+
+          {onToggleConvergence ? (
+            <button
+              type="button"
+              onClick={onToggleConvergence}
+              aria-pressed={convergenceOpen}
+              title="Multi-domain convergence inspector — explainable co-occurrence evidence, never causality"
+              className={`flex h-8 items-center gap-1.5 rounded-sm border px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] transition ${convergenceOpen ? "border-emerald-200/30 bg-emerald-300/[0.1] text-emerald-100" : "border-white/10 bg-white/[0.025] text-white/42 hover:text-white/72"}`}
+            >
+              <Network className="h-3.5 w-3.5" />
+              Conv
+              {convergenceCardCount > 0 ? (
+                <span className="rounded-sm bg-white/[0.07] px-1 text-[9px] text-white/52">{convergenceCardCount}</span>
+              ) : null}
+            </button>
+          ) : null}
 
           <button
             type="button"

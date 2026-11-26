@@ -1,8 +1,9 @@
 "use client";
 
 import { BadgeCheck, Copy, Crosshair, ExternalLink, GitMerge, MapPin, X } from "lucide-react";
-import type { ConflictEvent, ConflictTheater, IncidentCorrelationConfidence, OsintSnapshot } from "@/types/conflict";
+import type { ConflictEvent, ConflictTheater, IncidentConvergenceCard, IncidentCorrelationConfidence, OsintSnapshot } from "@/types/conflict";
 import { RegionalIntel } from "./RegionalIntel";
+import { ConvergenceSection } from "./ConvergenceSection";
 import { estimateEventConfidence, formatCompact, formatRelativeTime, formatUtcTime, normalizeCategory, SEVERITY_META } from "@/lib/conflictData";
 import { formatUtcExact } from "@/lib/incidentTime";
 
@@ -10,6 +11,7 @@ interface EventDetailPanelProps {
   event: ConflictEvent;
   theater: ConflictTheater | null;
   snapshot: OsintSnapshot;
+  convergenceCard?: IncidentConvergenceCard | null;
   onClose: () => void;
   onTheaterFocus: (theater: ConflictTheater) => void;
 }
@@ -92,7 +94,7 @@ const SOURCE_FAMILY_LABEL: Record<string, string> = {
   unknown: "Unspecified",
 };
 
-export default function EventDetailPanel({ event, theater, snapshot, onClose, onTheaterFocus }: EventDetailPanelProps) {
+export default function EventDetailPanel({ event, theater, snapshot, convergenceCard = null, onClose, onTheaterFocus }: EventDetailPanelProps) {
   const severity = SEVERITY_META[event.severity];
   const threatIndex = Math.round(event.intensity * 100);
   const confidence = estimateEventConfidence(event);
@@ -356,6 +358,8 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
             </p>
           </div>
         )}
+
+        <ConvergenceSection card={convergenceCard} event={event} />
 
         <RegionalIntel event={event} snapshot={snapshot} />
 
