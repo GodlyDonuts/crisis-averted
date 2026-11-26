@@ -1,12 +1,13 @@
 "use client";
 
 import { ChevronRight, Flame, X } from "lucide-react";
-import type { ConflictTheater } from "@/types/conflict";
+import type { ConflictTheater, EscalationSignal } from "@/types/conflict";
 import { formatCompact, formatRelativeTime, normalizeCategory } from "@/lib/conflictData";
 
 interface TheaterListProps {
   theaters: ConflictTheater[];
   selectedTheaterSlug: string | null;
+  surgeSignalsByTheater?: Map<string, EscalationSignal>;
   onTheaterSelect: (theater: ConflictTheater) => void;
   onClearTheater: () => void;
 }
@@ -16,7 +17,11 @@ function dominantCategory(theater: ConflictTheater): string {
   return entries[0]?.[0] ? normalizeCategory(entries[0][0]) : "Unclassified";
 }
 
-export default function TheaterList({ theaters, selectedTheaterSlug, onTheaterSelect, onClearTheater }: TheaterListProps) {
+function theaterSignalKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+export default function TheaterList({ theaters, selectedTheaterSlug, surgeSignalsByTheater, onTheaterSelect, onClearTheater }: TheaterListProps) {
   const selectedTheater = theaters.find((theater) => theater.slug === selectedTheaterSlug) ?? null;
 
   return (
@@ -78,6 +83,7 @@ export default function TheaterList({ theaters, selectedTheaterSlug, onTheaterSe
         ) : theaters.slice(0, 18).map((theater, index) => {
           const selected = theater.slug === selectedTheaterSlug;
           const intensityPct = Math.max(5, Math.round(theater.intensity * 100));
+          const surgeSignal = surgeSignalsByTheater?.get(theaterSignalKey(theater.slug)) ?? null;
           return (
             <button
               key={theater.slug}
@@ -99,9 +105,21 @@ export default function TheaterList({ theaters, selectedTheaterSlug, onTheaterSe
                     <span>·</span>
                     <span>{formatRelativeTime(theater.latestAt)}</span>
                     <span>·</span>
-                    <span className={theater.trend === "escalating" ? "text-red-200/78" : theater.trend === "cooling" ? "text-emerald-200/68" : "text-white/38"}>
-                      {theater.trend} {theater.momentum >= 1 ? "+" : ""}{Math.round((theater.momentum - 1) * 100)}%
-                    </span>
+                    {surgeSignal?.isSignal ? (
+                      <span
+                        className={surgeSignal.level === "surge-indicator" ? "text-red-200/82" : surgeSignal.level === "watch-indicator" ? "text-amber-100/78" : "text-sky-100/68"}
+                        title="Batch-8 deterministic escalation-surge statistical indicator — not a prediction"
+                      >
+                        {surgeSignal.level === "surge-indicator" ? "surge" : surgeSignal.level === "watch-indicator" ? "watch" : "uncertain"} idx {surgeSignal.indicatorScore}
+                      </span>
+                    ) : (
+                      <span
+                        className={theater.trend === "escalating" ? "text-red-200/78" : theater.trend === "cooling" ? "text-emerald-200/68" : "text-white/38"}
+                        title="Legacy recency-weighted momentum heuristic — descriptive statistical indicator, not a prediction"
+                      >
+                        {theater.trend} heuristic {theater.momentum >= 1 ? "+" : ""}{Math.round((theater.momentum - 1) * 100)}%
+                      </span>
+                    )}
                   </div>
 
                   <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-white/[0.065]">
@@ -124,7 +142,7 @@ export default function TheaterList({ theaters, selectedTheaterSlug, onTheaterSe
       </div>
 
       <div className="border-t border-white/8 px-4 py-2.5 font-mono text-[9px] uppercase tracking-[0.18em] text-white/28">
-        <span className="inline-flex items-center gap-1.5"><Flame className="h-3 w-3 text-orange-200/60" /> Ranked by intensity, recency and casualty signal</span>
+        <span className="inline-flex items-center gap-1.5"><Flame className="h-3 w-3 text-orange-200/60" /> Ranked by intensity; surge/heuristic labels are statistical indicators, not predictions</span>
       </div>
     </aside>
   );

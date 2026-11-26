@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Clock3, Cloud, Compass, Download, Hexagon, Network, Newspaper, Orbit, Pause, Plane, Play, Ship, Leaf, Radio, ScanLine, Signal, Radar, SlidersHorizontal, Tags, Waypoints, WifiOff } from "lucide-react";
+import { Binoculars, Clock3, Cloud, Compass, Download, Hexagon, Network, Newspaper, Orbit, Pause, Plane, Play, Ship, Leaf, Radio, ScanLine, Signal, Radar, SlidersHorizontal, Tags, Waypoints, WifiOff } from "lucide-react";
 import type { CategoryGroup, ConflictEvent, SeverityKey, TimelineBucket, TimeWindowKey } from "@/types/conflict";
 import type { IncidentTemporalCoverage } from "@/lib/incidentTime";
 import type { IncidentPlaybackController } from "@/hooks/useIncidentPlayback";
@@ -22,11 +22,15 @@ interface ControlDeckProps {
   corpusCoverage: IncidentTemporalCoverage;
   convergenceOpen?: boolean;
   convergenceCardCount?: number;
+  watchOpen?: boolean;
+  watchAlertCount?: number;
+  surgeSignalCount?: number;
   onTimeWindowChange: (window: TimeWindowKey) => void;
   onToggleCategoryGroup: (group: CategoryGroup) => void;
   onToggleSeverity: (severity: SeverityKey) => void;
   onToggleLayer: (layer: keyof GodEyeLayerToggles) => void;
   onToggleConvergence?: () => void;
+  onToggleWatch?: () => void;
   onAutoRotateChange: (value: boolean) => void;
   onTourActiveChange: (value: boolean) => void;
 }
@@ -132,11 +136,15 @@ export default function ControlDeck({
   corpusCoverage,
   convergenceOpen = false,
   convergenceCardCount = 0,
+  watchOpen = false,
+  watchAlertCount = 0,
+  surgeSignalCount = 0,
   onTimeWindowChange,
   onToggleCategoryGroup,
   onToggleSeverity,
   onToggleLayer,
   onToggleConvergence,
+  onToggleWatch,
   onAutoRotateChange,
   onTourActiveChange,
 }: ControlDeckProps) {
@@ -250,6 +258,24 @@ export default function ControlDeck({
               Conv
               {convergenceCardCount > 0 ? (
                 <span className="rounded-sm bg-white/[0.07] px-1 text-[9px] text-white/52">{convergenceCardCount}</span>
+              ) : null}
+            </button>
+          ) : null}
+
+          {onToggleWatch ? (
+            <button
+              type="button"
+              onClick={onToggleWatch}
+              aria-pressed={watchOpen}
+              title="Analyst watch center — local statistical surge indicators and rules, never predictions or operational warnings"
+              className={`flex h-8 items-center gap-1.5 rounded-sm border px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] transition ${watchOpen ? "border-amber-200/30 bg-amber-300/[0.1] text-amber-100" : "border-white/10 bg-white/[0.025] text-white/42 hover:text-white/72"}`}
+            >
+              <Binoculars className="h-3.5 w-3.5" />
+              Watch
+              {watchAlertCount > 0 ? (
+                <span className="rounded-sm bg-red-400/18 px-1 text-[9px] text-red-100/78">{watchAlertCount}</span>
+              ) : surgeSignalCount > 0 ? (
+                <span className="rounded-sm bg-white/[0.07] px-1 text-[9px] text-white/52">{surgeSignalCount}</span>
               ) : null}
             </button>
           ) : null}

@@ -1081,3 +1081,258 @@ export interface DomainConvergenceAnalysis {
   globalNotes: string[];
   stats: DomainConvergenceStats;
 }
+
+/* ------------------------------------------------------------------------- */
+/* Escalation-surge indicators and analyst watch rules (catalog batch 8)      */
+/* ------------------------------------------------------------------------- */
+
+/** Aggregation scopes supported by deterministic escalation-surge analysis. */
+export type EscalationGroupKind = "theater" | "region";
+
+/**
+ * Statistical change labels for the loaded incident corpus. These are indicators only:
+ * they do not predict future escalation, certify current danger, or carry operational
+ * warning authority. `uncertain-change` means the upper/lower temporal bounds admit an
+ * increase but uncertainty or evidence support is too weak for a watch/surge indicator.
+ */
+export type EscalationSignalLevel =
+  | "surge-indicator"
+  | "watch-indicator"
+  | "uncertain-change"
+  | "no-signal"
+  | "insufficient-evidence";
+
+export interface EscalationAnalysisWindow {
+  start: number;
+  endExclusive: number;
+  label: string;
+}
+
+/**
+ * Uncertainty-aware ratio bounds. `lower` uses the conservative current count over the
+ * maximum plausible baseline count; `upper` uses the maximum plausible current count over
+ * the conservative baseline count. Null plus an unbounded flag means the corresponding
+ * denominator can be zero, so no finite ratio is claimed. If both sides can be zero the
+ * ratio is undefined rather than silently smoothed into certainty.
+ */
+export interface EscalationRatioBounds {
+  defined: boolean;
+  lower: number | null;
+  upper: number | null;
+  lowerUnbounded: boolean;
+  upperUnbounded: boolean;
+}
+
+/** Deterministic metric bundle for one theater/region over recent and baseline windows. */
+export interface EscalationMetricSet {
+  currentDefiniteCount: number;
+  currentPossibleCount: number;
+  baselineDefiniteCount: number;
+  baselinePossibleCount: number;
+  /** Incidents per UTC day under definite/possible temporal membership. */
+  currentRatePerDay: { definite: number; possible: number };
+  baselineRatePerDay: { definite: number; possible: number };
+  incidentRateRatio: EscalationRatioBounds;
+  /** Severity/casualty/displacement-weighted intensity sums per day. Recency is deliberately absent. */
+  currentIntensityPerDay: { definite: number; possible: number };
+  baselineIntensityPerDay: { definite: number; possible: number };
+  intensityRatio: EscalationRatioBounds;
+  corroboratedShareCurrent: number | null;
+  corroboratedShareBaseline: number | null;
+  corroboratedShareDelta: number | null;
+  contestedShareCurrent: number | null;
+  contestedShareBaseline: number | null;
+  meanIndependentFamiliesCurrent: number | null;
+  meanIndependentFamiliesBaseline: number | null;
+  /** Definite-current incidents whose category+1° cell facet is absent even from possible baseline membership. */
+  novelCurrentCount: number;
+  novelFacetShare: number;
+  novelFacetExamples: string[];
+  /** Positive definite current activity while no incident uncertainty window intersects baseline. */
+  onsetVsBaseline: boolean;
+  /** Possible-but-not-definite memberships caused by source time uncertainty at the window boundaries. */
+  currentBoundaryAmbiguousCount: number;
+  baselineBoundaryAmbiguousCount: number;
+}
+
+/** Compact, exportable evidence reference for a surge signal or watch alert. */
+export interface EscalationEvidenceRef {
+  eventId: string;
+  title: string;
+  occurredAt: number;
+  theater: string;
+  region: string;
+  country: string;
+  category: string;
+  severity: SeverityKey;
+  casualtyMeasure: number;
+  temporalMembership: "definite" | "possible";
+  correlationConfidence: IncidentCorrelationConfidence | null;
+  independentFamilyCount: number;
+  evidenceReportCount: number;
+  evidenceMemberEventIds: string[];
+  sourceName: string | null;
+  sourceUrl: string | null;
+}
+
+/** One deterministic theater/region surge assessment. */
+export interface EscalationSignal {
+  id: string;
+  algorithmVersion: string;
+  groupKind: EscalationGroupKind;
+  groupKey: string;
+  groupLabel: string;
+  level: EscalationSignalLevel;
+  /** True for surge/watch/uncertain change cards that merit analyst review; false for quiet/insufficient groups. */
+  isSignal: boolean;
+  /** Ranking index 0..100. It is not a probability and never represents prediction confidence. */
+  indicatorScore: number;
+  /** Evidence-support index 0..100 based on temporal definiteness, baseline coverage, volume, and corroboration. */
+  evidenceSupport: number;
+  rateScore: number;
+  intensityScore: number;
+  corroborationScore: number;
+  noveltyScore: number;
+  metrics: EscalationMetricSet;
+  explanations: string[];
+  uncertaintyNotes: string[];
+  evidenceRefs: EscalationEvidenceRef[];
+  disclaimer: string;
+}
+
+export interface EscalationSurgeStats {
+  algorithmVersion: string;
+  inputIncidentCount: number;
+  invalidTimeCount: number;
+  futureExcludedCount: number;
+  analyzedIncidentCount: number;
+  retainedEvidenceReportCount: number;
+  theaterGroupCount: number;
+  regionGroupCount: number;
+  surgeIndicatorCount: number;
+  watchIndicatorCount: number;
+  uncertainChangeCount: number;
+  insufficientEvidenceCount: number;
+  boundaryAmbiguousMembershipCount: number;
+  elapsedMs: number;
+}
+
+export interface EscalationSurgeAnalysis {
+  algorithmVersion: string;
+  analysisEnd: number;
+  recentWindow: EscalationAnalysisWindow;
+  baselineWindow: EscalationAnalysisWindow;
+  /** Fraction of the baseline window overlapped by the observed corpus span. This is a conservative coverage cue, not proof of complete ingestion. */
+  baselineCoverageRatio: number;
+  corpusStart: number;
+  corpusEndExclusive: number;
+  signals: EscalationSignal[];
+  globalNotes: string[];
+  stats: EscalationSurgeStats;
+  disclaimer: string;
+}
+
+/* Analyst-defined watch rules. Rules and alert lifecycle state are static local browser data. */
+
+export type WatchRuleConditionKind =
+  | "surge-level"
+  | "incident-count"
+  | "casualty-impact"
+  | "corroborated-incident";
+
+export type WatchRuleTimeWindow = "24h" | "72h" | "7d";
+export type WatchRuleSurgeThreshold = "watch-indicator" | "surge-indicator";
+
+export interface WatchRuleFilters {
+  theater: string | null;
+  region: string | null;
+  country: string | null;
+  category: string | null;
+  /** Empty means all category groups. */
+  categoryGroups: CategoryGroup[];
+  /** Empty means all severities. */
+  severities: SeverityKey[];
+}
+
+export interface WatchRuleCondition {
+  kind: WatchRuleConditionKind;
+  /** Meaning depends on kind: incidents, casualty measure, or independent source families. Unused for surge-level. */
+  threshold: number;
+  /** Trailing evaluation window for event-based rules. Surge-level rules use the surge engine's fixed recent/baseline windows. */
+  window: WatchRuleTimeWindow;
+  surgeLevel: WatchRuleSurgeThreshold;
+}
+
+export interface WatchRule {
+  id: string;
+  version: 1;
+  name: string;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  condition: WatchRuleCondition;
+  filters: WatchRuleFilters;
+}
+
+/** Local lifecycle state keyed by alert fingerprint. Alerts themselves are recomputed; state never alters incident evidence. */
+export interface WatchAlertState {
+  fingerprint: string;
+  ruleId: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  dismissedAt: number | null;
+  snoozedUntil: number | null;
+}
+
+export type WatchAlertEmphasis = "standard" | "elevated";
+
+/** Non-destructive in-app alert instance generated by deterministic local rule evaluation. */
+export interface WatchAlert {
+  fingerprint: string;
+  algorithmVersion: string;
+  ruleId: string;
+  ruleName: string;
+  conditionKind: WatchRuleConditionKind;
+  emphasis: WatchAlertEmphasis;
+  triggeredAt: number;
+  title: string;
+  summary: string;
+  explanations: string[];
+  evidenceRefs: EscalationEvidenceRef[];
+  definiteIncidentCount: number;
+  possibleIncidentCount: number;
+  boundaryAmbiguousCount: number;
+  window: EscalationAnalysisWindow;
+  surgeSignalIds: string[];
+  disclaimer: string;
+}
+
+export interface WatchRuleEvaluation {
+  ruleId: string;
+  ruleName: string;
+  enabled: boolean;
+  triggered: boolean;
+  explanation: string;
+  definiteIncidentCount: number;
+  possibleIncidentCount: number;
+  alert: WatchAlert | null;
+}
+
+export interface WatchEvaluationStats {
+  algorithmVersion: string;
+  ruleCount: number;
+  enabledRuleCount: number;
+  disabledRuleCount: number;
+  triggeredRuleCount: number;
+  evaluatedEventCount: number;
+  elapsedMs: number;
+}
+
+export interface WatchEvaluationResult {
+  algorithmVersion: string;
+  evaluatedAt: number;
+  alerts: WatchAlert[];
+  evaluations: WatchRuleEvaluation[];
+  stats: WatchEvaluationStats;
+  disclaimer: string;
+}

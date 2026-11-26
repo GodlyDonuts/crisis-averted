@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
-import type { CategoryGroup, ConflictEvent, ConflictFilters, ConflictTheater, MilitaryAircraft, OsintAircraft, OsintVessel, SeverityKey } from "@/types/conflict";
+import type { CategoryGroup, ConflictEvent, ConflictFilters, ConflictTheater, EscalationSignal, MilitaryAircraft, OsintAircraft, OsintVessel, SeverityKey } from "@/types/conflict";
 import {
   aggregateTheaters,
   buildTimeline,
@@ -16,6 +16,9 @@ import { useConflictEvents } from "@/hooks/useConflictEvents";
 import { useIncidentPlayback } from "@/hooks/useIncidentPlayback";
 import { useOsintSnapshot } from "@/hooks/useOsintSnapshot";
 import { useDomainConvergence } from "@/hooks/useDomainConvergence";
+import { useWatchRules } from "@/hooks/useWatchRules";
+import { analyzeEscalationSurge } from "@/lib/escalationSurge";
+import { evaluateWatchRules } from "@/lib/watchRules";
 import { measureIncidentTemporalCoverage } from "@/lib/incidentTime";
 import TopCommandBar from "./TopCommandBar";
 import TheaterList from "./TheaterList";
@@ -30,6 +33,7 @@ import { TransportDetailPanel } from "./TransportDetailPanel";
 import { SourceStatusPanel } from "./SourceStatusPanel";
 import { GlobeFallback } from "./GlobeFallback";
 import { ConvergenceInspector } from "./ConvergenceInspector";
+import { WatchCenter } from "./WatchCenter";
 import BootSequence from "./BootSequence";
 import type { GodEyeFocusTarget, GodEyeLayerToggles, GodEyeVisualMode } from "./GodEyeGlobe";
 
@@ -70,6 +74,17 @@ export default function GodEyeCommandCenter() {
     [osintSnapshot.mapOfWarsEvents]
   );
   const { events, source, loading, refreshing, error, lastUpdated, correlation, paused, setPaused, refresh } = useConflictEvents(snapshotConflictEvents);
+  const {
+    ready: watchStorageReady,
+    rules: watchRules,
+    alertStates: watchAlertStates,
+    status: watchStorageStatus,
+    upsertRule: upsertWatchRule,
+    toggleRule: toggleWatchRule,
+    dismissAlert: dismissWatchAlert,
+    snoozeAlert: snoozeWatchAlert,
+    restoreAlert: restoreWatchAlert,
+  } = useWatchRules();
   const [filters, setFilters] = useState<ConflictFilters>(() => createDefaultFilters());
   const [layers, setLayers] = useState<GodEyeLayerToggles>(DEFAULT_LAYERS);
   const [visualMode, setVisualMode] = useState<GodEyeVisualMode>("cinematic");
@@ -84,6 +99,7 @@ export default function GodEyeCommandCenter() {
   const [theaterPanelOpen, setTheaterPanelOpen] = useState(true);
   const [incidentPanelOpen, setIncidentPanelOpen] = useState(true);
   const [convergenceOpen, setConvergenceOpen] = useState(false);
+  const [watchOpen, setWatchOpen] = useState(false);
   const [selectedTheaterSlug, setSelectedTheaterSlug] = useState<string | null>(null);
   const [focusTarget, setFocusTarget] = useState<GodEyeFocusTarget | null>(null);
 
@@ -117,6 +133,28 @@ export default function GodEyeCommandCenter() {
   const summary = useMemo(() => summarizeEvents(visibleEvents), [visibleEvents]);
   const timeline = useMemo(() => buildTimeline(visibleEvents, 30), [visibleEvents]);
   const corpusCoverage = useMemo(() => measureIncidentTemporalCoverage(events), [events]);
+  // Escalation analysis intentionally uses the full correlated corpus rather than the user's
+  // time-window/category lens, so an interactive filter cannot erase its own baseline. The
+  // analysis horizon is the data fetch time; one loaded corpus therefore has stable output.
+  const surgeAnalysis = useMemo(
+    () => analyzeEscalationSurge(events, lastUpdated ? { now: lastUpdated } : {}),
+    [events, lastUpdated],
+  );
+  const watchEvaluation = useMemo(
+    () => evaluateWatchRules(events, watchRules, surgeAnalysis, { now: surgeAnalysis.analysisEnd }),
+    [events, watchRules, surgeAnalysis],
+  );
+  const surgeSignalCount = useMemo(
+    () => surgeAnalysis.signals.filter((signal) => signal.isSignal).length,
+    [surgeAnalysis.signals],
+  );
+  const surgeSignalsByTheater = useMemo(() => {
+    const map = new Map<string, EscalationSignal>();
+    for (const signal of surgeAnalysis.signals) {
+      if (signal.groupKind === "theater") map.set(signal.groupKey, signal);
+    }
+    return map;
+  }, [surgeAnalysis.signals]);
   const playback = useIncidentPlayback(visibleEvents);
   // Playback is a temporal lens on map/feed rendering only: theater aggregation,
   // filter state, export scope, tour behavior, and the command summary continue to
@@ -239,6 +277,12 @@ export default function GodEyeCommandCenter() {
     });
   }, []);
 
+  const focusTheaterBySlug = useCallback((slug: string) => {
+    const normalized = slug.trim().toLowerCase().replace(/\s+/g, " ");
+    const theater = theaters.find((item) => item.slug === slug || item.slug.trim().toLowerCase().replace(/\s+/g, " ") === normalized);
+    if (theater) isolateTheater(theater);
+  }, [theaters, isolateTheater]);
+
   const clearTheater = useCallback(() => {
     setSelectedTheaterSlug(null);
     setFilters((current) => ({ ...current, theater: null }));
@@ -247,15 +291,20 @@ export default function GodEyeCommandCenter() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable='true']")) return;
       if (selectedEventId) {
         setSelectedEventId(null);
+      } else if (watchOpen) {
+        setWatchOpen(false);
+      } else if (convergenceOpen) {
+        setConvergenceOpen(false);
       } else if (filters.theater) {
         clearTheater();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [clearTheater, filters.theater, selectedEventId]);
+  }, [clearTheater, convergenceOpen, filters.theater, selectedEventId, watchOpen]);
 
   const handleTimeWindowChange = useCallback((timeWindow: ConflictFilters["timeWindow"]) => {
     setFilters((current) => ({ ...current, timeWindow }));
@@ -286,6 +335,22 @@ export default function GodEyeCommandCenter() {
   const handleToggleLayer = useCallback((layer: keyof GodEyeLayerToggles) => {
     setLayers((current) => ({ ...current, [layer]: !current[layer] }));
   }, []);
+
+  const handleToggleWatch = useCallback(() => {
+    if (!watchOpen) {
+      setConvergenceOpen(false);
+      setIncidentPanelOpen(true);
+    }
+    setWatchOpen((open) => !open);
+  }, [watchOpen]);
+
+  const handleToggleConvergence = useCallback(() => {
+    if (!convergenceOpen) {
+      setWatchOpen(false);
+      setIncidentPanelOpen(true);
+    }
+    setConvergenceOpen((open) => !open);
+  }, [convergenceOpen]);
 
   const theatersRef = useRef(theaters);
   useEffect(() => {
@@ -393,6 +458,7 @@ export default function GodEyeCommandCenter() {
           <TheaterList
             theaters={theaters}
             selectedTheaterSlug={selectedTheaterSlug}
+            surgeSignalsByTheater={surgeSignalsByTheater}
             onTheaterSelect={handleTheaterSelect}
             onClearTheater={clearTheater}
           />
@@ -430,6 +496,24 @@ export default function GodEyeCommandCenter() {
               convergenceCard={selectedConvergenceCard}
               onClose={() => setSelectedEventId(null)}
               onTheaterFocus={isolateTheater}
+            />
+          ) : watchOpen ? (
+            <WatchCenter
+              events={events}
+              surgeAnalysis={surgeAnalysis}
+              evaluation={watchEvaluation}
+              rules={watchRules}
+              alertStates={watchAlertStates}
+              storageReady={watchStorageReady}
+              storageStatus={watchStorageStatus}
+              onUpsertRule={upsertWatchRule}
+              onToggleRule={toggleWatchRule}
+              onDismissAlert={dismissWatchAlert}
+              onSnoozeAlert={snoozeWatchAlert}
+              onRestoreAlert={restoreWatchAlert}
+              onSelectEvent={handleEventSelect}
+              onFocusTheater={focusTheaterBySlug}
+              onClose={() => setWatchOpen(false)}
             />
           ) : convergenceOpen ? (
             <ConvergenceInspector
@@ -474,11 +558,15 @@ export default function GodEyeCommandCenter() {
           corpusCoverage={corpusCoverage}
           convergenceOpen={convergenceOpen}
           convergenceCardCount={convergenceCards.length}
+          watchOpen={watchOpen}
+          watchAlertCount={watchEvaluation.stats.triggeredRuleCount}
+          surgeSignalCount={surgeSignalCount}
           onTimeWindowChange={handleTimeWindowChange}
           onToggleCategoryGroup={handleToggleCategoryGroup}
           onToggleSeverity={handleToggleSeverity}
           onToggleLayer={handleToggleLayer}
-          onToggleConvergence={() => setConvergenceOpen((open) => !open)}
+          onToggleConvergence={handleToggleConvergence}
+          onToggleWatch={handleToggleWatch}
           onAutoRotateChange={setAutoRotate}
           onTourActiveChange={setTourActive}
         />
