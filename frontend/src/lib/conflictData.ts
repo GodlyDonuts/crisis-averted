@@ -317,6 +317,15 @@ export function filterConflictEvents(events: ConflictEvent[], filters: ConflictF
   });
 }
 
+export function estimateEventConfidence(event: ConflictEvent): { score: number; label: "low" | "moderate" | "high" } {
+  const precisionScore = event.precision === null ? 0.35 : event.precision <= 2 ? 1 : event.precision <= 4 ? 0.65 : 0.3;
+  const sourceScore = Math.min(1, event.sources.length / 3);
+  const verificationScore = event.verified ? 1 : 0.25;
+  const specificityScore = event.countedCasualties > 0 || event.displaced > 0 ? 0.8 : 0.5;
+  const score = Math.round((precisionScore * 0.24 + sourceScore * 0.28 + verificationScore * 0.34 + specificityScore * 0.14) * 100);
+  return { score, label: score >= 70 ? "high" : score >= 45 ? "moderate" : "low" };
+}
+
 export function summarizeEvents(events: ConflictEvent[]): ConflictSummary {
   const theaterCasualties = new Map<string, number>();
   const theaterDisplacement = new Map<string, number>();
@@ -366,6 +375,15 @@ export function aggregateTheaters(events: ConflictEvent[]): ConflictTheater[] {
 
     const representativeName = group.find((event) => event.conflict)?.conflict || normalizeTheaterName(slug);
     const sortedEvents = [...group].sort((a, b) => (b.intensity - a.intensity) || (b.occurredAt - a.occurredAt));
+    const recent72hWeight = group
+      .filter((event) => now - event.occurredAt <= 3 * 24 * 36e5)
+      .reduce((sum, event) => sum + event.intensity + Math.min(event.countedCasualties, 100) / 100, 0);
+    const priorFourDayWeight = group
+      .filter((event) => now - event.occurredAt > 3 * 24 * 36e5 && now - event.occurredAt <= 7 * 24 * 36e5)
+      .reduce((sum, event) => sum + event.intensity + Math.min(event.countedCasualties, 100) / 100, 0);
+    const comparableBaseline = priorFourDayWeight * 0.75;
+    const momentum = recent72hWeight / Math.max(0.5, comparableBaseline);
+    const trend = momentum >= 1.45 ? "escalating" : momentum <= 0.65 ? "cooling" : "stable";
 
     return {
       slug,
@@ -380,6 +398,8 @@ export function aggregateTheaters(events: ConflictEvent[]): ConflictTheater[] {
       killed: group.reduce((sum, event) => sum + event.countedCasualties, 0),
       displaced: Math.max(0, ...group.map((event) => event.displaced)),
       intensity: rawIntensity,
+      momentum,
+      trend,
       latestAt: Math.max(0, ...group.map((event) => event.occurredAt)),
       categories,
       topEvents: sortedEvents.slice(0, 5),

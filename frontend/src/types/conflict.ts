@@ -53,6 +53,8 @@ export interface ConflictTheater {
   killed: number;
   displaced: number;
   intensity: number;
+  momentum: number;
+  trend: "escalating" | "stable" | "cooling";
   latestAt: number;
   categories: Record<string, number>;
   topEvents: ConflictEvent[];

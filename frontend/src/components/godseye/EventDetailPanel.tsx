@@ -1,9 +1,9 @@
 "use client";
 
-import { BadgeCheck, Crosshair, ExternalLink, MapPin, X } from "lucide-react";
+import { BadgeCheck, Copy, Crosshair, ExternalLink, MapPin, X } from "lucide-react";
 import type { ConflictEvent, ConflictTheater, OsintSnapshot } from "@/types/conflict";
 import { RegionalIntel } from "./RegionalIntel";
-import { formatCompact, formatRelativeTime, formatUtcTime, normalizeCategory, SEVERITY_META } from "@/lib/conflictData";
+import { estimateEventConfidence, formatCompact, formatRelativeTime, formatUtcTime, normalizeCategory, SEVERITY_META } from "@/lib/conflictData";
 
 interface EventDetailPanelProps {
   event: ConflictEvent;
@@ -38,6 +38,20 @@ function DetailMetric({ label, value, accent = false }: { label: string; value: 
 export default function EventDetailPanel({ event, theater, snapshot, onClose, onTheaterFocus }: EventDetailPanelProps) {
   const severity = SEVERITY_META[event.severity];
   const threatIndex = Math.round(event.intensity * 100);
+  const confidence = estimateEventConfidence(event);
+  const copyBrief = () => {
+    const brief = [
+      `INCIDENT BRIEF — ${event.title}`,
+      `DTG: ${formatUtcTime(event.occurredAt)}`,
+      `LOCATION: ${event.lat.toFixed(4)}, ${event.lng.toFixed(4)} (${event.country})`,
+      `CATEGORY/SEVERITY: ${normalizeCategory(event.category)} / ${event.severity}`,
+      `REPORTED KILLED: ${event.killed}; COUNTED CASUALTIES: ${event.countedCasualties}; DISPLACED: ${event.displaced}`,
+      `PRIORITY SCORE: ${threatIndex}/100; CONFIDENCE: ${confidence.score}/100 (${confidence.label})`,
+      `SOURCES: ${event.sources.map((source) => `${source.name} ${source.url}`).join(" | ") || "none supplied"}`,
+      "CAVEAT: Public OSINT; not independently confirmed unless explicitly stated by sources.",
+    ].join("\n");
+    void navigator.clipboard?.writeText(brief);
+  };
 
   return (
     <aside className="godseye-panel pointer-events-auto absolute bottom-3 left-3 right-3 top-auto z-40 flex max-h-[68vh] w-auto flex-col overflow-hidden xl:bottom-[172px] xl:left-auto xl:right-4 xl:top-20 xl:max-h-none xl:w-[372px]">
@@ -60,6 +74,14 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
             </div>
             <h2 className="mt-3 text-lg font-semibold leading-snug text-white/94">{event.title}</h2>
           </div>
+          <button
+            type="button"
+            onClick={copyBrief}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-white/10 text-white/45 transition hover:border-white/20 hover:text-white"
+            aria-label="Copy incident brief"
+          >
+            <Copy className="h-4 w-4" />
+          </button>
           <button
             type="button"
             onClick={onClose}
@@ -94,6 +116,7 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
           <DetailMetric label="Counted casualties" value={event.countedCasualties > 0 ? formatCompact(event.countedCasualties) : "--"} />
           <DetailMetric label="Displaced" value={event.displaced > 0 ? formatCompact(event.displaced) : "--"} />
           <DetailMetric label="Geo precision" value={precisionLabel(event.precision)} />
+          <DetailMetric label="Confidence" value={`${confidence.score}/100 ${confidence.label}`} accent={confidence.label === "low"} />
         </div>
 
         <div className="mt-4 rounded-sm border border-white/8 bg-white/[0.022] p-3.5">

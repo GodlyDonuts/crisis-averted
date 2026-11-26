@@ -98,6 +98,10 @@ export default function TheaterList({ theaters, selectedTheaterSlug, onTheaterSe
                     <span className="truncate">{theater.region}</span>
                     <span>·</span>
                     <span>{formatRelativeTime(theater.latestAt)}</span>
+                    <span>·</span>
+                    <span className={theater.trend === "escalating" ? "text-red-200/78" : theater.trend === "cooling" ? "text-emerald-200/68" : "text-white/38"}>
+                      {theater.trend} {theater.momentum >= 1 ? "+" : ""}{Math.round((theater.momentum - 1) * 100)}%
+                    </span>
                   </div>
 
                   <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-white/[0.065]">
