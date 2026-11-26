@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BadgeCheck, RadioTower } from "lucide-react";
+import { BadgeCheck, GitMerge, RadioTower } from "lucide-react";
 import type { ConflictEvent } from "@/types/conflict";
 import { formatRelativeTime, normalizeCategory, SEVERITY_META } from "@/lib/conflictData";
 
@@ -69,12 +69,23 @@ export default function EventFeed({ events, selectedEventId, onEventSelect }: Ev
                 </h3>
                 <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[10px] text-white/34">
                   <span className="truncate uppercase tracking-[0.12em]">{event.country} · {normalizeCategory(event.category)}</span>
-                  {event.verified && (
-                    <span className="inline-flex shrink-0 items-center gap-1 text-amber-100/46">
-                      <BadgeCheck className="h-3 w-3" />
-                      Verified
-                    </span>
-                  )}
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    {event.incident && event.incident.memberCount > 1 && (
+                      <span
+                        className={`inline-flex items-center gap-1 ${event.incident.confidence === "corroborated" ? "text-emerald-200/60" : event.incident.confidence === "contested" ? "text-orange-200/66" : "text-sky-100/46"}`}
+                        title={`${event.incident.memberCount} linked reports across ${event.incident.independentFamilyCount} independent source ${event.incident.independentFamilyCount === 1 ? "family" : "families"} — ${event.incident.confidence}. Drill down for the full evidence cluster.`}
+                      >
+                        <GitMerge className="h-3 w-3" />
+                        ×{event.incident.memberCount}
+                      </span>
+                    )}
+                    {event.verified && (
+                      <span className="inline-flex items-center gap-1 text-amber-100/46">
+                        <BadgeCheck className="h-3 w-3" />
+                        Verified
+                      </span>
+                    )}
+                  </span>
                 </div>
               </div>
             </button>

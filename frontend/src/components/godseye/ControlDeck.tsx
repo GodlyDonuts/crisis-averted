@@ -66,7 +66,7 @@ function exportEvents(events: ConflictEvent[], format: "json" | "csv") {
     downloadFile(`godseye-incidents-${stamp}.json`, JSON.stringify(events, null, 2), "application/json");
     return;
   }
-  const header = ["id", "occurred_utc", "lat", "lng", "severity", "category", "country", "conflict", "killed", "counted_casualties", "displaced", "precision", "verified", "title", "sources", "ucdp_release", "ucdp_code_status", "ucdp_side_a", "ucdp_side_b", "ucdp_low", "ucdp_best", "ucdp_high", "ucdp_date_start", "ucdp_date_end", "ucdp_where_prec", "ucdp_date_prec", "ucdp_source_count", "ucdp_source_article"];
+  const header = ["id", "occurred_utc", "lat", "lng", "severity", "category", "country", "conflict", "killed", "counted_casualties", "displaced", "precision", "verified", "title", "sources", "ucdp_release", "ucdp_code_status", "ucdp_side_a", "ucdp_side_b", "ucdp_low", "ucdp_best", "ucdp_high", "ucdp_date_start", "ucdp_date_end", "ucdp_where_prec", "ucdp_date_prec", "ucdp_source_count", "ucdp_source_article", "source_family", "canonical_incident_id", "correlation_confidence", "evidence_report_count", "independent_family_count", "contradiction_kinds", "evidence_member_ids"];
   const rows = events.map((event) => [
     event.id,
     new Date(event.occurredAt).toISOString(),
@@ -96,6 +96,13 @@ function exportEvents(events: ConflictEvent[], format: "json" | "csv") {
     event.ucdp?.date_prec ?? "",
     event.ucdp?.number_of_sources ?? "",
     event.ucdp?.source_article ?? "",
+    event.sourceFamily ?? "",
+    event.incident?.canonicalEventId ?? "",
+    event.incident?.confidence ?? "",
+    event.incident?.memberCount ?? "",
+    event.incident?.independentFamilyCount ?? "",
+    (event.evidence?.contradictions ?? []).map((contradiction) => contradiction.kind).join("+"),
+    (event.evidence?.members ?? []).map((member) => member.event.id).join(" | "),
   ].map(csvCell).join(","));
   downloadFile(`godseye-incidents-${stamp}.csv`, [header.map(csvCell).join(","), ...rows].join(String.fromCharCode(10)), "text/csv");
 }

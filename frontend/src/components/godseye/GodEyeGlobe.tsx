@@ -1241,11 +1241,15 @@ export default function GodEyeGlobe({
         }
         const conflictEvent = point as ConflictEvent;
         const severity = SEVERITY_META[conflictEvent.severity];
+        const corroboration = conflictEvent.incident && conflictEvent.incident.memberCount > 1
+          ? `<div class="godseye-tooltip__meta">${conflictEvent.incident.memberCount} linked reports · ${conflictEvent.incident.independentFamilyCount} independent source ${conflictEvent.incident.independentFamilyCount === 1 ? "family" : "families"} · ${escapeHtml(conflictEvent.incident.confidence)}</div>`
+          : "";
         return `
           <div class="godseye-tooltip">
             <div class="godseye-tooltip__eyebrow" style="color:${severity.color}">${severity.label.toUpperCase()} / ${escapeHtml(normalizeCategory(conflictEvent.category)).toUpperCase()}</div>
             <div class="godseye-tooltip__title">${escapeHtml(conflictEvent.title)}</div>
             <div class="godseye-tooltip__meta">${escapeHtml(conflictEvent.country)} · ${escapeHtml(conflictEvent.conflict)} · ${formatRelativeTime(conflictEvent.occurredAt)}</div>
+            ${corroboration}
           </div>
         `;
       })

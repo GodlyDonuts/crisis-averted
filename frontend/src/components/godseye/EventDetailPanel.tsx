@@ -1,7 +1,7 @@
 "use client";
 
-import { BadgeCheck, Copy, Crosshair, ExternalLink, MapPin, X } from "lucide-react";
-import type { ConflictEvent, ConflictTheater, OsintSnapshot } from "@/types/conflict";
+import { BadgeCheck, Copy, Crosshair, ExternalLink, GitMerge, MapPin, X } from "lucide-react";
+import type { ConflictEvent, ConflictTheater, IncidentCorrelationConfidence, OsintSnapshot } from "@/types/conflict";
 import { RegionalIntel } from "./RegionalIntel";
 import { estimateEventConfidence, formatCompact, formatRelativeTime, formatUtcTime, normalizeCategory, SEVERITY_META } from "@/lib/conflictData";
 
@@ -76,6 +76,21 @@ function DetailMetric({ label, value, accent = false }: { label: string; value: 
   );
 }
 
+export const CORRELATION_CONFIDENCE_META: Record<IncidentCorrelationConfidence, { label: string; color: string; softColor: string }> = {
+  corroborated: { label: "Corroborated", color: "#30d158", softColor: "rgba(48,209,88,0.08)" },
+  "single-source": { label: "Single-source", color: "rgba(255,255,255,0.45)", softColor: "rgba(255,255,255,0.04)" },
+  inferred: { label: "Inferred linkage", color: "#64d2ff", softColor: "rgba(100,210,255,0.07)" },
+  contested: { label: "Contested", color: "#ff8a00", softColor: "rgba(255,138,0,0.09)" },
+};
+
+const SOURCE_FAMILY_LABEL: Record<string, string> = {
+  warheatmap: "WarHeatMap",
+  mapofwars: "Map of Wars",
+  ucdp: "UCDP",
+  acled: "ACLED",
+  unknown: "Unspecified",
+};
+
 export default function EventDetailPanel({ event, theater, snapshot, onClose, onTheaterFocus }: EventDetailPanelProps) {
   const severity = SEVERITY_META[event.severity];
   const threatIndex = Math.round(event.intensity * 100);
@@ -96,6 +111,12 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
       `CATEGORY/SEVERITY: ${normalizeCategory(event.category)} / ${event.severity}`,
       `REPORTED KILLED: ${event.killed}; COUNTED CASUALTIES: ${event.countedCasualties}; DISPLACED: ${event.displaced}`,
       `PRIORITY SCORE: ${threatIndex}/100; CONFIDENCE: ${confidence.score}/100 (${confidence.label})`,
+      ...(event.incident ? [
+        `CORROBORATION: ${event.incident.confidence} — ${event.incident.memberCount} retained report(s) across ${event.incident.independentFamilyCount} independent source family/families`,
+      ] : []),
+      ...(event.evidence && event.evidence.contradictions.length > 0 ? [
+        `CONTRADICTIONS: ${event.evidence.contradictions.map((item) => item.summary).join(" | ")}`,
+      ] : []),
       `SOURCES: ${event.sources.map((source) => `${source.name} ${source.url}`).join(" | ") || "none supplied"}`,
       ...(event.ucdp ? [
         `UCDP RECORD: ${event.ucdp.id} (${event.ucdp.relid || "relid unavailable"}) · release ${event.ucdp.dataset_version} · status ${event.ucdp.code_status || "unknown"}`,
@@ -250,6 +271,77 @@ export default function EventDetailPanel({ event, theater, snapshot, onClose, on
                 </p>
               )}
             </div>
+          </div>
+        )}
+
+        {event.incident && (
+          <div className="mt-4 rounded-sm border border-white/8 bg-white/[0.022] p-3.5">
+            <div className="flex items-center justify-between gap-3">
+              <p className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.22em] text-white/38">
+                <GitMerge className="h-3.5 w-3.5" /> Evidence cluster
+              </p>
+              {(() => {
+                const meta = CORRELATION_CONFIDENCE_META[event.incident.confidence];
+                return (
+                  <span
+                    className="rounded-full border px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.14em]"
+                    style={{ borderColor: `${meta.color}55`, backgroundColor: meta.softColor, color: meta.color }}
+                  >
+                    {meta.label}
+                  </span>
+                );
+              })()}
+            </div>
+            <p className="mt-2.5 text-[11.5px] leading-relaxed text-white/52">
+              {event.evidence?.confidenceReason ?? "No additional report met the deterministic correlation threshold; absence of corroboration is a coverage statement, not a dismissal."}
+            </p>
+            {event.evidence && (
+              <>
+                <p className="mt-2 font-mono text-[9px] uppercase tracking-[0.14em] text-white/30">
+                  {event.evidence.memberCount} reports retained in full across {event.evidence.independentFamilyCount} independent source {event.evidence.independentFamilyCount === 1 ? "family" : "families"} — correlation never deletes source records
+                </p>
+                {event.evidence.contradictions.length > 0 && (
+                  <div className="mt-2.5 space-y-1.5">
+                    {event.evidence.contradictions.map((contradiction) => (
+                      <p key={`${contradiction.kind}-${contradiction.memberEventIds.join("-")}`} className="rounded-sm border border-amber-200/14 bg-amber-300/[0.05] px-2.5 py-2 font-mono text-[9.5px] uppercase leading-relaxed tracking-[0.08em] text-amber-100/62">
+                        {contradiction.kind} contradiction — {contradiction.summary}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                <div className="mt-3 space-y-2">
+                  {event.evidence.members.map((member) => (
+                    <details key={member.event.id} className="rounded-sm border border-white/8 bg-black/18 px-2.5 py-2">
+                      <summary className="cursor-pointer list-none">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="rounded-sm border border-white/12 bg-white/[0.04] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-white/56">
+                            {SOURCE_FAMILY_LABEL[member.sourceFamily] ?? member.sourceFamily}
+                          </span>
+                          <span className="font-mono text-[9px] text-white/32">score {member.correlationScore.toFixed(2)}</span>
+                        </div>
+                        <p className="mt-1.5 text-[11.5px] leading-snug text-white/66">{member.event.title}</p>
+                        <p className="mt-1 font-mono text-[9px] uppercase tracking-[0.1em] text-white/30">
+                          {formatRelativeTime(member.event.occurredAt)} · {member.event.killed > 0 ? `${member.event.killed} reported killed` : "no positive toll"} · correlation rationale inside
+                        </p>
+                      </summary>
+                      <div className="mt-2 space-y-1 border-l border-white/10 pl-2.5">
+                        {member.rationale.map((line) => (
+                          <p key={line} className="font-mono text-[9px] leading-relaxed text-white/40">{line}</p>
+                        ))}
+                        {member.event.sourceUrl && (
+                          <a href={member.event.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 pt-1 font-mono text-[9px] uppercase tracking-[0.1em] text-sky-100/50 underline decoration-sky-100/20 underline-offset-2 hover:text-sky-100/80">
+                            {member.event.sourceName || "source record"} <ExternalLink className="h-2.5 w-2.5" />
+                          </a>
+                        )}
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </>
+            )}
+            <p className="mt-2.5 font-mono text-[8.5px] uppercase leading-relaxed tracking-[0.1em] text-white/24">
+              Deterministic correlation {event.evidence?.algorithmVersion ?? "incident-correlation-v1"}: spatial, temporal, actor, title/location, fatality, and source-identity evidence only. Linkage is an evidence-preserving inference, never a claim of identity.
+            </p>
           </div>
         )}
 

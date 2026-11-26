@@ -3,8 +3,10 @@ import type {
   ConflictEvent,
   ConflictFilters,
   ConflictSource,
+  ConflictSourceFamily,
   ConflictSummary,
   ConflictTheater,
+  IncidentCorrelationStats,
   MapOfWarsRawEvent,
   SeverityKey,
   TimelineBucket,
@@ -12,6 +14,7 @@ import type {
   WarHeatmapRawEvent,
 } from "@/types/conflict";
 import { assetPath } from "@/lib/assets";
+import { correlateConflictEvents } from "@/lib/incidentCorrelation";
 
 const LIVE_EVENTS_URL = "https://warheatmap.app/functions/eventsLite";
 const FALLBACK_EVENTS_URL = assetPath("/data/conflict-fallback.json");
@@ -100,12 +103,16 @@ export function normalizeMapOfWarsEvent(raw: MapOfWarsRawEvent): ConflictEvent |
   const intensity = clamp01(SEVERITY_META[severity].rank / 4 * 0.58 + clamp01(Math.log10(1 + uncertaintyAwareFatalities) / 2.5) * 0.25 + recencyBoost * 0.17);
   const rawUcdpIdMatch = raw.id.match(/^ucdp:(\d+)$/);
   const canonicalUcdpId = ucdp?.id ?? (rawUcdpIdMatch ? Number(rawUcdpIdMatch[1]) : null);
+  // Publisher-family tagging feeds cross-source correlation: canonical UCDP ids (nested official
+  // metadata or lattice ids) are curated UCDP content; ACLED rows carry their own id namespace;
+  // everything else in the lattice is Map of Wars editorial records.
+  const sourceFamily: ConflictSourceFamily = canonicalUcdpId ? "ucdp" : raw.id.startsWith("acled-") || raw.source === "ACLED" ? "acled" : "mapofwars";
   return {
     id: canonicalUcdpId ? `ucdp:${canonicalUcdpId}` : `mow-${raw.id}`, lat: raw.lat, lng: raw.lon, precision: ucdp?.where_prec ?? null, severity, category,
     categoryGroup: CATEGORY_GROUP_MAP[category] ?? "security", date: ucdp?.date_end || new Date(occurredAt).toISOString().slice(0, 10), occurredAt,
     updatedAt: occurredAt, killed: casualties, countedCasualties: casualties, displaced: 0, country, conflict, theater,
     region: ucdp?.region || "Global", title: raw.note || title, detail: raw.detail || null, verified: ucdp ? ucdp.code_status?.toLowerCase() === "clear" : raw.source === "UCDP", sourceName: raw.source || null, sourceUrl: raw.url || null,
-    sources: raw.url ? [{ name: raw.source || "Map of Wars", url: raw.url }] : [], intensity,
+    sources: raw.url ? [{ name: raw.source || "Map of Wars", url: raw.url }] : [], intensity, sourceFamily,
     ...(ucdp ? { ucdp } : {}),
   };
 }
@@ -206,43 +213,20 @@ export function normalizeWarHeatmapEvent(raw: WarHeatmapRawEvent): ConflictEvent
     sourceUrl: raw.su || null,
     sources,
     intensity,
+    sourceFamily: "warheatmap",
   };
 }
 
-function normalizedTitleKey(title: string): string {
-  return title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
-function approximateDistanceKm(a: ConflictEvent, b: ConflictEvent): number {
-  const lat1 = a.lat * Math.PI / 180;
-  const lat2 = b.lat * Math.PI / 180;
-  const dLat = lat2 - lat1;
-  const dLng = (b.lng - a.lng) * Math.PI / 180;
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
-  return 6371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
-}
-
-export function dedupeConflictEvents(events: ConflictEvent[]): ConflictEvent[] {
-  const kept: ConflictEvent[] = [];
-  const seenIds = new Set<string>();
-  const byTitle = new Map<string, ConflictEvent[]>();
-  for (const event of [...events].sort((a, b) => b.intensity - a.intensity || b.occurredAt - a.occurredAt)) {
-    if (seenIds.has(event.id)) continue;
-    seenIds.add(event.id);
-    const titleKey = normalizedTitleKey(event.title);
-    const candidates = titleKey.length > 12 ? byTitle.get(titleKey) ?? [] : [];
-    const duplicate = candidates.some((existing) =>
-      Math.abs(existing.occurredAt - event.occurredAt) <= 24 * 36e5 &&
-      approximateDistanceKm(existing, event) <= 35
-    );
-    if (duplicate) continue;
-    kept.push(event);
-    if (titleKey.length > 12) {
-      candidates.push(event);
-      byTitle.set(titleKey, candidates);
-    }
-  }
-  return kept.sort((a, b) => b.occurredAt - a.occurredAt);
+/**
+ * Canonical incident assembly. The pre-batch-5 implementation silently dropped rows whose
+ * normalized title, day, and 35 km fix coincided — destroying potentially independent reports
+ * with no provenance. The correlation pass replaces that behavior: every record is retained,
+ * probable duplicates become evidence members of a canonical incident with deterministic
+ * rationale, and the statistics of the pass are exposed for source-status transparency.
+ */
+function correlateWithCap(events: ConflictEvent[], cap: number): { events: ConflictEvent[]; correlation: IncidentCorrelationStats } {
+  const correlated = correlateConflictEvents(events);
+  return { events: correlated.incidents.slice(0, cap), correlation: correlated.stats };
 }
 
 export interface ConflictDataResult {
@@ -250,6 +234,7 @@ export interface ConflictDataResult {
   source: "live" | "fallback";
   error: string | null;
   fetchedAt: number;
+  correlation: IncidentCorrelationStats;
 }
 
 async function fetchJsonWithTimeout(url: string, timeoutMs: number): Promise<unknown> {
@@ -284,18 +269,24 @@ export async function loadConflictEvents(snapshotEvents: ConflictEvent[] = []): 
   } else if (warHeatmap.status === "rejected") errors.push(`WarHeatMap: ${warHeatmap.reason instanceof Error ? warHeatmap.reason.message : "unavailable"}`);
 
   if (liveEventCount > 0) {
-    return { events: dedupeConflictEvents(events).slice(0, 2600), source: "live", error: errors.join(" · ") || null, fetchedAt };
+    return { ...correlateWithCap(events, 2600), source: "live", error: errors.join(" · ") || null, fetchedAt };
   }
   if (events.length > 0) {
-    return { events: dedupeConflictEvents(events).slice(0, 2600), source: "fallback", error: errors.join(" · ") || "Using cached OSINT snapshot", fetchedAt };
+    return { ...correlateWithCap(events, 2600), source: "fallback", error: errors.join(" · ") || "Using cached OSINT snapshot", fetchedAt };
   }
 
   try {
     const payload = await fetchJsonWithTimeout(FALLBACK_EVENTS_URL, 8000) as { events?: WarHeatmapRawEvent[] };
     const fallbackEvents = (payload.events ?? []).map(normalizeWarHeatmapEvent).filter((event): event is ConflictEvent => event !== null);
-    return { events: dedupeConflictEvents([...fallbackEvents, ...snapshotEvents]), source: "fallback", error: errors.join(" · ") || "Live feeds unavailable", fetchedAt };
+    return { ...correlateWithCap([...fallbackEvents, ...snapshotEvents], 2600), source: "fallback", error: errors.join(" · ") || "Live feeds unavailable", fetchedAt };
   } catch (fallbackError) {
-    return { events: [], source: "fallback", error: fallbackError instanceof Error ? fallbackError.message : "Unable to load conflict data", fetchedAt };
+    return {
+      events: [],
+      source: "fallback",
+      error: fallbackError instanceof Error ? fallbackError.message : "Unable to load conflict data",
+      fetchedAt,
+      correlation: correlateConflictEvents([]).stats,
+    };
   }
 }
 

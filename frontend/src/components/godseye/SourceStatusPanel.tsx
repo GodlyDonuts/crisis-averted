@@ -1,7 +1,7 @@
 "use client";
 
 import { Activity, AlertTriangle, Database, X } from "lucide-react";
-import type { NvdConfiguration, NvdCvssMetric, OsintSnapshot } from "@/types/conflict";
+import type { IncidentCorrelationStats, NvdConfiguration, NvdCvssMetric, OsintSnapshot } from "@/types/conflict";
 import { formatRelativeTime } from "@/lib/conflictData";
 
 interface SourceStatusPanelProps {
@@ -9,6 +9,7 @@ interface SourceStatusPanelProps {
   conflictSource: "live" | "fallback" | null;
   conflictError: string | null;
   lastUpdated: number | null;
+  correlation?: IncidentCorrelationStats | null;
   onClose: () => void;
 }
 
@@ -82,7 +83,7 @@ function Row({ label, value, warn = false }: { label: string; value: string; war
   );
 }
 
-export function SourceStatusPanel({ snapshot, conflictSource, conflictError, lastUpdated, onClose }: SourceStatusPanelProps) {
+export function SourceStatusPanel({ snapshot, conflictSource, conflictError, lastUpdated, correlation, onClose }: SourceStatusPanelProps) {
   const snapshotAge = snapshot.fetchedAt ? formatRelativeTime(Date.parse(snapshot.fetchedAt)) : "not loaded";
   const outageMeta = snapshot.internetOutageMeta;
   const outageWindowEnd = outageMeta?.queryWindow.until ? formatRelativeTime(outageMeta.queryWindow.until * 1000) : "unknown";
@@ -141,6 +142,23 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
         <Row label="IODA outage detections" value={outageValue} warn={outageMeta?.status !== "ok"} />
         <Row label="IODA query window" value={`${outageMeta ? `${Math.round(outageMeta.queryWindow.lookbackSeconds / 3600)}h ending ${outageWindowEnd}` : "not loaded"}`} />
         <Row label="Map of Wars records" value={String(snapshot.mapOfWarsEvents.length)} />
+        {correlation ? (
+          <>
+            <Row
+              label="Canonical incidents"
+              value={`${correlation.incidentCount} from ${correlation.inputRecordCount} records · ${correlation.multiMemberClusterCount} evidence clusters`}
+            />
+            <Row
+              label="Correlation confidence"
+              value={`${correlation.corroboratedClusterCount} corroborated · ${correlation.inferredClusterCount} inferred · ${correlation.contestedClusterCount} contested`}
+              warn={correlation.contestedClusterCount > 0}
+            />
+            <Row
+              label="Correlation integrity"
+              value={`${correlation.correlatedEvidenceRecordCount} reports retained as evidence · ${correlation.exactDuplicateRecordCount} exact re-ingestions · ${correlation.elapsedMs} ms`}
+            />
+          </>
+        ) : null}
         <Row label="GDELT geo news" value={gdeltGeoValue} warn={gdeltGeoMeta?.status !== "ok"} />
         <Row label="GDELT geo omissions" value={gdeltGeoMeta ? `${gdeltGeoMeta.omittedMentionCount} accounted · ${gdeltGeoMeta.uniqueArticleCount} articles/${gdeltGeoMeta.uniqueLocationCount} locations` : "not loaded"} />
         <Row label="UCDP official events" value={ucdpValue} warn={ucdpMeta?.status !== "ok"} />

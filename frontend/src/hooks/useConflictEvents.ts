@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { loadConflictEvents } from "@/lib/conflictData";
-import type { ConflictEvent } from "@/types/conflict";
+import type { ConflictEvent, IncidentCorrelationStats } from "@/types/conflict";
 
 const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -13,6 +13,7 @@ interface ConflictEventsState {
   refreshing: boolean;
   error: string | null;
   lastUpdated: number | null;
+  correlation: IncidentCorrelationStats | null;
   paused: boolean;
   setPaused: (paused: boolean) => void;
   refresh: () => Promise<void>;
@@ -25,6 +26,7 @@ export function useConflictEvents(snapshotEvents: ConflictEvent[] = []): Conflic
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  const [correlation, setCorrelation] = useState<IncidentCorrelationStats | null>(null);
   const [paused, setPaused] = useState(false);
   const mountedRef = useRef(true);
   const requestSeqRef = useRef(0);
@@ -39,6 +41,7 @@ export function useConflictEvents(snapshotEvents: ConflictEvent[] = []): Conflic
       setSource(result.source);
       setError(result.error);
       setLastUpdated(result.fetchedAt);
+      setCorrelation(result.correlation);
     } catch (err) {
       if (!mountedRef.current || requestId !== requestSeqRef.current) return;
       setError(err instanceof Error ? err.message : "Unable to refresh conflict intelligence");
@@ -60,5 +63,5 @@ export function useConflictEvents(snapshotEvents: ConflictEvent[] = []): Conflic
     };
   }, [refresh, paused]);
 
-  return { events, source, loading, refreshing, error, lastUpdated, paused, setPaused, refresh };
+  return { events, source, loading, refreshing, error, lastUpdated, correlation, paused, setPaused, refresh };
 }

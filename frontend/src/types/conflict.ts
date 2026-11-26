@@ -62,6 +62,85 @@ export interface UcdpGedEventMetadata {
   dataset_release: string;
 }
 
+/**
+ * Publisher family a conflict record originates from. Correlation treats records from
+ * different families as independent evidence; records sharing a family are not independent
+ * corroboration. "unknown" is the conservative fallback for untagged legacy records and is
+ * never assumed independent of any other family.
+ */
+export type ConflictSourceFamily = "warheatmap" | "mapofwars" | "ucdp" | "acled" | "unknown";
+
+/**
+ * Evidentiary status of a canonical incident, derived from its evidence cluster:
+ * - corroborated: at least two independent source families report the incident and no
+ *   material contradiction was detected between their records.
+ * - single-source: the incident rests on one source family only (typically a lone record);
+ *   nothing independent corroborates it yet. This is a coverage statement, not a dismissal.
+ * - inferred: multiple records were algorithmically grouped, but they all belong to a single
+ *   source family, so the grouping is an inference about duplicate reporting rather than
+ *   independent corroboration.
+ * - contested: linked records materially disagree (fatalities, actors, or location spread).
+ *   Contested takes precedence over corroborated because the disagreement must stay visible.
+ */
+export type IncidentCorrelationConfidence = "corroborated" | "single-source" | "inferred" | "contested";
+
+export type IncidentContradictionKind = "fatalities" | "actors" | "location";
+
+export interface IncidentContradiction {
+  kind: IncidentContradictionKind;
+  /** Deterministic human-readable explanation, e.g. which values disagree across which families. */
+  summary: string;
+  memberEventIds: string[];
+}
+
+/** One retained source record inside an evidence cluster. The full event is embedded so no report is ever discarded. */
+export interface IncidentEvidenceMember {
+  event: ConflictEvent;
+  sourceFamily: ConflictSourceFamily;
+  /** Pairwise correlation score of this record against the canonical representative, 0..1. */
+  correlationScore: number;
+  /** Ordered deterministic explanations of the evidence factors behind the score. */
+  rationale: string[];
+}
+
+/**
+ * Canonical-incident evidence cluster. Attached only to canonical representatives and only
+ * when at least one additional report was correlated. `members` deliberately excludes the
+ * canonical record itself: the canonical is the carrying event, and embedding it would create
+ * a circular structure. Every correlated source record is retained here with provenance,
+ * pairwise scores, and rationale — correlation never silently deletes a report.
+ */
+export interface IncidentEvidenceCluster {
+  clusterId: string;
+  canonicalEventId: string;
+  algorithmVersion: string;
+  confidence: IncidentCorrelationConfidence;
+  /** One-line deterministic explanation of why this confidence label was assigned. */
+  confidenceReason: string;
+  sourceFamilies: ConflictSourceFamily[];
+  independentFamilyCount: number;
+  /** Total records in the cluster including the canonical representative. */
+  memberCount: number;
+  contradictions: IncidentContradiction[];
+  members: IncidentEvidenceMember[];
+}
+
+/**
+ * Lightweight membership summary attached to every correlated incident (canonical or not).
+ * Survives even when the full evidence cluster is not attached, so feed/globe/export views
+ * can display corroboration state without walking member lists.
+ */
+export interface IncidentMembership {
+  clusterId: string;
+  canonicalEventId: string;
+  isCanonical: boolean;
+  correlationScore: number;
+  confidence: IncidentCorrelationConfidence;
+  memberCount: number;
+  independentFamilyCount: number;
+  rationale: string[];
+}
+
 export interface ConflictEvent {
   id: string;
   lat: number;
@@ -88,6 +167,31 @@ export interface ConflictEvent {
   sources: ConflictSource[];
   intensity: number;
   ucdp?: UcdpGedEventMetadata;
+  /** Publisher family assigned at normalization time; legacy records may omit it and are resolved as "unknown". */
+  sourceFamily?: ConflictSourceFamily;
+  /** Canonical-incident membership summary, present after the correlation pass. */
+  incident?: IncidentMembership;
+  /** Evidence cluster drill-down, present only on canonical representatives that absorbed at least one additional report. */
+  evidence?: IncidentEvidenceCluster;
+}
+
+/** Deterministic statistics of one correlation pass, exposed for source-status transparency. */
+export interface IncidentCorrelationStats {
+  algorithmVersion: string;
+  inputRecordCount: number;
+  exactDuplicateRecordCount: number;
+  correlationEligibleRecordCount: number;
+  ineligibleRecordCount: number;
+  incidentCount: number;
+  multiMemberClusterCount: number;
+  correlatedEvidenceRecordCount: number;
+  contestedClusterCount: number;
+  corroboratedClusterCount: number;
+  inferredClusterCount: number;
+  singleSourceClusterCount: number;
+  candidatePairCount: number;
+  evaluatedPairCount: number;
+  elapsedMs: number;
 }
 
 export interface ConflictTheater {

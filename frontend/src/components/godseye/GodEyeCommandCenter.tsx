@@ -65,7 +65,7 @@ export default function GodEyeCommandCenter() {
     () => osintSnapshot.mapOfWarsEvents.map(normalizeMapOfWarsEvent).filter((event): event is ConflictEvent => event !== null),
     [osintSnapshot.mapOfWarsEvents]
   );
-  const { events, source, loading, refreshing, error, lastUpdated, paused, setPaused, refresh } = useConflictEvents(snapshotConflictEvents);
+  const { events, source, loading, refreshing, error, lastUpdated, correlation, paused, setPaused, refresh } = useConflictEvents(snapshotConflictEvents);
   const [filters, setFilters] = useState<ConflictFilters>(() => createDefaultFilters());
   const [layers, setLayers] = useState<GodEyeLayerToggles>(DEFAULT_LAYERS);
   const [visualMode, setVisualMode] = useState<GodEyeVisualMode>("cinematic");
@@ -345,6 +345,7 @@ export default function GodEyeCommandCenter() {
             conflictSource={source}
             conflictError={error}
             lastUpdated={lastUpdated}
+            correlation={correlation}
             onClose={() => setSourcePanelOpen(false)}
           />
         ) : null}
