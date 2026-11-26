@@ -371,6 +371,34 @@ body {
     linear-gradient(90deg, rgba(1, 5, 12, 0.48), transparent 18%, transparent 82%, rgba(1, 5, 12, 0.48));
 }
 
+/* Adaptive CSS chrome: the globe wrapper publishes the effective render profile as data
+   attributes, so decorative compositing follows the same budget as the WebGL layers.
+   mix-blend-mode compositing and multi-stop gradient repaint cost real frame time on
+   constrained devices; the scanline overlay is purely ornamental and is dropped first. */
+[data-scanlines="off"] .godseye-scanlines,
+[data-reduced-effects="true"] .godseye-scanlines {
+  display: none;
+}
+
+[data-vignette="off"] .godseye-vignette {
+  background:
+    radial-gradient(circle at center, transparent 52%, rgba(0, 0, 0, 0.42) 100%);
+}
+
+[data-html-pulse="off"] .godseye-alert-marker__pulse,
+[data-reduced-effects="true"] .godseye-alert-marker__pulse {
+  animation: none;
+  opacity: 0.55;
+  transform: scale(1.35);
+}
+
+[data-render-quality="minimal"] .godseye-alert-marker--selected::before,
+[data-render-quality="minimal"] .godseye-reticle,
+[data-reduced-effects="true"] .godseye-alert-marker--selected::before,
+[data-reduced-effects="true"] .godseye-reticle {
+  animation: none;
+}
+
 .godseye-tooltip {
   width: 280px;
   border: 1px solid rgba(214, 168, 79, 0.22);

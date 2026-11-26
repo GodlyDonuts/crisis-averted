@@ -306,16 +306,33 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
           <div className="mt-2 space-y-1.5 text-[11px] leading-relaxed text-white/54">
             <p>
               {renderStatus.detailLabel} · {renderStatus.adaptationLabel} · quality {renderStatus.qualityTier} · pixel ratio {renderStatus.pixelRatio.toFixed(2)} ×
-              {renderStatus.frameP80Ms ? ` · p80 frame ${renderStatus.frameP80Ms.toFixed(1)} ms` : " · frame budget warming up"}.
+              {renderStatus.frameP80Ms ? ` · p80 frame ${renderStatus.frameP80Ms.toFixed(1)} ms over ${renderStatus.frameWindows} measurement window${renderStatus.frameWindows === 1 ? "" : "s"}` : " · frame budget warming up"}.
             </p>
             <p>
-              Rendering {renderStatus.renderedTotal.toLocaleString()} adaptive objects across accounted layers; {renderStatus.omittedTotal.toLocaleString()} records are omitted from this render only and remain in filtering, playback, inspection, permalink, and export state. {renderStatus.batchingLabel}.
+              Rendering {renderStatus.renderedTotal.toLocaleString()} adaptive objects in enabled layers; {renderStatus.omittedTotal.toLocaleString()} source records are omitted by adaptive culling in those layers. Omission is render-only: every record remains in filtering, playback, inspection, permalink, and export state. {renderStatus.batchingLabel}.
             </p>
             <details className="rounded-sm border border-white/8 bg-white/[0.025] px-2 py-1.5">
-              <summary className="cursor-pointer font-mono text-[9px] uppercase tracking-[0.14em] text-white/38 hover:text-white/62">Exact adaptive render counts</summary>
-              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[9px] text-white/42">
+              <summary className="cursor-pointer font-mono text-[9px] uppercase tracking-[0.14em] text-white/38 hover:text-white/62">Exact per-layer adaptive counts</summary>
+              <div className="mt-2 space-y-1 font-mono text-[9px] leading-relaxed text-white/42">
                 {Object.entries(renderStatus.accounts).map(([key, account]) => (
-                  <div key={key} className="flex justify-between gap-2"><span>{key}</span><span>{account.rendered}/{account.total}{account.omitted ? ` · ${account.omitted} omitted` : ""}</span></div>
+                  <div key={key}>
+                    <div className="flex justify-between gap-2">
+                      <span>{key}{account.layerEnabled === false ? " · layer off" : ""}</span>
+                      <span>
+                        {account.layerEnabled === false ? "off" : `${account.rendered}/${account.total}`}
+                        {account.layerEnabled !== false && account.omitted ? ` · ${account.omitted} omitted` : ""}
+                      </span>
+                    </div>
+                    {account.layerEnabled !== false && account.omitted > 0 ? (
+                      <div className="pl-2 text-white/28">
+                        {[
+                          typeof account.cap === "number" ? `cap ${account.cap}` : null,
+                          typeof account.outsideViewport === "number" && account.outsideViewport > 0 ? `${account.outsideViewport} outside viewport` : null,
+                          typeof account.forcedIncluded === "number" && account.forcedIncluded > 0 ? `${account.forcedIncluded} preserved selection${account.forcedIncluded === 1 ? "" : "s"}` : null,
+                        ].filter(Boolean).join(" · ") || "adaptive pipeline"}
+                      </div>
+                    ) : null}
+                  </div>
                 ))}
               </div>
             </details>

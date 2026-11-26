@@ -50,6 +50,9 @@ export interface GlobeRenderQualityProfile {
   ringAnimation: RingAnimationMode;
   htmlPulse: boolean;
   scanlines: boolean;
+  /** Whether signal-arc dash animation runs. Static arcs still render; only the flow animation stops. */
+  animateArcs: boolean;
+  vignette: boolean;
 }
 
 export const RENDER_QUALITY_TIERS: RenderQualityTier[] = ["full", "balanced", "constrained", "minimal"];
@@ -73,6 +76,17 @@ export function renderDetailLabel(detailLevel: RenderDetailLevel): string {
   if (detailLevel === 2) return "local detail";
   if (detailLevel === 1) return "regional detail";
   return "global overview";
+}
+
+/**
+ * Orbital propagation cadence by tier. Satellites move slowly enough that position freshness
+ * below a few seconds is imperceptible at cartographic scale, while every propagation round
+ * forces a particle-buffer rebake; constrained devices trade freshness for frame cost.
+ */
+export function satellitePropagationIntervalMs(tier: RenderQualityTier): number {
+  if (tier === "minimal") return 30000;
+  if (tier === "constrained") return 20000;
+  return 10000;
 }
 
 const BASE_CAPS: Record<RenderDetailLevel, GlobeRenderCaps> = {
@@ -192,6 +206,8 @@ const TRACK_SAMPLE_COUNT: Record<RenderQualityTier, number> = { full: 8, balance
 const RING_ANIMATION: Record<RenderQualityTier, RingAnimationMode> = { full: "animated", balanced: "animated", constrained: "slow", minimal: "static" };
 const HTML_PULSE: Record<RenderQualityTier, boolean> = { full: true, balanced: true, constrained: false, minimal: false };
 const SCANLINES: Record<RenderQualityTier, boolean> = { full: true, balanced: true, constrained: false, minimal: false };
+const ANIMATE_ARCS: Record<RenderQualityTier, boolean> = { full: true, balanced: true, constrained: true, minimal: false };
+const VIGNETTE: Record<RenderQualityTier, boolean> = { full: true, balanced: true, constrained: true, minimal: false };
 
 export function globeRenderQualityProfile(tier: RenderQualityTier, detailLevel: RenderDetailLevel): GlobeRenderQualityProfile {
   return {
@@ -217,6 +233,8 @@ export function globeRenderQualityProfile(tier: RenderQualityTier, detailLevel: 
     ringAnimation: RING_ANIMATION[tier],
     htmlPulse: HTML_PULSE[tier],
     scanlines: SCANLINES[tier],
+    animateArcs: ANIMATE_ARCS[tier],
+    vignette: VIGNETTE[tier],
   };
 }
 
@@ -277,6 +295,15 @@ export interface ViewportSelectionOptions<T> {
   viewportRadiusDegrees?: number | null;
   /** Objects that must remain inspectable even when outside the cap or viewport, such as the current selection. */
   preserve?: T[];
+  /**
+   * Optional logical-entity key used to match preserved records against the input collection.
+   * Feeds refresh object identities every few minutes: without keys, a preserved record that is
+   * still present in the input under a fresh object identity would render twice (once as the
+   * stale preserved overlay, once as a regular viewport candidate). When a key match exists the
+   * fresh input record is force-included instead, so accounting and rendering stay truthful.
+   * Keys may be object identities, strings, or numbers; identity matching is the fallback.
+   */
+  keyOf?: (item: T) => unknown;
 }
 
 export interface AdaptiveViewportSelection<T> {
@@ -295,6 +322,11 @@ export interface AdaptiveViewportSelection<T> {
 /**
  * Selects the first viewport-relevant records in the caller-supplied priority order.
  * The algorithm is deliberately deterministic: no sampling, randomness, or silent dropping.
+ *
+ * Preservation semantics: each distinct preserved record is matched against the input first by
+ * `keyOf` (when supplied) and otherwise by object identity. A matched input record is rendered
+ * in place of the preserved copy — never twice — and counts as source-rendered; an unmatched
+ * preserved record renders as a transparent overlay outside the input accounting.
  */
 export function selectViewportAdaptiveItems<T extends GeoPointLike>(
   items: readonly T[],
@@ -304,18 +336,42 @@ export function selectViewportAdaptiveItems<T extends GeoPointLike>(
   const radius = options.viewportRadiusDegrees === undefined
     ? VIEWPORT_RADIUS_BY_DETAIL[options.detailLevel]
     : options.viewportRadiusDegrees;
+  const keyOf = options.keyOf;
+
   const preserved: T[] = [];
-  const preservedSet = new Set<T>();
+  const seenPreservedKeys = new Set<unknown>();
   for (const item of options.preserve ?? []) {
-    if (!preservedSet.has(item)) {
-      preservedSet.add(item);
+    const key = keyOf ? keyOf(item) : item;
+    if (!seenPreservedKeys.has(key)) {
+      seenPreservedKeys.add(key);
       preserved.push(item);
     }
   }
 
-  const inputSet = new Set(items);
-  let forcedPresentInInput = 0;
-  for (const item of preserved) if (inputSet.has(item)) forcedPresentInInput += 1;
+  const inputByKey = new Map<unknown, T>();
+  if (keyOf) {
+    for (const item of items) {
+      const key = keyOf(item);
+      if (!inputByKey.has(key)) inputByKey.set(key, item);
+    }
+  }
+  const inputSet = keyOf ? null : new Set(items);
+
+  // Resolve each preserved record to the record that should actually render: the fresh input
+  // record when one exists for the same logical entity, otherwise the preserved copy itself.
+  const forcedInputItems = new Set<T>();
+  const preservedRenderOrder: T[] = [];
+  for (const item of preserved) {
+    const match = keyOf ? inputByKey.get(keyOf(item)) : inputSet?.has(item) ? item : undefined;
+    if (match !== undefined) {
+      if (!forcedInputItems.has(match)) {
+        forcedInputItems.add(match);
+        preservedRenderOrder.push(match);
+      }
+    } else {
+      preservedRenderOrder.push(item);
+    }
+  }
 
   const regular: T[] = [];
   let viewportCandidates = 0;
@@ -326,12 +382,12 @@ export function selectViewportAdaptiveItems<T extends GeoPointLike>(
       || viewportDistanceDegrees(item.lat, item.lng, options.focusLat, options.focusLng) <= radius;
     if (inViewport) viewportCandidates += 1;
     else outsideViewport += 1;
-    if (preservedSet.has(item)) continue;
+    if (forcedInputItems.has(item)) continue;
     if (inViewport && regular.length < cap) regular.push(item);
   }
 
-  const selected = [...preserved, ...regular];
-  const sourceRendered = regular.length + forcedPresentInInput;
+  const selected = [...preservedRenderOrder, ...regular];
+  const sourceRendered = regular.length + forcedInputItems.size;
   return {
     selected,
     total: items.length,
@@ -380,6 +436,8 @@ export function selectAdaptiveEvents<T extends RenderRankedEvent>(
     detailLevel,
     cap,
     preserve,
+    // Incident records carry stable ids across feed refreshes; fall back to object identity.
+    keyOf: (item) => item.id ?? item,
   });
 }
 
@@ -525,6 +583,40 @@ export function particleSizeForPointRadius(radiusDegrees: number): number {
   return Math.max(0.055, Math.round(cylinderDiameter * 1.15 * 1000) / 1000);
 }
 
+type TaggedGlobeObject<T extends object, Kind extends string> = T & { objectKind: Kind };
+const globeObjectKindCache = new WeakMap<object, Map<string, object>>();
+const globeObjectSourceCache = new WeakMap<object, object>();
+
+/**
+ * Stable object identity across viewport-density recomputation; inputs are immutable
+ * snapshot/filter records. globe.gl digests layers by object identity, so reusing the tagged
+ * record avoids rebuilding unchanged meshes. The source record is recoverable through
+ * `untagGlobeObject`, which keeps rendering concerns out of selection/inspection state.
+ */
+export function tagGlobeObject<T extends object, Kind extends string>(item: T, objectKind: Kind): TaggedGlobeObject<T, Kind> {
+  let byKind = globeObjectKindCache.get(item);
+  if (!byKind) {
+    byKind = new Map();
+    globeObjectKindCache.set(item, byKind);
+  }
+  const cached = byKind.get(objectKind);
+  if (cached) return cached as TaggedGlobeObject<T, Kind>;
+  const tagged = Object.assign({}, item, { objectKind }) as TaggedGlobeObject<T, Kind>;
+  byKind.set(objectKind, tagged);
+  globeObjectSourceCache.set(tagged, item);
+  return tagged;
+}
+
+/**
+ * Recovers the original source record for a tagged globe object. Selection callbacks must hand
+ * source records — not render-tagged copies — to parents, or preservation matching, detail
+ * panels, and permalink/export state would accumulate rendering artifacts and duplicate work.
+ * Untagged input is returned unchanged.
+ */
+export function untagGlobeObject<T extends object>(item: T): T {
+  return (globeObjectSourceCache.get(item) as T | undefined) ?? item;
+}
+
 export interface RenderedCountAccount {
   total: number;
   rendered: number;
@@ -533,6 +625,17 @@ export interface RenderedCountAccount {
   outsideViewport?: number;
   cap?: number;
   forcedIncluded?: number;
+  /**
+   * Operator layer-toggle state at publish time. Accounts always describe the adaptive pipeline
+   * (what would render with the layer enabled); summaries and UI use this flag to avoid claiming
+   * that objects in a toggled-off layer are on screen.
+   */
+  layerEnabled?: boolean;
+}
+
+/** Attaches the operator layer-toggle state to an adaptive account without altering its pipeline numbers. */
+export function accountWithLayerEnabled(account: RenderedCountAccount, layerEnabled: boolean): RenderedCountAccount {
+  return { ...account, layerEnabled };
 }
 
 export function accountFromSelection<T>(selection: AdaptiveViewportSelection<T>): RenderedCountAccount {
@@ -568,7 +671,9 @@ export type RenderAccountKey =
   | "internetOutages"
   | "gdeltGeoNews"
   | "ringBeacons"
-  | "htmlAlertMarkers";
+  | "htmlAlertMarkers"
+  | "theaterLabels"
+  | "signalArcs";
 
 export const RENDER_ACCOUNT_KEYS: RenderAccountKey[] = [
   "incidents",
@@ -583,6 +688,8 @@ export const RENDER_ACCOUNT_KEYS: RenderAccountKey[] = [
   "gdeltGeoNews",
   "ringBeacons",
   "htmlAlertMarkers",
+  "theaterLabels",
+  "signalArcs",
 ];
 
 export interface GodEyeRenderStatus {
@@ -601,12 +708,19 @@ export interface GodEyeRenderStatus {
   omittedTotal: number;
 }
 
+/**
+ * Totals objects actually on screen. Layers the operator toggled off contribute nothing:
+ * their adaptive pipeline still computes selections, but claiming those objects as rendered
+ * (or their culling as adaptive omission) would misstate what the render shows.
+ */
 export function summarizeRenderAccounts(accounts: Record<RenderAccountKey, RenderedCountAccount>): { renderedTotal: number; omittedTotal: number } {
   let renderedTotal = 0;
   let omittedTotal = 0;
   for (const key of RENDER_ACCOUNT_KEYS) {
-    renderedTotal += accounts[key]?.rendered ?? 0;
-    omittedTotal += accounts[key]?.omitted ?? 0;
+    const account = accounts[key];
+    if (!account || account.layerEnabled === false) continue;
+    renderedTotal += account.rendered;
+    omittedTotal += account.omitted;
   }
   return { renderedTotal, omittedTotal };
 }
@@ -632,6 +746,7 @@ function semanticStatusKey(status: GodEyeRenderStatus): string {
         account.outsideViewport ?? -1,
         account.cap ?? -1,
         account.forcedIncluded ?? -1,
+        account.layerEnabled === false ? 0 : 1,
       ];
     }),
   ]);
