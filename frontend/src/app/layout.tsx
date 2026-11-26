@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -14,7 +14,13 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "God's Eye — Global Conflict Command Center",
-  description: "A cinematic real-time 3D Earth interface for monitoring global conflict theaters, incident signals, and humanitarian impact.",
+  description: "A public-OSINT 3D common operating picture for monitoring reported global conflict incidents, military aircraft activity, GNSS interference, and environmental context.",
+};
+
+export const viewport: Viewport = {
+  viewportFit: "cover",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({

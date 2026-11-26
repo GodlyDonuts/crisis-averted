@@ -72,6 +72,14 @@ export default function GodEyeCommandCenter() {
   const [selectedTheaterSlug, setSelectedTheaterSlug] = useState<string | null>(null);
   const [focusTarget, setFocusTarget] = useState<GodEyeFocusTarget | null>(null);
 
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setAutoRotate(false);
+      setTourActive(false);
+    }
+  }, []);
+
   useEffect(() => {
     const applyInitialMode = window.setTimeout(() => {
       if (new URLSearchParams(window.location.search).get("mode") === "satellite") {

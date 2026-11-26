@@ -14,7 +14,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 export function AircraftDetailPanel({ aircraft, onClose }: { aircraft: MilitaryAircraft; onClose: () => void }) {
   return (
-    <aside className="godseye-panel pointer-events-auto absolute bottom-[172px] right-4 top-20 z-40 hidden w-[344px] flex-col overflow-hidden xl:flex">
+    <aside className="godseye-panel pointer-events-auto absolute bottom-3 left-3 right-3 top-auto z-40 flex max-h-[68vh] w-auto flex-col overflow-hidden xl:bottom-[172px] xl:left-auto xl:right-4 xl:top-20 xl:max-h-none xl:w-[344px]">
       <div className="border-b border-white/8 px-4 py-4">
         <div className="flex items-start justify-between gap-3">
           <div>
