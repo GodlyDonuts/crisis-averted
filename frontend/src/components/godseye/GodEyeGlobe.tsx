@@ -27,7 +27,7 @@ import {
 } from "three";
 import { assetPath } from "@/lib/assets";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import type { ConflictEvent, ConflictTheater, MilitaryAircraft, OsintAircraft, OsintLaunch, OsintNaturalEvent, OsintSatellite, OsintVessel, GpsInterferenceCell, SeverityKey } from "@/types/conflict";
+import type { ConflictEvent, ConflictTheater, IodaInternetOutage, MilitaryAircraft, OsintAircraft, OsintLaunch, OsintNaturalEvent, OsintSatellite, OsintVessel, GpsInterferenceCell, SeverityKey } from "@/types/conflict";
 import { degreesLat, degreesLong, eciToGeodetic, gstime, propagate, twoline2satrec } from "satellite.js";
 import { classifyAircraftRole, escapeHtml, formatRelativeTime, naturalEventColor, normalizeCategory, normalizeTheaterName, SEVERITY_META } from "@/lib/conflictData";
 
@@ -46,6 +46,7 @@ export interface GodEyeLayerToggles {
   maritime: boolean;
   environmental: boolean;
   gpsInterference: boolean;
+  internetOutages: boolean;
 }
 
 export interface GodEyeFocusTarget {
@@ -65,6 +66,7 @@ interface GodEyeGlobeProps {
   launches: OsintLaunch[];
   naturalEvents: OsintNaturalEvent[];
   gpsInterference: GpsInterferenceCell[];
+  internetOutages: IodaInternetOutage[];
   selectedEvent: ConflictEvent | null;
   selectedTheater: ConflictTheater | null;
   focusTarget: GodEyeFocusTarget | null;
@@ -90,6 +92,21 @@ interface CountryFeature {
   geometry: unknown;
 }
 
+interface InternetOutageMarker {
+  key: string;
+  entityType: IodaInternetOutage["entityType"];
+  entityCode: string;
+  entityName: string;
+  countryCode: string | null;
+  countryName: string | null;
+  lat: number;
+  lng: number;
+  coordinatePrecision: IodaInternetOutage["coordinatePrecision"];
+  coordinateNote: string;
+  events: IodaInternetOutage[];
+  datasourceMethods: string[];
+}
+
 type GlobePointObject =
   | (ConflictEvent & { objectKind: "event" })
   | (MilitaryAircraft & { objectKind: "aircraft" })
@@ -97,7 +114,8 @@ type GlobePointObject =
   | (OsintVessel & { objectKind: "vessel" })
   | (OsintSatellite & { objectKind: "satellite"; altitudeKm: number })
   | (OsintLaunch & { objectKind: "launch" })
-  | (OsintNaturalEvent & { objectKind: "natural" });
+  | (OsintNaturalEvent & { objectKind: "natural" })
+  | (InternetOutageMarker & { objectKind: "internetOutage" });
 
 interface SignalArc {
   id: string;
@@ -112,7 +130,7 @@ interface SignalArc {
 interface BorderPath {
   points: [number, number, number][];
   intensity: number;
-  kind?: "border" | "aircraft" | "gps";
+  kind?: "border" | "aircraft" | "gps" | "internetOutage";
   tooltip?: string;
   trackColor?: string;
 }
@@ -319,6 +337,81 @@ function aircraftTrackPaths(aircraft: Array<Pick<MilitaryAircraft, "lat" | "lng"
     });
 }
 
+function formatUnixSecondsUtc(seconds: number): string {
+  return new Date(seconds * 1000).toISOString().replace("T", " ").replace(/\.\d{3}Z$/, "Z");
+}
+
+function formatIodaScore(score: number): string {
+  if (score >= 100) return Math.round(score).toLocaleString();
+  if (score >= 10) return score.toFixed(1);
+  return score.toFixed(2);
+}
+
+function buildInternetOutageMarkers(outages: IodaInternetOutage[]): InternetOutageMarker[] {
+  const groups = new Map<string, InternetOutageMarker>();
+  for (const outage of outages) {
+    const key = `${outage.entityType}:${outage.entityCode}`;
+    let marker = groups.get(key);
+    if (!marker) {
+      marker = {
+        key,
+        entityType: outage.entityType,
+        entityCode: outage.entityCode,
+        entityName: outage.entityName,
+        countryCode: outage.countryCode,
+        countryName: outage.countryName,
+        lat: outage.lat,
+        lng: outage.lng,
+        coordinatePrecision: outage.coordinatePrecision,
+        coordinateNote: outage.coordinateNote,
+        events: [],
+        datasourceMethods: [],
+      };
+      groups.set(key, marker);
+    }
+    marker.events.push(outage);
+    const datasourceMethod = `${outage.datasource ?? "unknown source"}/${outage.method ?? "unknown method"}`;
+    if (!marker.datasourceMethods.includes(datasourceMethod)) marker.datasourceMethods.push(datasourceMethod);
+  }
+  return [...groups.values()];
+}
+
+function internetOutageTooltip(marker: InternetOutageMarker): string {
+  const location = marker.entityType === "region" && marker.countryName
+    ? `${marker.entityName}, ${marker.countryName}`
+    : marker.entityName;
+  const scope = marker.entityType === "country" ? "COUNTRY-SCOPE CONNECTIVITY EVIDENCE" : "REGION-SCOPE CONNECTIVITY EVIDENCE";
+  const detectionLines = marker.events.slice(0, 3).map((event) => {
+    const source = `${event.datasource ?? "unknown source"}/${event.method ?? "unknown method"}`;
+    const horizon = event.untilEqualsQueryHorizon ? " · end equals query horizon: recovery/ongoing status unresolved" : "";
+    const preceding = event.fromBeforeQueryWindow ? " · start precedes requested lookback" : "";
+    return `<div class="godseye-tooltip__meta">${escapeHtml(source)} · ${formatUnixSecondsUtc(event.from)} → ${formatUnixSecondsUtc(event.until)} · IODA score ${formatIodaScore(event.score)}${horizon}${preceding}</div>`;
+  }).join("");
+  const additional = marker.events.length > 3
+    ? `<div class="godseye-tooltip__meta">+${marker.events.length - 3} additional detection record${marker.events.length - 3 === 1 ? "" : "s"} at this entity</div>`
+    : "";
+  return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#75bdd1">${scope}</div><div class="godseye-tooltip__title">${escapeHtml(location)}</div><div class="godseye-tooltip__meta">${marker.events.length} IODA detection record${marker.events.length === 1 ? "" : "s"} grouped only for display · ${escapeHtml(marker.datasourceMethods.join(" · "))}</div>${detectionLines}${additional}<div class="godseye-tooltip__meta">Scores are source-specific measurements, not cross-source severity. Records are not merged into a single incident.</div><div class="godseye-tooltip__meta">${escapeHtml(marker.coordinateNote)}</div><div class="godseye-tooltip__meta">IODA macroscopic connectivity evidence; no cause, intent, or shutdown attribution is implied.</div></div>`;
+}
+
+function internetOutageReticlePaths(markers: InternetOutageMarker[]): BorderPath[] {
+  return markers.map((marker) => {
+    const radiusDegrees = marker.entityType === "country" ? 0.72 : 0.46;
+    const longitudeRadius = Math.min(1.8, radiusDegrees / Math.max(0.28, Math.cos(marker.lat * Math.PI / 180)));
+    return {
+      points: [
+        [marker.lat + radiusDegrees, marker.lng, 0.012],
+        [marker.lat, marker.lng + longitudeRadius, 0.012],
+        [marker.lat - radiusDegrees, marker.lng, 0.012],
+        [marker.lat, marker.lng - longitudeRadius, 0.012],
+        [marker.lat + radiusDegrees, marker.lng, 0.012],
+      ],
+      intensity: 0,
+      kind: "internetOutage" as const,
+      tooltip: internetOutageTooltip(marker),
+    };
+  });
+}
+
 function severityPointRadius(event: ConflictEvent, selected: boolean): number {
   if (selected) return 0.23;
   const base = event.severity === "critical" ? 0.12 : event.severity === "high" ? 0.094 : event.severity === "medium" ? 0.066 : event.severity === "low" ? 0.05 : 0.05;
@@ -373,6 +466,7 @@ export default function GodEyeGlobe({
   launches,
   naturalEvents,
   gpsInterference,
+  internetOutages,
   selectedEvent,
   selectedTheater,
   focusTarget,
@@ -526,6 +620,8 @@ export default function GodEyeGlobe({
       };
     });
   }, [gpsInterference]);
+  const internetOutageMarkers = useMemo(() => buildInternetOutageMarkers(internetOutages), [internetOutages]);
+  const internetOutagePaths = useMemo(() => internetOutageReticlePaths(internetOutageMarkers), [internetOutageMarkers]);
   const signalArcs = useMemo(() => buildSignalArcs(events, theaters, selectedTheater), [events, theaters, selectedTheater]);
 
   // Load country boundaries locally once.
@@ -864,6 +960,7 @@ export default function GodEyeGlobe({
       ...(layers.civilAviation ? civilAircraftTracks : []),
       ...(layers.maritime ? vesselTracks : []),
       ...(layers.gpsInterference ? gpsInterferencePaths : []),
+      ...(layers.internetOutages ? internetOutagePaths : []),
     ];
     if (activePaths.length > 0) {
       globe
@@ -880,12 +977,13 @@ export default function GodEyeGlobe({
             if (border.intensity > 0.04) return "rgba(255,138,0,0.36)";
             return "rgba(255,209,102,0.24)";
           }
+          if (border.kind === "internetOutage") return "rgba(117,189,209,0.42)";
           if (border.kind === "aircraft") return ["rgba(184,194,154,0)", border.trackColor ? `${border.trackColor}57` : "rgba(184,194,154,0.34)"];
           return border.intensity > 0.08
             ? `rgba(255,96,110,${0.13 + border.intensity * 0.18})`
             : "rgba(148,210,255,0.105)";
         })
-        .pathStroke((path: object) => (path as BorderPath).kind === "aircraft" ? 0.28 : (path as BorderPath).kind === "gps" ? 0.34 : 0.15)
+        .pathStroke((path: object) => (path as BorderPath).kind === "aircraft" ? 0.28 : (path as BorderPath).kind === "gps" ? 0.34 : (path as BorderPath).kind === "internetOutage" ? 0.24 : 0.15)
         .pathResolution(2)
         .pathTransitionDuration(300);
     } else {
@@ -1003,12 +1101,13 @@ export default function GodEyeGlobe({
         ...(layers.orbitalAssets ? satellitePositions.map((satellite) => ({ ...satellite, objectKind: "satellite" as const })) : []),
         ...(layers.orbitalAssets ? launches.slice(0, 24).map((launch) => ({ ...launch, objectKind: "launch" as const })) : []),
         ...(layers.environmental ? naturalEvents.slice(0, 70).map((event) => ({ ...event, objectKind: "natural" as const })) : []),
+        ...(layers.internetOutages ? internetOutageMarkers.map((marker) => ({ ...marker, objectKind: "internetOutage" as const })) : []),
       ] as GlobePointObject[])
       .pointLat("lat")
       .pointLng("lng")
-      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.016 : (point as GlobePointObject).objectKind === "vessel" ? 0.007 : (point as GlobePointObject).objectKind === "satellite" ? Math.min(0.22, 0.035 + ((point as OsintSatellite & { altitudeKm: number }).altitudeKm / 22000)) : (point as GlobePointObject).objectKind === "launch" ? 0.015 : (point as GlobePointObject).objectKind === "natural" ? 0.014 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
-      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? classifyAircraftRole((point as MilitaryAircraft).aircraftType).color : (point as GlobePointObject).objectKind === "civilAircraft" ? ((point as OsintAircraft).operatorClass.includes("cargo") ? "#f0a84f" : "#9fb7a8") : (point as GlobePointObject).objectKind === "satellite" ? "#d8c77f" : (point as GlobePointObject).objectKind === "vessel" ? ((point as OsintVessel).vesselClass === "Tanker" ? "#d59b6a" : (point as OsintVessel).vesselClass === "Cargo" ? "#7da6a1" : "#8f9b7d") : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "natural" ? naturalEventColor(point as OsintNaturalEvent) : pointColor(point as ConflictEvent))
-      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.035 : (point as GlobePointObject).objectKind === "vessel" ? 0.038 : (point as GlobePointObject).objectKind === "satellite" ? 0.046 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
+      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.016 : (point as GlobePointObject).objectKind === "vessel" ? 0.007 : (point as GlobePointObject).objectKind === "satellite" ? Math.min(0.22, 0.035 + ((point as OsintSatellite & { altitudeKm: number }).altitudeKm / 22000)) : (point as GlobePointObject).objectKind === "launch" ? 0.015 : (point as GlobePointObject).objectKind === "internetOutage" ? 0.017 : (point as GlobePointObject).objectKind === "natural" ? 0.014 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
+      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? classifyAircraftRole((point as MilitaryAircraft).aircraftType).color : (point as GlobePointObject).objectKind === "civilAircraft" ? ((point as OsintAircraft).operatorClass.includes("cargo") ? "#f0a84f" : "#9fb7a8") : (point as GlobePointObject).objectKind === "satellite" ? "#d8c77f" : (point as GlobePointObject).objectKind === "vessel" ? ((point as OsintVessel).vesselClass === "Tanker" ? "#d59b6a" : (point as OsintVessel).vesselClass === "Cargo" ? "#7da6a1" : "#8f9b7d") : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? "#75bdd1" : "#548498") : (point as GlobePointObject).objectKind === "natural" ? naturalEventColor(point as OsintNaturalEvent) : pointColor(point as ConflictEvent))
+      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.035 : (point as GlobePointObject).objectKind === "vessel" ? 0.038 : (point as GlobePointObject).objectKind === "satellite" ? 0.046 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? 0.066 : 0.047) : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
       .pointResolution(9)
       .pointsMerge(false)
       .pointsTransitionDuration(320)
@@ -1039,6 +1138,9 @@ export default function GodEyeGlobe({
           const color = naturalEventColor(naturalEvent);
           const sourceLabel = naturalEvent.id.startsWith("gdacs-") ? "GDACS" : naturalEvent.id.startsWith("usgs-") ? "USGS" : "NASA EONET";
           return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:${color}">${escapeHtml(naturalEvent.category.toUpperCase())}</div><div class="godseye-tooltip__title">${escapeHtml(naturalEvent.title)}</div><div class="godseye-tooltip__meta">${naturalEvent.magnitude ? `${naturalEvent.magnitude}${naturalEvent.magnitudeUnit || ""} · ` : ""}${sourceLabel}</div></div>`;
+        }
+        if ((point as GlobePointObject).objectKind === "internetOutage") {
+          return internetOutageTooltip(point as InternetOutageMarker);
         }
         const conflictEvent = point as ConflictEvent;
         const severity = SEVERITY_META[conflictEvent.severity];
@@ -1095,6 +1197,8 @@ export default function GodEyeGlobe({
     civilAircraftTracks,
     vesselTracks,
     gpsInterferencePaths,
+    internetOutageMarkers,
+    internetOutagePaths,
     launches,
     naturalEvents,
     alertEvents,

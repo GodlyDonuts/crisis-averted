@@ -41,10 +41,247 @@ function parseRssItems(xml, limit = 30) {
   }).filter((article) => article.title && article.url);
 }
 
+const IODA_EVENTS_API_URL = 'https://api.ioda.inetintel.cc.gatech.edu/v2/outages/events';
+const IODA_API_BASE_URL = 'https://api.ioda.inetintel.cc.gatech.edu/v2';
+const IODA_ENTITY_TYPES = ['country', 'region'];
+const IODA_LOOKBACK_SECONDS = 24 * 60 * 60;
+const IODA_EXTEND_WINDOW_SECONDS = 24 * 60 * 60;
+const IODA_PAGE_LIMIT = 1000;
+const IODA_MAX_PAGES_PER_ENTITY_TYPE = 3;
+const IODA_REFERENCE_FILE = join(root, 'scripts', 'natural-earth-reference-points.json');
+const IODA_LIMITATIONS = 'IODA detections describe macroscopic Internet connectivity change, not causal attribution, intent, a proven shutdown, or the connectivity of any particular user or facility. Coordinates are broad Natural Earth reference placements rather than outage origins or spatial footprints. An empty result is not an all-clear; an end equal to the query horizon is clipped/ambiguous and establishes neither recovery nor continuing outage.';
+
+function unixSecondsToIso(seconds) {
+  return new Date(seconds * 1000).toISOString();
+}
+
+function createIodaQueryWindow() {
+  const until = Math.floor(Date.now() / 1000);
+  const from = until - IODA_LOOKBACK_SECONDS;
+  return {
+    from,
+    until,
+    fromIso: unixSecondsToIso(from),
+    untilIso: unixSecondsToIso(until),
+    lookbackSeconds: IODA_LOOKBACK_SECONDS,
+    extendWindowSeconds: IODA_EXTEND_WINDOW_SECONDS,
+  };
+}
+
+function createIodaUnavailableMeta(queryWindow) {
+  return {
+    status: 'unavailable',
+    provider: 'Georgia Tech Internet Outage Detection and Analysis (IODA)',
+    apiBaseUrl: IODA_API_BASE_URL,
+    queryWindow,
+    entityTypes: [...IODA_ENTITY_TYPES],
+    format: 'ioda',
+    overall: false,
+    includeAlerts: false,
+    pageLimit: IODA_PAGE_LIMIT,
+    maxPagesPerEntityType: IODA_MAX_PAGES_PER_ENTITY_TYPE,
+    fetchedEventCount: 0,
+    countryEventCount: 0,
+    regionEventCount: 0,
+    geolocatedEventCount: 0,
+    omittedEventCount: 0,
+    omittedByReason: {
+      invalidEventContract: 0,
+      missingCoordinateReference: 0,
+    },
+    requestUrls: [],
+    coordinateReference: 'Natural Earth v5.1.2 country label coordinates and admin-1 reference latitude/longitude attributes',
+    caveat: IODA_LIMITATIONS,
+  };
+}
+
+function buildIodaEventsUrl(entityType, queryWindow, page) {
+  const url = new URL(IODA_EVENTS_API_URL);
+  url.searchParams.set('from', String(queryWindow.from));
+  url.searchParams.set('until', String(queryWindow.until));
+  url.searchParams.set('entityType', entityType);
+  url.searchParams.set('format', 'ioda');
+  url.searchParams.set('overall', 'false');
+  url.searchParams.set('includeAlerts', 'false');
+  url.searchParams.set('orderBy', 'time/desc');
+  url.searchParams.set('limit', String(IODA_PAGE_LIMIT));
+  url.searchParams.set('page', String(page));
+  url.searchParams.set('extendWindow', String(IODA_EXTEND_WINDOW_SECONDS));
+  return url;
+}
+
+async function fetchIodaEntityEvents(entityType, queryWindow) {
+  const events = [];
+  const requestUrls = [];
+  for (let page = 0; page < IODA_MAX_PAGES_PER_ENTITY_TYPE; page += 1) {
+    const url = buildIodaEventsUrl(entityType, queryWindow, page);
+    requestUrls.push(url.toString());
+    const payload = await getJson(url, 26000);
+    if (payload.error) throw new Error(`IODA ${entityType} page ${page}: ${payload.error}`);
+    if (payload.type !== 'outages.events' || !Array.isArray(payload.data)) throw new Error(`IODA ${entityType} page ${page}: unexpected response contract`);
+    events.push(...payload.data);
+    if (payload.data.length < IODA_PAGE_LIMIT) break;
+  }
+  return { events, requestUrls };
+}
+
+function loadNaturalEarthReferencePoints() {
+  const payload = JSON.parse(readFileSync(IODA_REFERENCE_FILE, 'utf8'));
+  if (payload.schemaVersion !== 1 || !payload.countries || !payload.regions) throw new Error('Natural Earth reference-point file has an unexpected contract');
+  return payload;
+}
+
+function validIodaEventContract(event, entityType) {
+  return Boolean(
+    event &&
+    typeof event === 'object' &&
+    event.entity?.type === entityType &&
+    typeof event.entity.code === 'string' && event.entity.code.length > 0 &&
+    typeof event.entity.name === 'string' && event.entity.name.length > 0 &&
+    Number.isInteger(event.from) && event.from > 0 &&
+    Number.isInteger(event.until) && event.until > 0 &&
+    event.from <= event.until &&
+    Number.isFinite(event.score) && event.score >= 0 &&
+    (event.datasource == null || typeof event.datasource === 'string') &&
+    (event.method == null || typeof event.method === 'string')
+  );
+}
+
+function resolveIodaCoordinates(event, referencePoints) {
+  if (event.entity.type === 'country') {
+    const reference = referencePoints.countries[event.entity.code];
+    if (!reference) return null;
+    return {
+      lat: reference.lat,
+      lng: reference.lng,
+      coordinatePrecision: 'country-reference',
+      coordinateNote: 'Country-scope IODA detection plotted at a Natural Earth cartographic reference point. This is symbolic country-level placement, not an outage origin, asset location, centroid of impact, or spatial footprint.',
+    };
+  }
+
+  const regionId = event.entity.attrs?.ne_region_id == null ? null : String(event.entity.attrs.ne_region_id);
+  const reference = regionId ? referencePoints.regions[regionId] : null;
+  if (!reference) return null;
+  return {
+    lat: reference.lat,
+    lng: reference.lng,
+    coordinatePrecision: 'region-reference',
+    coordinateNote: 'Region-scope IODA detection plotted at a Natural Earth admin-1 reference coordinate. This is broad regional placement, not an outage origin, asset location, centroid of impact, or spatial footprint.',
+    naturalEarthRegionId: regionId,
+  };
+}
+
+function normalizeIodaOutageEvent(event, queryWindow, referencePoints) {
+  const coordinates = resolveIodaCoordinates(event, referencePoints);
+  if (!coordinates) return null;
+  const attrs = event.entity.attrs ?? {};
+  const countryCode = event.entity.type === 'country'
+    ? event.entity.code
+    : typeof attrs.country_code === 'string' ? attrs.country_code : null;
+  const countryName = event.entity.type === 'country'
+    ? event.entity.name
+    : typeof attrs.country_name === 'string' ? attrs.country_name : null;
+  return {
+    entityType: event.entity.type,
+    entityCode: event.entity.code,
+    entityName: event.entity.name,
+    countryCode,
+    countryName,
+    naturalEarthRegionId: coordinates.naturalEarthRegionId ?? null,
+    lat: coordinates.lat,
+    lng: coordinates.lng,
+    coordinatePrecision: coordinates.coordinatePrecision,
+    coordinateNote: coordinates.coordinateNote,
+    from: event.from,
+    until: event.until,
+    score: event.score,
+    datasource: event.datasource ?? null,
+    method: event.method ?? null,
+    fromBeforeQueryWindow: event.from < queryWindow.from,
+    untilEqualsQueryHorizon: event.until === queryWindow.until,
+  };
+}
+
+async function collectIodaOutages(queryWindow) {
+  const referencePoints = loadNaturalEarthReferencePoints();
+  const requestUrls = [];
+  const rawEvents = [];
+  const perTypeCounts = { country: 0, region: 0 };
+
+  for (const entityType of IODA_ENTITY_TYPES) {
+    const pageResult = await fetchIodaEntityEvents(entityType, queryWindow);
+    rawEvents.push(...pageResult.events.map((event) => ({ entityType, event })));
+    perTypeCounts[entityType] = pageResult.events.length;
+    requestUrls.push(...pageResult.requestUrls);
+  }
+
+  let invalidEventContract = 0;
+  let missingCoordinateReference = 0;
+  const outages = [];
+  for (const { entityType, event } of rawEvents) {
+    if (!validIodaEventContract(event, entityType)) {
+      invalidEventContract += 1;
+      continue;
+    }
+    const outage = normalizeIodaOutageEvent(event, queryWindow, referencePoints);
+    if (!outage) {
+      missingCoordinateReference += 1;
+      continue;
+    }
+    outages.push(outage);
+  }
+
+  return {
+    outages,
+    meta: {
+      ...createIodaUnavailableMeta(queryWindow),
+      status: 'ok',
+      fetchedEventCount: rawEvents.length,
+      countryEventCount: perTypeCounts.country,
+      regionEventCount: perTypeCounts.region,
+      geolocatedEventCount: outages.length,
+      omittedEventCount: invalidEventContract + missingCoordinateReference,
+      omittedByReason: {
+        invalidEventContract,
+        missingCoordinateReference,
+      },
+      requestUrls,
+    },
+  };
+}
+
 let previousSnapshot = {};
 try { if (existsSync(outFile)) previousSnapshot = JSON.parse(readFileSync(outFile, 'utf8')); } catch {}
 
-const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], aircraft: [], vessels: [], satellites: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], cyberVulnerabilities: [], errors: [] };
+const iodaQueryWindow = createIodaQueryWindow();
+const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], aircraft: [], vessels: [], satellites: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], cyberVulnerabilities: [], internetOutages: [], internetOutageMeta: createIodaUnavailableMeta(iodaQueryWindow), errors: [] };
+
+try {
+  const ioda = await collectIodaOutages(iodaQueryWindow);
+  result.internetOutages = ioda.outages;
+  result.internetOutageMeta = ioda.meta;
+  result.sources.internetOutages = `IODA v2 outage events (country/region, explicit Unix-second window ${iodaQueryWindow.from}-${iodaQueryWindow.until}) + Natural Earth reference coordinates`;
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  result.errors.push(`IODA: ${message}`);
+  if (previousSnapshot.internetOutageMeta && Array.isArray(previousSnapshot.internetOutages)) {
+    result.internetOutages = previousSnapshot.internetOutages;
+    result.internetOutageMeta = {
+      ...previousSnapshot.internetOutageMeta,
+      status: 'preserved',
+      preservedAt: result.fetchedAt,
+      statusDetail: `Transient IODA/ingestion failure; prior snapshot retained. ${message}`,
+    };
+    result.sources.internetOutages = 'IODA v2 outage events (prior build-time snapshot preserved after transient ingestion failure)';
+    result.errors.push('internetOutages: transient failure; preserved previous snapshot');
+  } else {
+    result.internetOutageMeta = {
+      ...createIodaUnavailableMeta(iodaQueryWindow),
+      statusDetail: message,
+    };
+    result.sources.internetOutages = 'IODA v2 outage events unavailable during build';
+  }
+}
 
 try {
   const payload = await getJson('https://api.adsb.lol/v2/mil');
@@ -535,13 +772,17 @@ if (process.env.WINDY_WEBCAMS_KEY) {
 
 function validateCoordinate(item, label, errors) {
   if (!Number.isFinite(item.lat) || item.lat < -90 || item.lat > 90 || !Number.isFinite(item.lng) || item.lng < -180 || item.lng > 180) {
-    errors.push(`${label}:${item.id || item.name || item.title || 'unknown'} invalid coordinate`);
+    errors.push(`${label}:${item.id || item.name || item.title || item.entityName || 'unknown'} invalid coordinate`);
   }
+}
+
+function validateNonNegativeInteger(value) {
+  return Number.isInteger(value) && value >= 0;
 }
 
 function validateSnapshot(snapshot) {
   const errors = [];
-  for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'cyberVulnerabilities']) {
+  for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'cyberVulnerabilities', 'internetOutages']) {
     if (!Array.isArray(snapshot[key])) errors.push(`${key} missing or not an array`);
   }
   for (const item of snapshot.militaryAircraft ?? []) validateCoordinate(item, 'militaryAircraft', errors);
@@ -549,6 +790,49 @@ function validateSnapshot(snapshot) {
   for (const item of snapshot.vessels ?? []) validateCoordinate(item, 'vessels', errors);
   for (const item of snapshot.launches ?? []) validateCoordinate(item, 'launches', errors);
   for (const item of snapshot.naturalEvents ?? []) validateCoordinate(item, 'naturalEvents', errors);
+  for (const item of snapshot.internetOutages ?? []) validateCoordinate(item, 'internetOutages', errors);
+  for (const item of snapshot.internetOutages ?? []) {
+    const label = `internetOutages:${item.entityType || 'unknown'}:${item.entityCode || 'unknown'}`;
+    if (!['country', 'region'].includes(item.entityType)) errors.push(`${label} invalid entityType`);
+    if (!item.entityCode || !item.entityName) errors.push(`${label} missing entity identity`);
+    if (!['country-reference', 'region-reference'].includes(item.coordinatePrecision)) errors.push(`${label} invalid coordinate precision`);
+    if ((item.entityType === 'country' && item.coordinatePrecision !== 'country-reference') || (item.entityType === 'region' && item.coordinatePrecision !== 'region-reference')) errors.push(`${label} coordinate precision/entity mismatch`);
+    if (typeof item.coordinateNote !== 'string' || item.coordinateNote.length < 30 || !item.coordinateNote.includes('not an outage origin')) errors.push(`${label} missing uncertainty coordinate note`);
+    if (!Number.isInteger(item.from) || !Number.isInteger(item.until) || item.from <= 0 || item.until <= 0 || item.from > item.until) errors.push(`${label} invalid Unix-second event window`);
+    if (!Number.isFinite(item.score) || item.score < 0) errors.push(`${label} invalid IODA score`);
+    if (item.datasource !== null && typeof item.datasource !== 'string') errors.push(`${label} invalid datasource`);
+    if (item.method !== null && typeof item.method !== 'string') errors.push(`${label} invalid method`);
+    if (item.countryCode !== null && typeof item.countryCode !== 'string') errors.push(`${label} invalid countryCode`);
+    if (item.countryName !== null && typeof item.countryName !== 'string') errors.push(`${label} invalid countryName`);
+    if (item.naturalEarthRegionId !== null && typeof item.naturalEarthRegionId !== 'string') errors.push(`${label} invalid Natural Earth region id`);
+    if (typeof item.fromBeforeQueryWindow !== 'boolean' || typeof item.untilEqualsQueryHorizon !== 'boolean') errors.push(`${label} invalid query-window uncertainty flags`);
+  }
+  const outageMeta = snapshot.internetOutageMeta;
+  if (!outageMeta || typeof outageMeta !== 'object') {
+    errors.push('internetOutageMeta missing or not an object');
+  } else {
+    if (!['ok', 'preserved', 'unavailable'].includes(outageMeta.status)) errors.push('internetOutageMeta invalid status');
+    const window = outageMeta.queryWindow;
+    if (!window || !Number.isInteger(window.from) || !Number.isInteger(window.until) || window.from <= 0 || window.from >= window.until) errors.push('internetOutageMeta invalid explicit Unix-second query window');
+    if (!Number.isInteger(window?.lookbackSeconds) || window.lookbackSeconds <= 0 || !Number.isInteger(window?.extendWindowSeconds) || window.extendWindowSeconds < 0) errors.push('internetOutageMeta invalid lookback/extendWindow seconds');
+    if (!Array.isArray(outageMeta.entityTypes) || !outageMeta.entityTypes.includes('country') || !outageMeta.entityTypes.includes('region')) errors.push('internetOutageMeta invalid entityTypes');
+    for (const key of ['fetchedEventCount', 'countryEventCount', 'regionEventCount', 'geolocatedEventCount', 'omittedEventCount']) {
+      if (!validateNonNegativeInteger(outageMeta[key])) errors.push(`internetOutageMeta invalid ${key}`);
+    }
+    if (validateNonNegativeInteger(outageMeta.fetchedEventCount) && outageMeta.fetchedEventCount !== outageMeta.countryEventCount + outageMeta.regionEventCount) errors.push('internetOutageMeta entity count mismatch');
+    if (validateNonNegativeInteger(outageMeta.fetchedEventCount) && outageMeta.fetchedEventCount !== outageMeta.geolocatedEventCount + outageMeta.omittedEventCount) errors.push('internetOutageMeta geolocation count mismatch');
+    if (!validateNonNegativeInteger(outageMeta.omittedByReason?.invalidEventContract) || !validateNonNegativeInteger(outageMeta.omittedByReason?.missingCoordinateReference)) errors.push('internetOutageMeta invalid omission reasons');
+    if (outageMeta.geolocatedEventCount !== (snapshot.internetOutages ?? []).length) errors.push('internetOutageMeta geolocated count does not match internetOutages');
+    if (!Array.isArray(outageMeta.requestUrls)) {
+      errors.push('internetOutageMeta requestUrls missing or not an array');
+    } else if (outageMeta.status === 'ok') {
+      if (outageMeta.requestUrls.length === 0) errors.push('internetOutageMeta missing auditable request URLs');
+      for (const url of outageMeta.requestUrls) {
+        if (!url.includes(`from=${window?.from}`) || !url.includes(`until=${window?.until}`) || !url.includes('format=ioda') || !url.includes('overall=false')) errors.push('internetOutageMeta request URL lacks explicit window/format');
+      }
+    }
+    if (typeof outageMeta.caveat !== 'string' || !outageMeta.caveat.includes('not an all-clear')) errors.push('internetOutageMeta missing uncertainty caveat');
+  }
   for (const item of snapshot.satellites ?? []) {
     if (!item.line1?.startsWith('1 ') || !item.line2?.startsWith('2 ') || !item.name || !item.catalogNumber) errors.push(`satellites:${item.id || 'unknown'} invalid TLE contract`);
   }
@@ -568,4 +852,4 @@ for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'new
 
 validateSnapshot(result);
 writeFileSync(outFile, JSON.stringify(result));
-console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.webcams.length} webcams`);
+console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.webcams.length} webcams, ${result.internetOutages.length} IODA outage detections (${result.internetOutageMeta.status})`);

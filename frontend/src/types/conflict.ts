@@ -202,6 +202,67 @@ export interface OsintCyberVulnerability {
   requiredAction: string | null;
 }
 
+export type IodaEntityType = "country" | "region";
+export type IodaCoordinatePrecision = "country-reference" | "region-reference";
+export type IodaSnapshotStatus = "ok" | "preserved" | "unavailable";
+
+export interface IodaInternetOutage {
+  entityType: IodaEntityType;
+  entityCode: string;
+  entityName: string;
+  countryCode: string | null;
+  countryName: string | null;
+  naturalEarthRegionId: string | null;
+  lat: number;
+  lng: number;
+  coordinatePrecision: IodaCoordinatePrecision;
+  coordinateNote: string;
+  /** IODA event start in Unix seconds; it can precede the requested window because extendWindow is explicit. */
+  from: number;
+  /** IODA event end in Unix seconds. Equality with the query horizon is clipped/ambiguous, not proof of recovery. */
+  until: number;
+  /** IODA's source-specific event score. It is not an absolute or cross-source severity scale. */
+  score: number;
+  datasource: string | null;
+  method: string | null;
+  fromBeforeQueryWindow: boolean;
+  untilEqualsQueryHorizon: boolean;
+}
+
+export interface IodaInternetOutageMeta {
+  status: IodaSnapshotStatus;
+  provider: string;
+  apiBaseUrl: string;
+  queryWindow: {
+    from: number;
+    until: number;
+    fromIso: string;
+    untilIso: string;
+    lookbackSeconds: number;
+    extendWindowSeconds: number;
+  };
+  entityTypes: IodaEntityType[];
+  format: "ioda";
+  overall: false;
+  includeAlerts: false;
+  pageLimit: number;
+  maxPagesPerEntityType: number;
+  fetchedEventCount: number;
+  countryEventCount: number;
+  regionEventCount: number;
+  geolocatedEventCount: number;
+  omittedEventCount: number;
+  omittedByReason: {
+    invalidEventContract: number;
+    missingCoordinateReference: number;
+  };
+  requestUrls: string[];
+  coordinateReference: string;
+  caveat: string;
+  statusDetail?: string;
+  preservedAt?: string;
+}
+
 export interface OsintSnapshot {
   fetchedAt: string;
   sources: Record<string, string>;
@@ -216,6 +277,8 @@ export interface OsintSnapshot {
   mapOfWarsEvents: MapOfWarsRawEvent[];
   webcams: OsintWebcam[];
   cyberVulnerabilities: OsintCyberVulnerability[];
+  internetOutages: IodaInternetOutage[];
+  internetOutageMeta: IodaInternetOutageMeta | null;
   errors: string[];
 }
 

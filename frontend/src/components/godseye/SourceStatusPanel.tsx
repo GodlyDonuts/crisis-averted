@@ -32,6 +32,11 @@ function Row({ label, value, warn = false }: { label: string; value: string; war
 
 export function SourceStatusPanel({ snapshot, conflictSource, conflictError, lastUpdated, onClose }: SourceStatusPanelProps) {
   const snapshotAge = snapshot.fetchedAt ? formatRelativeTime(Date.parse(snapshot.fetchedAt)) : "not loaded";
+  const outageMeta = snapshot.internetOutageMeta;
+  const outageWindowEnd = outageMeta?.queryWindow.until ? formatRelativeTime(outageMeta.queryWindow.until * 1000) : "unknown";
+  const outageValue = outageMeta
+    ? `${snapshot.internetOutages.length} mapped/${outageMeta.fetchedEventCount} fetched · ${outageMeta.status}`
+    : `${snapshot.internetOutages.length} mapped · metadata unavailable`;
   return (
     <aside className="godseye-panel pointer-events-auto absolute right-4 top-[4.5rem] z-50 hidden w-[360px] overflow-hidden xl:block">
       <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
@@ -58,6 +63,8 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
         <Row label="Launch pads" value={String(snapshot.launches.length)} />
         <Row label="Natural events" value={String(snapshot.naturalEvents.length)} />
         <Row label="GPS interference cells" value={String(snapshot.gpsInterference.length)} />
+        <Row label="IODA outage detections" value={outageValue} warn={outageMeta?.status !== "ok"} />
+        <Row label="IODA query window" value={`${outageMeta ? `${Math.round(outageMeta.queryWindow.lookbackSeconds / 3600)}h ending ${outageWindowEnd}` : "not loaded"}`} />
         <Row label="Map of Wars records" value={String(snapshot.mapOfWarsEvents.length)} />
         <Row label="Known exploited CVEs" value={String(snapshot.cyberVulnerabilities.length)} />
         <Row label="Webcam metadata" value={snapshot.webcams.length > 0 ? String(snapshot.webcams.length) : "key not configured"} warn={snapshot.webcams.length === 0} />
@@ -76,6 +83,18 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
           {snapshot.cyberVulnerabilities.length === 0 && <p className="text-[11px] text-white/34">CISA KEV collection unavailable.</p>}
         </div>
       </div>
+
+      {outageMeta ? (
+        <div className="border-t border-white/8 px-4 py-3">
+          <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/34">
+            <Activity className="h-3.5 w-3.5" /> IODA outage evidence
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-white/54">
+            Unix window {outageMeta.queryWindow.from}–{outageMeta.queryWindow.until}; {outageMeta.countryEventCount} country and {outageMeta.regionEventCount} region records fetched, {outageMeta.omittedEventCount} omitted when not defensibly geolocatable. Coordinates are coarse Natural Earth reference placements, not outage origins or footprints.
+            {outageMeta.status === "preserved" ? " Current ingest degraded; prior build-time snapshot retained." : ""}
+          </p>
+        </div>
+      ) : null}
 
       <div className="border-t border-white/8 px-4 py-3">
         <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/34">
