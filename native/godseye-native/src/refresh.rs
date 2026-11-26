@@ -1,4 +1,7 @@
-use crate::data::{parse_osint_snapshot, snapshot_revision, unix_time_now, OsintSnapshot};
+use crate::correlation::{correlate_loaded_incidents, IncidentCorrelationStats};
+use crate::data::{
+    parse_osint_snapshot, snapshot_revision, unix_time_now, Incident, OsintSnapshot,
+};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
@@ -152,6 +155,9 @@ pub struct ActiveSnapshot {
     pub source: SnapshotSourceKind,
     pub detail: String,
     pub snapshot: OsintSnapshot,
+    /// Canonical incidents correlated inside the refresh worker, keeping the render thread interactive.
+    pub incidents: Vec<Incident>,
+    pub correlation_stats: IncidentCorrelationStats,
     pub revision: String,
     pub received_unix: f64,
 }
@@ -243,6 +249,7 @@ fn run_cycle(
     cycle: u64,
     config: &RefreshConfig,
     agent: &ureq::Agent,
+    fallback_incidents: &[Incident],
     messages: &Sender<RefreshMessage>,
 ) {
     let _ = messages.send(RefreshMessage::Started { cycle });
@@ -298,12 +305,19 @@ fn run_cycle(
         Some(SnapshotSourceKind::RemoteUrl) => remote_result,
         None => None,
     };
-    let active = selected_success.map(|success| ActiveSnapshot {
-        source: success.kind,
-        detail: success.detail,
-        revision: snapshot_revision(&success.snapshot),
-        snapshot: success.snapshot,
-        received_unix: unix_time_now(),
+    let active = selected_success.map(|success| {
+        let received_unix = unix_time_now();
+        let correlation =
+            correlate_loaded_incidents(fallback_incidents, &success.snapshot, received_unix);
+        ActiveSnapshot {
+            source: success.kind,
+            detail: success.detail,
+            revision: snapshot_revision(&success.snapshot),
+            incidents: correlation.incidents,
+            correlation_stats: correlation.stats,
+            snapshot: success.snapshot,
+            received_unix,
+        }
     });
     let _ = messages.send(RefreshMessage::Completed(Box::new(RefreshReport {
         cycle,
@@ -315,6 +329,7 @@ fn run_cycle(
 
 pub fn spawn_refresh_worker(
     config: RefreshConfig,
+    fallback_incidents: Vec<Incident>,
 ) -> Option<(Sender<RefreshCommand>, Receiver<RefreshMessage>)> {
     if config.local_path.is_none() && config.remote_url.is_none() {
         return None;
@@ -330,16 +345,16 @@ pub fn spawn_refresh_worker(
                 .build();
             let agent = ureq::Agent::new_with_config(agent_config);
             let mut cycle = 1u64;
-            run_cycle(cycle, &config, &agent, &message_tx);
+            run_cycle(cycle, &config, &agent, &fallback_incidents, &message_tx);
             loop {
                 match command_rx.recv_timeout(config.interval) {
                     Ok(RefreshCommand::Now) => {
                         cycle += 1;
-                        run_cycle(cycle, &config, &agent, &message_tx);
+                        run_cycle(cycle, &config, &agent, &fallback_incidents, &message_tx);
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                         cycle += 1;
-                        run_cycle(cycle, &config, &agent, &message_tx);
+                        run_cycle(cycle, &config, &agent, &fallback_incidents, &message_tx);
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 }

@@ -1,12 +1,14 @@
 use macroquad::prelude::*;
+mod correlation;
 mod data;
 mod refresh;
 mod satellite;
 
+use correlation::{correlate_incidents, IncidentCorrelationStats};
 use data::{
     build_gdelt_location_markers, build_internet_outage_markers, load_embedded, parse_rfc3339_unix,
-    rebuild_incidents, snapshot_revision, unix_time_now, GdeltLocationMarker, GpsInterferenceCell,
-    Incident, InternetOutageMarker, NativeDataPackage, OsintSnapshot,
+    snapshot_revision, unix_time_now, GdeltLocationMarker, GpsInterferenceCell, Incident,
+    IncidentEvidenceCluster, InternetOutageMarker, NativeDataPackage, OsintSnapshot,
 };
 use refresh::{
     config_from_env_and_args, spawn_refresh_worker, ActiveSnapshot, RefreshCommand, RefreshMessage,
@@ -999,6 +1001,7 @@ impl ActiveDataSource {
 struct AppData {
     incidents: Vec<Incident>,
     fallback_incidents: Vec<Incident>,
+    correlation_stats: IncidentCorrelationStats,
     osint: OsintSnapshot,
     outage_markers: Vec<InternetOutageMarker>,
     gdelt_markers: Vec<GdeltLocationMarker>,
@@ -1015,7 +1018,7 @@ struct AppData {
 impl AppData {
     fn embedded() -> Self {
         let NativeDataPackage {
-            incidents,
+            normalized_incidents,
             fallback_incidents,
             osint,
             conflict_generated_at,
@@ -1023,12 +1026,15 @@ impl AppData {
             conflict_license,
             load_errors,
         } = load_embedded();
+        let loaded_unix = unix_time_now();
+        let correlated = correlate_incidents(normalized_incidents, loaded_unix);
         let outage_markers = build_internet_outage_markers(&osint.internet_outages);
         let gdelt_markers = build_gdelt_location_markers(&osint.gdelt_geo_news);
         let revision = snapshot_revision(&osint);
         Self {
-            incidents,
+            incidents: correlated.incidents,
             fallback_incidents,
+            correlation_stats: correlated.stats,
             osint,
             outage_markers,
             gdelt_markers,
@@ -1039,13 +1045,14 @@ impl AppData {
             revision,
             active_source: ActiveDataSource::Embedded,
             active_detail: "frontend/public/data embedded at compile time".to_string(),
-            active_loaded_unix: unix_time_now(),
+            active_loaded_unix: loaded_unix,
         }
     }
 
     fn apply_runtime_snapshot(&mut self, active: ActiveSnapshot) {
         self.osint = active.snapshot;
-        self.incidents = rebuild_incidents(&self.fallback_incidents, &self.osint);
+        self.incidents = active.incidents;
+        self.correlation_stats = active.correlation_stats;
         self.outage_markers = build_internet_outage_markers(&self.osint.internet_outages);
         self.gdelt_markers = build_gdelt_location_markers(&self.osint.gdelt_geo_news);
         self.revision = active.revision;
@@ -1064,6 +1071,14 @@ impl AppData {
         };
         self.active_detail = detail;
         self.active_loaded_unix = received_unix;
+    }
+
+    fn correlated_evidence<'a>(&'a self, event: &Incident) -> Option<&'a IncidentEvidenceCluster> {
+        let membership = event.incident.as_ref()?;
+        self.incidents.iter().find_map(|candidate| {
+            let cluster = candidate.evidence.as_ref()?;
+            (cluster.canonical_event_id == membership.canonical_event_id).then_some(cluster)
+        })
     }
 }
 
@@ -1471,7 +1486,7 @@ fn draw_inspector_panel(
     width: f32,
     max_height: f32,
 ) {
-    let panel_height = max_height.min(570.0);
+    let panel_height = max_height.min(760.0);
     draw_panel(x, y, width, panel_height);
     let text_x = x + 15.0;
     let mut cursor_y = y + 26.0;
@@ -1592,10 +1607,158 @@ fn draw_inspector_panel(
                     ),
                 ));
             }
+            if let Some(occurrence) = &event.occurrence {
+                rows.push((
+                    "OCCURRENCE",
+                    format!(
+                        "{} · {:?} · {}",
+                        occurrence.label,
+                        occurrence.basis,
+                        occurrence.precision.as_str()
+                    ),
+                ));
+            }
+            if let Some(membership) = &event.incident {
+                rows.push((
+                    "CORRELATION",
+                    format!(
+                        "{} · {} member{} · {} independent {}",
+                        membership.confidence.as_str(),
+                        membership.member_count,
+                        if membership.member_count == 1 {
+                            ""
+                        } else {
+                            "s"
+                        },
+                        membership.independent_family_count,
+                        if membership.independent_family_count == 1 {
+                            "family"
+                        } else {
+                            "families"
+                        }
+                    ),
+                ));
+                rows.push((
+                    "CLUSTER ROLE",
+                    if membership.is_canonical {
+                        "canonical representative".to_string()
+                    } else {
+                        format!(
+                            "linked evidence for canonical {}",
+                            truncate_chars(&membership.canonical_event_id, 24)
+                        )
+                    },
+                ));
+                rows.push(("CLUSTER", truncate_chars(&membership.cluster_id, 44)));
+                rows.push((
+                    "MATCH SCORE",
+                    if membership.is_canonical {
+                        "canonical".to_string()
+                    } else {
+                        format!("{:.2}", membership.correlation_score)
+                    },
+                ));
+            }
             cursor_y = draw_rows(&rows, text_x, cursor_y, width_chars);
             cursor_y += 8.0;
+            if let Some(membership) = &event.incident {
+                if !membership.rationale.is_empty() {
+                    draw_wrapped_lines(
+                        &format!("membership: {}", membership.rationale.join("; ")),
+                        text_x,
+                        &mut cursor_y,
+                        48,
+                        2,
+                        caveat_color,
+                    );
+                    cursor_y += 3.0;
+                }
+            }
+            if let Some(evidence) = data.correlated_evidence(event) {
+                draw_text_mono(
+                    &format!(
+                        "CORRELATED EVIDENCE · {} · {} MEMBERS",
+                        evidence.confidence.as_str().to_uppercase(),
+                        evidence.member_count
+                    ),
+                    text_x,
+                    cursor_y,
+                    12.5,
+                    severity_color(&event.severity),
+                );
+                cursor_y += 18.0;
+                draw_wrapped_lines(
+                    &format!(
+                        "{}. Families: {} ({} independent). Cluster {} · {}. Correlation is evidence linkage, not verification.",
+                        evidence.confidence_reason,
+                        evidence.source_families.join(", "),
+                        evidence.independent_family_count,
+                        evidence.cluster_id,
+                        evidence.algorithm_version
+                    ),
+                    text_x,
+                    &mut cursor_y,
+                    48,
+                    3,
+                    caveat_color,
+                );
+                for contradiction in evidence.contradictions.iter().take(3) {
+                    draw_wrapped_lines(
+                        &format!(
+                            "Contradiction: {} [records: {}]",
+                            contradiction.summary,
+                            truncate_chars(&contradiction.member_event_ids.join(", "), 72)
+                        ),
+                        text_x,
+                        &mut cursor_y,
+                        48,
+                        2,
+                        Color::new(1.0, 0.62, 0.34, 0.88),
+                    );
+                }
+                for member in evidence.members.iter().take(4) {
+                    draw_wrapped_lines(
+                        &format!(
+                            "+ {} · {} · score {:.2} · {}",
+                            member.event.id,
+                            member.source_family,
+                            member.correlation_score,
+                            truncate_chars(&member.event.title, 42)
+                        ),
+                        text_x,
+                        &mut cursor_y,
+                        48,
+                        2,
+                        Color::new(0.72, 0.82, 0.72, 0.9),
+                    );
+                    if !member.rationale.is_empty() {
+                        draw_wrapped_lines(
+                            &format!("why: {}", member.rationale.join("; ")),
+                            text_x + 10.0,
+                            &mut cursor_y,
+                            46,
+                            2,
+                            caveat_color,
+                        );
+                    }
+                }
+                if evidence.members.len() > 4 {
+                    draw_wrapped_lines(
+                        &format!(
+                            "+ {} additional retained evidence records",
+                            evidence.members.len() - 4
+                        ),
+                        text_x,
+                        &mut cursor_y,
+                        48,
+                        1,
+                        caveat_color,
+                    );
+                }
+                cursor_y += 5.0;
+            }
             draw_wrapped_lines(
-                "Normalized conflict evidence. No cross-source correlation, causality, intent, or casualty certainty is implied; optional fields that were absent remain explicitly unavailable.",
+                "Normalized conflict evidence. Correlation indicates deterministic evidence linkage only; causality, intent, truth, and casualty certainty are not implied. Optional fields that were absent remain explicitly unavailable.",
                 text_x,
                 &mut cursor_y,
                 48,
@@ -2253,6 +2416,39 @@ fn draw_source_status_panel(
                     .unwrap_or("license unavailable")
             ),
         ),
+        (
+            "CORRELATION",
+            format!(
+                "{} incidents from {} records · {} evidence · {} clusters · {} pairs · {:.0} ms",
+                data.correlation_stats.incident_count,
+                data.correlation_stats.input_record_count,
+                data.correlation_stats.correlated_evidence_record_count,
+                data.correlation_stats.multi_member_cluster_count,
+                data.correlation_stats.candidate_pair_count,
+                data.correlation_stats.elapsed_ms
+            ),
+        ),
+        (
+            "CONFIDENCE",
+            format!(
+                "corroborated {} · contested {} · inferred {} · single-source {}",
+                data.correlation_stats.corroborated_cluster_count,
+                data.correlation_stats.contested_cluster_count,
+                data.correlation_stats.inferred_cluster_count,
+                data.correlation_stats.single_source_cluster_count
+            ),
+        ),
+        (
+            "CORR AUDIT",
+            format!(
+                "{} · eligible {} · ineligible {} · exact-id duplicates {} · evaluated {} pairs",
+                data.correlation_stats.algorithm_version,
+                data.correlation_stats.correlation_eligible_record_count,
+                data.correlation_stats.ineligible_record_count,
+                data.correlation_stats.exact_duplicate_record_count,
+                data.correlation_stats.evaluated_pair_count
+            ),
+        ),
         ("MIL AIR", osint.military_aircraft.len().to_string()),
         ("CIVIL AIR", osint.aircraft.len().to_string()),
         ("AIS", osint.vessels.len().to_string()),
@@ -2580,7 +2776,8 @@ async fn main() {
     let mut satellite_state = SatelliteState::new(&data.osint);
 
     let refresh_config = config_from_env_and_args();
-    let refresh_worker = spawn_refresh_worker(refresh_config.clone());
+    let refresh_worker =
+        spawn_refresh_worker(refresh_config.clone(), data.fallback_incidents.clone());
     let (refresh_tx, refresh_rx): (
         Option<Sender<RefreshCommand>>,
         Option<Receiver<RefreshMessage>>,

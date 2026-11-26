@@ -554,6 +554,129 @@ pub struct GdeltGeoIngestionMeta {
     pub preserved_at: Option<String>,
 }
 
+/// Temporal resolution carried by a source-supported occurrence interval. Native timestamps
+/// use Unix seconds rather than the web client's milliseconds; conversion happens only at the
+/// normalization boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncidentTemporalPrecision {
+    Second,
+    Day,
+    Range,
+}
+
+impl IncidentTemporalPrecision {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Second => "second",
+            Self::Day => "day",
+            Self::Range => "range",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncidentOccurrenceBasis {
+    PublisherSecond,
+    PublisherDay,
+    PublisherRange,
+    InferredDay,
+}
+
+/// Source-supported occurrence interval. `start` is inclusive and `end_exclusive` exclusive.
+/// This is correlation input only in the native client; no temporal playback is implemented here.
+#[derive(Debug, Clone)]
+pub struct IncidentOccurrenceWindow {
+    pub start: f64,
+    pub end_exclusive: f64,
+    pub precision: IncidentTemporalPrecision,
+    pub basis: IncidentOccurrenceBasis,
+    pub label: String,
+}
+
+/// Evidentiary status of a canonical incident. These labels describe deterministic evidence
+/// linkage only; they are deliberately not verification or truth adjudication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncidentCorrelationConfidence {
+    Corroborated,
+    SingleSource,
+    Inferred,
+    Contested,
+}
+
+impl IncidentCorrelationConfidence {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Corroborated => "corroborated",
+            Self::SingleSource => "single-source",
+            Self::Inferred => "inferred",
+            Self::Contested => "contested",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncidentContradictionKind {
+    Fatalities,
+    Actors,
+    Location,
+}
+
+impl IncidentContradictionKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fatalities => "fatalities",
+            Self::Actors => "actors",
+            Self::Location => "location",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct IncidentContradiction {
+    pub kind: IncidentContradictionKind,
+    pub summary: String,
+    pub member_event_ids: Vec<String>,
+}
+
+/// One retained source record inside an evidence cluster. The full normalized record is embedded
+/// so correlation never silently discards an independent report.
+#[derive(Debug, Clone)]
+pub struct IncidentEvidenceMember {
+    pub event: Incident,
+    pub source_family: String,
+    pub correlation_score: f64,
+    pub rationale: Vec<String>,
+}
+
+/// Canonical-incident evidence cluster. Present only on canonical representatives that absorbed
+/// at least one additional report; `members` excludes the canonical carrier itself.
+#[derive(Debug, Clone)]
+pub struct IncidentEvidenceCluster {
+    pub cluster_id: String,
+    pub canonical_event_id: String,
+    pub algorithm_version: String,
+    pub confidence: IncidentCorrelationConfidence,
+    pub confidence_reason: String,
+    pub source_families: Vec<String>,
+    pub independent_family_count: usize,
+    pub member_count: usize,
+    pub contradictions: Vec<IncidentContradiction>,
+    pub members: Vec<IncidentEvidenceMember>,
+}
+
+/// Lightweight membership summary attached to every emitted incident, including singletons.
+#[derive(Debug, Clone)]
+pub struct IncidentMembership {
+    pub cluster_id: String,
+    pub canonical_event_id: String,
+    pub is_canonical: bool,
+    pub correlation_score: f64,
+    pub confidence: IncidentCorrelationConfidence,
+    pub member_count: usize,
+    pub independent_family_count: usize,
+    pub rationale: Vec<String>,
+}
+
 /// Native incident normalization. Optional numeric fields remain optional so the UI can say
 /// "not supplied" rather than inventing zero casualties, zero displacement, or exact timestamps.
 #[derive(Debug, Clone)]
@@ -581,12 +704,19 @@ pub struct Incident {
     pub sources: Vec<ConflictSource>,
     pub source_family: String,
     pub intensity: f32,
+    pub occurrence: Option<IncidentOccurrenceWindow>,
     pub ucdp: Option<UcdpGedEventMetadata>,
+    /// Canonical-incident membership summary, present after the deterministic correlation pass.
+    pub incident: Option<IncidentMembership>,
+    /// Full evidence drill-down, present only on canonical representatives with retained members.
+    pub evidence: Option<IncidentEvidenceCluster>,
 }
 
 #[derive(Debug, Clone)]
 pub struct NativeDataPackage {
-    pub incidents: Vec<Incident>,
+    /// Raw normalized records before canonical incident correlation. Correlation consumes these
+    /// records but retains every independent report either as a singleton or evidence member.
+    pub normalized_incidents: Vec<Incident>,
     pub fallback_incidents: Vec<Incident>,
     pub osint: OsintSnapshot,
     pub conflict_generated_at: Option<f64>,
@@ -653,6 +783,139 @@ fn parse_day_unix_seconds(value: &str) -> Option<f64> {
         .map(|value| value.and_utc().timestamp_millis() as f64 / 1000.0)
 }
 
+fn parse_iso_day_prefix_unix_seconds(value: Option<&str>) -> Option<f64> {
+    let value = value?;
+    parse_day_unix_seconds(value.get(..10)?)
+}
+
+fn is_finite_positive_timestamp(timestamp: f64) -> bool {
+    timestamp.is_finite() && timestamp > 0.0
+}
+
+pub fn create_second_occurrence_window(timestamp: f64) -> Option<IncidentOccurrenceWindow> {
+    if !is_finite_positive_timestamp(timestamp) {
+        return None;
+    }
+    let start = timestamp.floor();
+    Some(IncidentOccurrenceWindow {
+        start,
+        end_exclusive: start + 1.0,
+        precision: IncidentTemporalPrecision::Second,
+        basis: IncidentOccurrenceBasis::PublisherSecond,
+        label: "publisher timestamp normalized to a one-second UTC interval".to_string(),
+    })
+}
+
+pub fn create_day_occurrence_window(
+    day_start_or_timestamp: f64,
+    basis: IncidentOccurrenceBasis,
+) -> Option<IncidentOccurrenceWindow> {
+    if !is_finite_positive_timestamp(day_start_or_timestamp) {
+        return None;
+    }
+    if !matches!(
+        basis,
+        IncidentOccurrenceBasis::PublisherDay | IncidentOccurrenceBasis::InferredDay
+    ) {
+        return None;
+    }
+    let start = (day_start_or_timestamp / 86_400.0).floor() * 86_400.0;
+    Some(IncidentOccurrenceWindow {
+        start,
+        end_exclusive: start + 86_400.0,
+        precision: IncidentTemporalPrecision::Day,
+        basis,
+        label: if basis == IncidentOccurrenceBasis::PublisherDay {
+            "publisher supplies a calendar date only; the exact time inside the UTC-normalized day is unresolved"
+        } else {
+            "legacy timestamp falls at a UTC midnight boundary and is conservatively treated as date-only; the exact time inside the day is unresolved"
+        }
+        .to_string(),
+    })
+}
+
+fn ucdp_date_precision_text(date_prec: Option<i32>) -> &'static str {
+    match date_prec {
+        Some(1) => "exact calendar day known (day resolution, not a time of day)",
+        Some(2) => "exact day unknown within a 2-6 day range",
+        Some(3) => "exact day unknown within the source week",
+        Some(4) => "exact day unknown within an 8-30 day/month range",
+        Some(5) => "exact day unknown within a range longer than one month and up to one year",
+        _ => "date precision unspecified by publisher",
+    }
+}
+
+pub fn create_ucdp_occurrence_window(
+    date_start: Option<&str>,
+    date_end: Option<&str>,
+    date_prec: Option<i32>,
+) -> Option<IncidentOccurrenceWindow> {
+    let start_day = parse_iso_day_prefix_unix_seconds(date_start)?;
+    let end_day = parse_iso_day_prefix_unix_seconds(date_end)?;
+    if start_day > end_day {
+        return None;
+    }
+    let end_exclusive = end_day + 86_400.0;
+    let is_single_day = start_day + 86_400.0 == end_exclusive;
+    let days = ((end_exclusive - start_day) / 86_400.0).round() as usize;
+    let precision_text = ucdp_date_precision_text(date_prec);
+    Some(IncidentOccurrenceWindow {
+        start: start_day,
+        end_exclusive,
+        precision: if is_single_day {
+            IncidentTemporalPrecision::Day
+        } else {
+            IncidentTemporalPrecision::Range
+        },
+        basis: if is_single_day {
+            IncidentOccurrenceBasis::PublisherDay
+        } else {
+            IncidentOccurrenceBasis::PublisherRange
+        },
+        label: format!(
+            "UCDP {}; earliest/latest possible dates are {} through {} inclusive ({} UTC-normalized day{})",
+            precision_text,
+            date_start.and_then(|value| value.get(..10)).unwrap_or("unknown"),
+            date_end.and_then(|value| value.get(..10)).unwrap_or("unknown"),
+            days,
+            if days == 1 { "" } else { "s" }
+        ),
+    })
+}
+
+/// Resolve an occurrence interval without inventing precision. This mirrors the web correlation
+/// input contract, scaled to Unix seconds. It is intentionally not a temporal-playback index.
+pub fn resolve_incident_occurrence_window(event: &Incident) -> Option<IncidentOccurrenceWindow> {
+    if let Some(explicit) = &event.occurrence {
+        if explicit.start.is_finite()
+            && explicit.end_exclusive.is_finite()
+            && explicit.end_exclusive > explicit.start
+        {
+            return Some(explicit.clone());
+        }
+    }
+
+    if let Some(ucdp) = &event.ucdp {
+        if let Some(window) = create_ucdp_occurrence_window(
+            ucdp.date_start.as_deref(),
+            ucdp.date_end.as_deref(),
+            ucdp.date_prec,
+        ) {
+            return Some(window);
+        }
+    }
+
+    let occurred_at = event.occurred_at?;
+    if !is_finite_positive_timestamp(occurred_at) {
+        return None;
+    }
+    if occurred_at.rem_euclid(86_400.0).abs() < f64::EPSILON {
+        create_day_occurrence_window(occurred_at, IncidentOccurrenceBasis::InferredDay)
+    } else {
+        create_second_occurrence_window(occurred_at)
+    }
+}
+
 fn severity_from_code(code: Option<&str>) -> String {
     match code {
         Some("c") | Some("critical") => "critical",
@@ -674,6 +937,27 @@ fn severity_rank(severity: &str) -> f32 {
 
 fn clamp01(value: f32) -> f32 {
     value.clamp(0.0, 1.0)
+}
+
+fn slugify_theater(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut pending_dash = false;
+    for character in value.chars().flat_map(char::to_lowercase) {
+        if character.is_ascii_alphanumeric() {
+            if pending_dash && !output.is_empty() {
+                output.push('-');
+            }
+            pending_dash = false;
+            output.push(character);
+        } else {
+            pending_dash = true;
+        }
+    }
+    if output.is_empty() {
+        "global".to_string()
+    } else {
+        output
+    }
 }
 
 fn normalize_theater_name(value: &str) -> String {
@@ -714,6 +998,16 @@ pub fn normalize_warheatmap_event(raw: &WarEvent) -> Option<Incident> {
         .updated_at
         .filter(|value| value.is_finite() && *value > 0.0)
         .or(occurred_at);
+    let occurrence = if raw
+        .occurred_at
+        .is_some_and(|value| value.is_finite() && value > 0.0)
+    {
+        occurred_at.and_then(create_second_occurrence_window)
+    } else {
+        occurred_at.and_then(|timestamp| {
+            create_day_occurrence_window(timestamp, IncidentOccurrenceBasis::PublisherDay)
+        })
+    };
     let killed = raw
         .killed
         .filter(|value| value.is_finite() && *value >= 0.0);
@@ -750,18 +1044,26 @@ pub fn normalize_warheatmap_event(raw: &WarEvent) -> Option<Incident> {
     let theater = raw
         .theater
         .clone()
-        .or_else(|| raw.conflict.clone())
-        .or_else(|| raw.country.clone())
+        .filter(|value| !value.is_empty())
+        .or_else(|| raw.conflict.clone().filter(|value| !value.is_empty()))
+        .or_else(|| raw.country.clone().filter(|value| !value.is_empty()))
         .unwrap_or_else(|| "global".to_string());
     let mut sources: Vec<ConflictSource> = raw
         .sources
         .iter()
-        .filter(|source| source.name.is_some() && source.url.is_some())
+        .filter(|source| {
+            source
+                .name
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+                && source.url.as_deref().is_some_and(|value| !value.is_empty())
+        })
         .take(4)
         .cloned()
         .collect();
     if let (Some(name), Some(url)) = (&raw.source_name, &raw.source_url) {
-        if !url.is_empty()
+        if !name.is_empty()
+            && !url.is_empty()
             && !sources
                 .iter()
                 .any(|source| source.url.as_ref() == Some(url))
@@ -784,12 +1086,18 @@ pub fn normalize_warheatmap_event(raw: &WarEvent) -> Option<Incident> {
         title: raw
             .title
             .clone()
+            .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "Untitled incident".to_string()),
         detail: None,
-        country: raw.country.clone().unwrap_or_else(|| "Unknown".to_string()),
+        country: raw
+            .country
+            .clone()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "Unknown".to_string()),
         conflict: raw
             .conflict
             .clone()
+            .filter(|value| !value.is_empty())
             .unwrap_or_else(|| normalize_theater_name(&theater)),
         theater,
         region: raw.region.clone(),
@@ -800,37 +1108,37 @@ pub fn normalize_warheatmap_event(raw: &WarEvent) -> Option<Incident> {
         occurred_at,
         updated_at,
         verified: raw.verified.unwrap_or(false),
-        source_name: raw.source_name.clone(),
+        source_name: raw.source_name.clone().filter(|value| !value.is_empty()),
         source_url: raw.source_url.clone().filter(|value| !value.is_empty()),
         sources,
         source_family: "warheatmap".to_string(),
         intensity,
+        occurrence,
         ucdp: None,
+        incident: None,
+        evidence: None,
     })
 }
 
+fn parse_fatality_number_after_marker(detail: &str, marker: char) -> Option<f32> {
+    let marker_index = detail.find(marker)?;
+    let after_marker = detail[marker_index + marker.len_utf8()..].trim_start();
+    let digit_len = after_marker
+        .bytes()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if digit_len == 0 {
+        return None;
+    }
+    after_marker[..digit_len].parse::<f32>().ok()
+}
+
 fn parse_fatality_number_after_markers(detail: &str) -> Option<f32> {
-    let characters: Vec<char> = detail.chars().collect();
-    for (index, character) in characters.iter().enumerate() {
-        if !matches!(character, '†' | '•' | '�') {
-            continue;
-        }
-        let mut cursor = index + 1;
-        while cursor < characters.len() && characters[cursor].is_whitespace() {
-            cursor += 1;
-        }
-        let start = cursor;
-        while cursor < characters.len() && characters[cursor].is_ascii_digit() {
-            cursor += 1;
-        }
-        if cursor > start {
-            if let Ok(value) = characters[start..cursor]
-                .iter()
-                .collect::<String>()
-                .parse::<f32>()
-            {
-                return Some(value);
-            }
+    // Match the web parser's priority order. The replacement-character fallback is native-only
+    // hardening for malformed cached rows; well-formed embedded rows use the publisher dagger.
+    for marker in ['†', '•', '�'] {
+        if let Some(value) = parse_fatality_number_after_marker(detail, marker) {
+            return Some(value);
         }
     }
     let lower = detail.to_ascii_lowercase();
@@ -850,8 +1158,15 @@ fn parse_fatality_number_after_markers(detail: &str) -> Option<f32> {
 }
 
 fn map_country(title: Option<&str>) -> String {
+    let Some(title) = title else {
+        return "Unknown".to_string();
+    };
+    if !title.contains(',') {
+        return "Unknown".to_string();
+    }
     title
-        .and_then(|value| value.rsplit(',').next())
+        .rsplit(',')
+        .next()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("Unknown")
@@ -859,14 +1174,20 @@ fn map_country(title: Option<&str>) -> String {
 }
 
 fn canonical_ucdp_id(raw_id: &str, ucdp: Option<&UcdpGedEventMetadata>) -> Option<u64> {
-    ucdp.and_then(|metadata| metadata.id)
-        .or_else(|| raw_id.strip_prefix("ucdp:")?.parse::<u64>().ok())
+    ucdp.and_then(|metadata| metadata.id).or_else(|| {
+        let suffix = raw_id.strip_prefix("ucdp:")?;
+        if !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            suffix.parse::<u64>().ok()
+        } else {
+            None
+        }
+    })
 }
 
 /// Normalize the battle records of the Map of Wars lattice. Non-battle lattice rows are not
 /// conflict incidents in the web contract; launches and vessels remain in their dedicated arrays.
 pub fn normalize_map_of_wars_event(raw: &MapEvent) -> Option<Incident> {
-    let raw_id = raw.id.clone()?;
+    let raw_id = raw.id.clone().filter(|value| !value.is_empty())?;
     let lat = raw.lat?;
     let lng = raw.lon?;
     let occurred_at = raw.ts.filter(|value| value.is_finite())?;
@@ -876,6 +1197,7 @@ pub fn normalize_map_of_wars_event(raw: &MapEvent) -> Option<Incident> {
     let title = raw
         .title
         .clone()
+        .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "Unnamed contact".to_string());
     let parsed_fatalities = raw
         .detail
@@ -885,7 +1207,8 @@ pub fn normalize_map_of_wars_event(raw: &MapEvent) -> Option<Incident> {
     let casualties = first_finite([
         ucdp.as_ref().and_then(|value| value.best),
         parsed_fatalities,
-    ]);
+    ])
+    .filter(|value| *value >= 0.0);
     let uncertainty_aware_fatalities = if ucdp.is_some() {
         casualties.unwrap_or(0.0).max(
             if ucdp.as_ref().and_then(|value| value.high).unwrap_or(0.0) > 0.0 {
@@ -909,10 +1232,12 @@ pub fn normalize_map_of_wars_event(raw: &MapEvent) -> Option<Incident> {
     let country = ucdp
         .as_ref()
         .and_then(|value| value.country.clone())
+        .filter(|value| !value.is_empty())
         .unwrap_or_else(|| map_country(raw.title.as_deref()));
     let conflict = ucdp
         .as_ref()
         .and_then(|value| value.conflict_name.clone())
+        .filter(|value| !value.is_empty())
         .unwrap_or_else(|| {
             if country != "Unknown" {
                 format!("{} conflict", country)
@@ -938,11 +1263,30 @@ pub fn normalize_map_of_wars_event(raw: &MapEvent) -> Option<Incident> {
     } else {
         "mapofwars"
     };
-    let verified = ucdp
+    let verified = if let Some(metadata) = ucdp.as_ref() {
+        metadata
+            .code_status
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("clear"))
+    } else {
+        raw.source.as_deref() == Some("UCDP")
+    };
+    let occurrence = ucdp
         .as_ref()
-        .and_then(|value| value.code_status.as_deref())
-        .map(|value| value.eq_ignore_ascii_case("clear"))
-        .unwrap_or_else(|| raw.source.as_deref() == Some("UCDP"));
+        .and_then(|metadata| {
+            create_ucdp_occurrence_window(
+                metadata.date_start.as_deref(),
+                metadata.date_end.as_deref(),
+                metadata.date_prec,
+            )
+        })
+        .or_else(|| {
+            if occurred_at.rem_euclid(86_400.0).abs() < f64::EPSILON {
+                create_day_occurrence_window(occurred_at, IncidentOccurrenceBasis::InferredDay)
+            } else {
+                create_second_occurrence_window(occurred_at)
+            }
+        });
     Some(Incident {
         id,
         lat,
@@ -953,14 +1297,20 @@ pub fn normalize_map_of_wars_event(raw: &MapEvent) -> Option<Incident> {
         } else {
             "ground_battle".to_string()
         },
-        title: raw.note.clone().unwrap_or(title),
-        detail: raw.detail.clone(),
+        title: raw
+            .note
+            .clone()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(title),
+        detail: raw.detail.clone().filter(|value| !value.is_empty()),
         country,
         conflict: conflict.clone(),
-        theater: conflict
-            .to_ascii_lowercase()
-            .replace(|character: char| !character.is_ascii_alphanumeric(), "-"),
-        region: ucdp.as_ref().and_then(|value| value.region.clone()),
+        theater: slugify_theater(&conflict),
+        region: ucdp
+            .as_ref()
+            .and_then(|value| value.region.clone())
+            .filter(|value| !value.is_empty())
+            .or_else(|| Some("Global".to_string())),
         precision: ucdp.as_ref().and_then(|value| value.where_prec),
         casualties,
         killed: casualties,
@@ -968,16 +1318,18 @@ pub fn normalize_map_of_wars_event(raw: &MapEvent) -> Option<Incident> {
         occurred_at: Some(occurred_at),
         updated_at: Some(occurred_at),
         verified,
-        source_name: raw.source.clone(),
-        source_url: raw.url.clone(),
+        source_name: raw.source.clone().filter(|value| !value.is_empty()),
+        source_url: raw.url.clone().filter(|value| !value.is_empty()),
         sources: raw
             .url
             .as_ref()
+            .filter(|url| !url.is_empty())
             .map(|url| {
                 vec![ConflictSource {
                     name: Some(
                         raw.source
                             .clone()
+                            .filter(|value| !value.is_empty())
                             .unwrap_or_else(|| "Map of Wars".to_string()),
                     ),
                     url: Some(url.clone()),
@@ -986,7 +1338,10 @@ pub fn normalize_map_of_wars_event(raw: &MapEvent) -> Option<Incident> {
             .unwrap_or_default(),
         source_family: source_family.to_string(),
         intensity,
+        occurrence,
         ucdp,
+        incident: None,
+        evidence: None,
     })
 }
 
@@ -1041,9 +1396,9 @@ pub fn load_embedded() -> NativeDataPackage {
                 .collect()
         })
         .unwrap_or_default();
-    let incidents = assemble_incidents(&fallback_incidents, &osint.map_events);
+    let normalized_incidents = assemble_incidents(&fallback_incidents, &osint.map_events);
     NativeDataPackage {
-        incidents,
+        normalized_incidents,
         fallback_incidents,
         osint,
         conflict_generated_at: fallback.as_ref().and_then(|value| value.generated_at),
@@ -1196,7 +1551,7 @@ mod tests {
         assert!(!package.osint.gdelt_geo_news.is_empty());
         assert!(!package.osint.map_events.is_empty());
         assert!(!package.fallback_incidents.is_empty());
-        assert!(!package.incidents.is_empty());
+        assert!(!package.normalized_incidents.is_empty());
     }
 
     #[test]

@@ -75,7 +75,7 @@ The current static caps follow or closely mirror the web client: 240 military ai
 
 ## Native limitations in this vertical slice
 
-- No live WarHeatMap websocket/API merge and no web cross-source incident-correlation pass yet; incidents are embedded fallback plus normalized Map-of-Wars battle rows.
+- No live WarHeatMap websocket/API merge. Conflict incidents are embedded fallback plus normalized Map-of-Wars battle rows; the deterministic cross-source correlation pass now mirrors `incident-correlation-v1`.
 - Map-of-Wars non-battle rows are not folded into conflict incidents. Launches/vessels are shown from their dedicated arrays; Copernicus activation rows are currently count/schema-only in `mapOfWarsEvents`.
 - Cyber-vulnerability and webcam payloads are parsed only as opaque JSON for counts/provenance; they are not visualized natively.
 - Google/RSS news is shown as source context, not plotted.
