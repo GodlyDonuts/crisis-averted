@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
-import { Binoculars, Clock3, Cloud, Compass, Download, Hexagon, Network, Newspaper, Orbit, Pause, Plane, Play, Ship, Leaf, Radio, ScanLine, Signal, Radar, SlidersHorizontal, Tags, Waypoints, WifiOff } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Binoculars, Clock3, Cloud, Compass, Download, FileJson, FileText, Hexagon, Network, Newspaper, Orbit, Pause, Plane, Play, Sheet, Ship, Leaf, Radio, ScanLine, Signal, Radar, SlidersHorizontal, Tags, Waypoints, WifiOff, X } from "lucide-react";
 import type { CategoryGroup, ConflictEvent, SeverityKey, TimelineBucket, TimeWindowKey } from "@/types/conflict";
 import type { IncidentTemporalCoverage } from "@/lib/incidentTime";
 import type { IncidentPlaybackController } from "@/hooks/useIncidentPlayback";
+import type { AnalystExportArtifacts } from "@/lib/analystExport";
 import type { GodEyeLayerToggles } from "./GodEyeGlobe";
 import IncidentPlaybackPanel from "./IncidentPlaybackPanel";
 import { CATEGORY_GROUP_META, SEVERITY_META } from "@/lib/conflictData";
@@ -22,9 +23,13 @@ interface ControlDeckProps {
   corpusCoverage: IncidentTemporalCoverage;
   convergenceOpen?: boolean;
   convergenceCardCount?: number;
+  /** Convergence cards across the full filter scope (export coverage), as opposed to the playback-lens-filtered badge count. */
+  convergenceScopeCardCount?: number;
   watchOpen?: boolean;
   watchAlertCount?: number;
   surgeSignalCount?: number;
+  /** Builds the full analyst export bundle artifacts on demand (pure, deterministic given the workspace state). */
+  buildAnalystExport?: () => AnalystExportArtifacts;
   onTimeWindowChange: (window: TimeWindowKey) => void;
   onToggleCategoryGroup: (group: CategoryGroup) => void;
   onToggleSeverity: (severity: SeverityKey) => void;
@@ -68,59 +73,10 @@ function downloadFile(filename: string, content: string, type: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function csvCell(value: unknown): string {
-  return `"${String(value ?? "").replace(/"/g, '""')}"`;
-}
-
-function exportEvents(events: ConflictEvent[], format: "json" | "csv") {
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-  if (format === "json") {
-    downloadFile(`godseye-incidents-${stamp}.json`, JSON.stringify(events, null, 2), "application/json");
-    return;
-  }
-  const header = ["id", "occurred_utc", "occurrence_start_utc", "occurrence_end_exclusive_utc", "occurrence_precision", "occurrence_basis", "lat", "lng", "severity", "category", "country", "conflict", "killed", "counted_casualties", "displaced", "precision", "verified", "title", "sources", "ucdp_release", "ucdp_code_status", "ucdp_side_a", "ucdp_side_b", "ucdp_low", "ucdp_best", "ucdp_high", "ucdp_date_start", "ucdp_date_end", "ucdp_where_prec", "ucdp_date_prec", "ucdp_source_count", "ucdp_source_article", "source_family", "canonical_incident_id", "correlation_confidence", "evidence_report_count", "independent_family_count", "contradiction_kinds", "evidence_member_ids"];
-  const rows = events.map((event) => [
-    event.id,
-    new Date(event.occurredAt).toISOString(),
-    event.occurrence ? new Date(event.occurrence.start).toISOString() : "",
-    event.occurrence ? new Date(event.occurrence.endExclusive).toISOString() : "",
-    event.occurrence?.precision ?? "",
-    event.occurrence?.basis ?? "",
-    event.lat,
-    event.lng,
-    event.severity,
-    event.category,
-    event.country,
-    event.conflict,
-    event.killed,
-    event.countedCasualties,
-    event.displaced,
-    event.precision,
-    event.verified,
-    event.title,
-    event.sources.map((source) => `${source.name} ${source.url}`).join(" | "),
-    event.ucdp ? `${event.ucdp.dataset_version} ${event.ucdp.dataset_release}` : "",
-    event.ucdp?.code_status ?? "",
-    event.ucdp?.side_a ?? "",
-    event.ucdp?.side_b ?? "",
-    event.ucdp?.low ?? "",
-    event.ucdp?.best ?? "",
-    event.ucdp?.high ?? "",
-    event.ucdp?.date_start ?? "",
-    event.ucdp?.date_end ?? "",
-    event.ucdp?.where_prec ?? "",
-    event.ucdp?.date_prec ?? "",
-    event.ucdp?.number_of_sources ?? "",
-    event.ucdp?.source_article ?? "",
-    event.sourceFamily ?? "",
-    event.incident?.canonicalEventId ?? "",
-    event.incident?.confidence ?? "",
-    event.incident?.memberCount ?? "",
-    event.incident?.independentFamilyCount ?? "",
-    (event.evidence?.contradictions ?? []).map((contradiction) => contradiction.kind).join("+"),
-    (event.evidence?.members ?? []).map((member) => member.event.id).join(" | "),
-  ].map(csvCell).join(","));
-  downloadFile(`godseye-incidents-${stamp}.csv`, [header.map(csvCell).join(","), ...rows].join(String.fromCharCode(10)), "text/csv");
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
 }
 
 export default function ControlDeck({
@@ -136,9 +92,11 @@ export default function ControlDeck({
   corpusCoverage,
   convergenceOpen = false,
   convergenceCardCount = 0,
+  convergenceScopeCardCount,
   watchOpen = false,
   watchAlertCount = 0,
   surgeSignalCount = 0,
+  buildAnalystExport,
   onTimeWindowChange,
   onToggleCategoryGroup,
   onToggleSeverity,
@@ -150,7 +108,51 @@ export default function ControlDeck({
 }: ControlDeckProps) {
   const maxCount = Math.max(1, ...timeline.map((bucket) => bucket.count));
   const [layersOpen, setLayersOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportStatus, setExportStatus] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
+  const exportTriggerRef = useRef<HTMLButtonElement>(null);
+  const exportFirstActionRef = useRef<HTMLButtonElement>(null);
   const activeLayerCount = Object.values(layers).filter(Boolean).length;
+  const evidenceClusterCount = events.filter((event) => (event.evidence?.members?.length ?? 0) > 0).length;
+
+  useEffect(() => {
+    if (!exportOpen) return undefined;
+    const focusTimeout = window.setTimeout(() => exportFirstActionRef.current?.focus(), 30);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setExportOpen(false);
+        exportTriggerRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.clearTimeout(focusTimeout);
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [exportOpen]);
+
+  const runExport = (format: "json" | "markdown" | "csv") => {
+    if (!buildAnalystExport) {
+      setExportStatus({ kind: "error", message: "export builder unavailable — workspace still initializing" });
+      return;
+    }
+    try {
+      const artifacts = buildAnalystExport();
+      if (format === "json") {
+        downloadFile(artifacts.filenames.bundleJson, artifacts.json, "application/json");
+        setExportStatus({ kind: "ok", message: `downloaded ${artifacts.filenames.bundleJson} (${formatBytes(artifacts.jsonBytes)}) — full-fidelity evidence handoff` });
+      } else if (format === "markdown") {
+        downloadFile(artifacts.filenames.briefMarkdown, artifacts.markdown, "text/markdown");
+        setExportStatus({ kind: "ok", message: `downloaded ${artifacts.filenames.briefMarkdown} (${formatBytes(artifacts.markdownBytes)}) — analyst-readable brief` });
+      } else {
+        downloadFile(artifacts.filenames.incidentsCsv, artifacts.csv, "text/csv");
+        setExportStatus({ kind: "ok", message: `downloaded ${artifacts.filenames.incidentsCsv} (${formatBytes(artifacts.csvBytes)}) — flat incident rows with caveat preamble` });
+      }
+    } catch (error) {
+      setExportStatus({ kind: "error", message: `export failed safely: ${error instanceof Error ? error.message : "unknown error"} — nothing was partially written` });
+    }
+  };
 
   return (
     <div className={`godseye-panel pointer-events-auto absolute bottom-4 left-1/2 z-40 -translate-x-1/2 overflow-visible ${playback.active ? "w-[min(920px,calc(100vw-2rem))]" : "w-[min(780px,calc(100vw-2rem))]"}`}>
@@ -301,29 +303,103 @@ export default function ControlDeck({
             Tour
           </button>
 
-          <div className="flex overflow-hidden rounded-sm border border-white/10">
+          <div className="relative">
             <button
+              ref={exportTriggerRef}
               type="button"
-              onClick={() => exportEvents(events, "json")}
-              className="flex h-8 items-center gap-1.5 bg-white/[0.025] px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-white/46 transition hover:text-white/72"
-              title="Export filtered incidents as JSON"
+              onClick={() => { setExportOpen((open) => !open); setExportStatus(null); setLayersOpen(false); }}
+              aria-expanded={exportOpen}
+              aria-haspopup="dialog"
+              aria-label="Open analyst export panel — evidence handoff bundles in JSON, Markdown, or CSV with full provenance, citations, and caveats"
+              title="Analyst export — full evidence handoff bundle (JSON), readable brief (Markdown), or flat rows (CSV); UTC filenames, unverified-OSINT and no-operational-authority caveats included"
+              className={`flex h-8 items-center gap-1.5 rounded-sm border px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] transition ${exportOpen ? "border-emerald-200/30 bg-emerald-300/[0.1] text-emerald-100" : "border-white/10 bg-white/[0.025] text-white/46 hover:text-white/72"}`}
             >
-              <Download className="h-3.5 w-3.5" /> JSON
+              <Download className="h-3.5 w-3.5" />
+              Export
             </button>
-            <button
-              type="button"
-              onClick={() => exportEvents(events, "csv")}
-              className="flex h-8 items-center gap-1.5 border-l border-white/10 bg-white/[0.025] px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] text-white/46 transition hover:text-white/72"
-              title="Export filtered incidents as CSV"
-            >
-              CSV
-            </button>
+            {exportOpen ? (
+              <div
+                role="dialog"
+                aria-modal="false"
+                aria-label="Analyst export contents and formats"
+                className="godseye-panel fixed inset-x-3 bottom-36 z-50 max-h-[min(30rem,calc(100vh-12rem))] overflow-y-auto p-3 godseye-scrollbar sm:absolute sm:inset-x-auto sm:bottom-10 sm:right-0 sm:w-[430px]"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-[13px] font-semibold text-white/88">Analyst export — evidence handoff</h2>
+                    <p className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-white/32">
+                      {events.length} filtered incidents · {evidenceClusterCount} evidence clusters · {convergenceScopeCardCount ?? convergenceCardCount} convergence cards · {surgeSignalCount} surge signals · {watchAlertCount} watch alerts
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setExportOpen(false); exportTriggerRef.current?.focus(); }}
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-sm border border-white/10 text-white/44 transition hover:border-white/24 hover:text-white"
+                    aria-label="Close export panel"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+
+                <div className="mt-2 space-y-1 border-t border-white/8 pt-2 font-mono text-[9px] uppercase leading-relaxed tracking-[0.08em] text-white/36">
+                  <p>Every format includes: filtered canonical incidents with UTC occurrence windows · full evidence-cluster members with pairwise scores, rationale lines, and preserved contradictions · convergence cards for in-scope anchors · surge signals and triggered watch alerts with evidence references · filter/playback/operator scope · provenance and retrieval timestamps · citations/URLs · attribution and schema versions · shareable permalink.</p>
+                  <p className="text-amber-100/46">Unverified OSINT — no operational authority. Secret-shaped search text is withheld. Local dismiss/snooze state never leaves the browser.</p>
+                </div>
+
+                <div className="mt-2.5 space-y-1.5">
+                  <button
+                    ref={exportFirstActionRef}
+                    type="button"
+                    onClick={() => runExport("json")}
+                    className="flex w-full items-center gap-2.5 rounded-sm border border-emerald-200/22 bg-emerald-300/[0.07] px-2.5 py-2 text-left transition hover:border-emerald-200/38 hover:bg-emerald-300/[0.12]"
+                  >
+                    <FileJson className="h-4 w-4 shrink-0 text-emerald-100/80" />
+                    <span>
+                      <span className="block font-mono text-[10px] uppercase tracking-[0.12em] text-emerald-100/90">JSON bundle — full fidelity</span>
+                      <span className="mt-0.5 block text-[10px] leading-snug text-white/46">Complete evidence handoff: every incident, member report, rationale, contradiction, card, signal, alert, provenance record, citation, and caveat. Machine-readable, schema-versioned.</span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => runExport("markdown")}
+                    className="flex w-full items-center gap-2.5 rounded-sm border border-white/10 bg-white/[0.025] px-2.5 py-2 text-left transition hover:border-white/22 hover:bg-white/[0.05]"
+                  >
+                    <FileText className="h-4 w-4 shrink-0 text-white/60" />
+                    <span>
+                      <span className="block font-mono text-[10px] uppercase tracking-[0.12em] text-white/78">Markdown brief — analyst readable</span>
+                      <span className="mt-0.5 block text-[10px] leading-snug text-white/46">Caveat-led readable digest of the same bundle. Incidents summarized to the first 120 rows with per-cluster member caps; the JSON bundle remains the full-fidelity artifact.</span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => runExport("csv")}
+                    className="flex w-full items-center gap-2.5 rounded-sm border border-white/10 bg-white/[0.025] px-2.5 py-2 text-left transition hover:border-white/22 hover:bg-white/[0.05]"
+                  >
+                    <Sheet className="h-4 w-4 shrink-0 text-white/60" />
+                    <span>
+                      <span className="block font-mono text-[10px] uppercase tracking-[0.12em] text-white/78">CSV rows — flat incident table</span>
+                      <span className="mt-0.5 block text-[10px] leading-snug text-white/46">Spreadsheet-ready filtered incident rows (occurrence windows, UCDP fields, correlation state, member ids) with #-prefixed caveat preamble. No embedded evidence members — use JSON for the full cluster handoff.</span>
+                    </span>
+                  </button>
+                </div>
+
+                <p className="mt-2 font-mono text-[9px] uppercase leading-relaxed tracking-[0.1em] text-white/28">
+                  Filenames and content use UTC timestamps. Export scope is the full filtered incident set — never narrowed by the playback lens; playback state is recorded for reproduction.
+                </p>
+
+                {exportStatus ? (
+                  <p role={exportStatus.kind === "error" ? "alert" : "status"} className={`mt-2 rounded-sm border px-2 py-1.5 font-mono text-[9px] uppercase leading-relaxed tracking-[0.09em] ${exportStatus.kind === "error" ? "border-red-300/24 bg-red-400/10 text-red-100/80" : "border-emerald-300/20 bg-emerald-400/10 text-emerald-100/76"}`}>
+                    {exportStatus.message}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="relative">
             <button
               type="button"
-              onClick={() => setLayersOpen((open) => !open)}
+              onClick={() => { setLayersOpen((open) => !open); setExportOpen(false); }}
               aria-expanded={layersOpen}
               className={`flex h-8 items-center gap-1.5 rounded-sm border px-2.5 font-mono text-[10px] uppercase tracking-[0.12em] transition ${layersOpen ? "border-amber-200/30 bg-amber-300/[0.1] text-amber-100" : "border-white/10 bg-white/[0.025] text-white/46 hover:text-white/72"}`}
             >

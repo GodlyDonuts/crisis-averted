@@ -21,6 +21,8 @@ import { useOperatorUrlStateSync } from "@/hooks/useOperatorUrlStateSync";
 import { analyzeEscalationSurge } from "@/lib/escalationSurge";
 import { evaluateWatchRules } from "@/lib/watchRules";
 import { measureIncidentTemporalCoverage } from "@/lib/incidentTime";
+import { buildAnalystExportArtifacts, buildShareablePermalink, type AnalystExportArtifacts } from "@/lib/analystExport";
+import { CONVERGENCE_DISCLAIMER } from "@/lib/domainConvergence";
 import {
   DEFAULT_OPERATOR_LAYERS,
   type OperatorCameraUrlState,
@@ -333,6 +335,73 @@ export default function GodEyeCommandCenter() {
       && !playbackRestoring
     ),
   });
+
+  // Analyst export bundle assembly is deliberately click-time rather than memoized: the
+  // artifact must describe the exact workspace state at the moment of handoff, including a
+  // freshly encoded permalink. The library builders are pure and deterministic; the only
+  // clock input is the generation timestamp passed here.
+  const buildExportArtifacts = useCallback((): AnalystExportArtifacts => {
+    const operatorState = buildOperatorState();
+    const baseUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
+    const permalink = buildShareablePermalink(operatorState, baseUrl);
+    return buildAnalystExportArtifacts({
+      generatedAt: Date.now(),
+      permalink,
+      operatorState,
+      filters: {
+        timeWindow: filters.timeWindow,
+        categoryGroups: [...filters.categoryGroups],
+        severities: [...filters.severities],
+        theater: filters.theater,
+        query: filters.query,
+      },
+      playback: {
+        active: playbackActive,
+        playing: playbackActive && playbackPlaying,
+        mode: playbackMode,
+        frameIndex: playbackActive ? playbackFrameIndex : null,
+        frameStart: playbackActive ? playbackFrameStart : null,
+        frameEndExclusive: playbackActive && playback.frame ? playback.frame.endExclusive : null,
+        speedMultiplier: playbackSpeedMultiplier,
+        resolutionPreference: playbackResolutionPreference,
+        trailHours: playbackTrailHours,
+        frameEventCount: playbackActive ? temporalEvents.length : null,
+      },
+      events: visibleEvents,
+      corpusIncidentCount: events.length,
+      feed: { source, lastUpdated, error, correlation },
+      snapshot: osintSnapshot,
+      convergence: convergence.analysis,
+      convergenceDisclaimer: CONVERGENCE_DISCLAIMER,
+      surge: surgeAnalysis,
+      watchEvaluation,
+      watchRules,
+    });
+  }, [
+    buildOperatorState,
+    convergence.analysis,
+    correlation,
+    error,
+    events.length,
+    filters,
+    lastUpdated,
+    osintSnapshot,
+    playback.frame,
+    playbackActive,
+    playbackFrameIndex,
+    playbackFrameStart,
+    playbackMode,
+    playbackPlaying,
+    playbackResolutionPreference,
+    playbackSpeedMultiplier,
+    playbackTrailHours,
+    source,
+    surgeAnalysis,
+    temporalEvents.length,
+    visibleEvents,
+    watchEvaluation,
+    watchRules,
+  ]);
 
   useEffect(() => {
     loadingRef.current = loading;
@@ -751,9 +820,11 @@ export default function GodEyeCommandCenter() {
           corpusCoverage={corpusCoverage}
           convergenceOpen={convergenceOpen}
           convergenceCardCount={convergenceCards.length}
+          convergenceScopeCardCount={convergence.analysis.cards.length}
           watchOpen={watchOpen}
           watchAlertCount={watchEvaluation.stats.triggeredRuleCount}
           surgeSignalCount={surgeSignalCount}
+          buildAnalystExport={buildExportArtifacts}
           onTimeWindowChange={handleTimeWindowChange}
           onToggleCategoryGroup={handleToggleCategoryGroup}
           onToggleSeverity={handleToggleSeverity}
