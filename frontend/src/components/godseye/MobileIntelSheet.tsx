@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Activity, ChevronDown, Layers3, X } from "lucide-react";
 import type { ConflictEvent, ConflictTheater } from "@/types/conflict";
 import { SEVERITY_META, formatRelativeTime } from "@/lib/conflictData";
@@ -25,6 +25,15 @@ export function MobileIntelSheet({
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"feed" | "theaters">("feed");
 
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open]);
+
   return (
     <div className="pointer-events-auto xl:hidden">
       <button
@@ -43,7 +52,7 @@ export function MobileIntelSheet({
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setOpen(false)}
           />
-          <section className="godseye-panel absolute inset-x-0 bottom-0 flex h-[72vh] flex-col overflow-hidden rounded-t-3xl border-x-0 border-b-0">
+          <section role="dialog" aria-modal="true" aria-label="Incident intelligence" className="godseye-panel absolute inset-x-0 bottom-0 flex h-[72vh] flex-col overflow-hidden rounded-t-3xl border-x-0 border-b-0">
             <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
               <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.22em] text-amber-200/70">
                 <Activity className="h-4 w-4" /> Incident intelligence
@@ -64,6 +73,8 @@ export function MobileIntelSheet({
                   key={item}
                   type="button"
                   onClick={() => setTab(item)}
+                  aria-selected={tab === item}
+                  role="tab"
                   className={`rounded-sm border px-3 py-2 font-mono text-[11px] font-bold uppercase tracking-[0.16em] ${
                     tab === item
                       ? "border-amber-300/45 bg-amber-400/12 text-amber-100"

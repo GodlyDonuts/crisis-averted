@@ -540,6 +540,7 @@ export default function GodEyeGlobe({
     controls.maxDistance = 430;
 
     let activePixelRatio = 0;
+    let lastFocusUpdate = 0;
     globe.onZoom((pov) => {
       const altitude = pov.altitude ?? 2.2;
       const desiredPixelRatio = Math.min(window.devicePixelRatio || 1, altitude < 0.62 ? 2 : altitude < 1.35 ? 1.6 : 1.25);
@@ -548,6 +549,9 @@ export default function GodEyeGlobe({
         renderer.setPixelRatio(desiredPixelRatio);
       }
       materialRef.current?.uniforms.globeRotation.value.set(pov.lng ?? 0, pov.lat ?? 0);
+      const now = performance.now();
+      if (now - lastFocusUpdate < 140) return;
+      lastFocusUpdate = now;
       setViewFocus((current) => {
         const centerDelta = Math.abs((pov.lat ?? 0) - current.lat) + Math.abs((pov.lng ?? 0) - current.lng);
         const altitudeDelta = Math.abs(altitude - current.altitude);

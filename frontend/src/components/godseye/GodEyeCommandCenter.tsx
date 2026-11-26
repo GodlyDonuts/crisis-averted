@@ -20,6 +20,7 @@ import EventFeed from "./EventFeed";
 import EventDetailPanel from "./EventDetailPanel";
 import ControlDeck from "./ControlDeck";
 import { MobileIntelSheet } from "./MobileIntelSheet";
+import { MapLegend } from "./MapLegend";
 import { TargetLockOverlay } from "./TargetLockOverlay";
 import { AircraftDetailPanel } from "./AircraftDetailPanel";
 import { SourceStatusPanel } from "./SourceStatusPanel";
@@ -346,6 +347,8 @@ export default function GodEyeCommandCenter() {
         >
           {incidentPanelOpen ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
         </button>
+
+        <MapLegend />
 
         <ControlDeck
           timeWindow={filters.timeWindow}
