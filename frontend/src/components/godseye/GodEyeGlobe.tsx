@@ -51,10 +51,13 @@ export interface GodEyeLayerToggles {
   gdeltGeoNews: boolean;
 }
 
-export interface GodEyeFocusTarget {
+export interface GodEyeCameraState {
   lat: number;
   lng: number;
   altitude: number;
+}
+
+export interface GodEyeFocusTarget extends GodEyeCameraState {
   key: string;
 }
 
@@ -79,6 +82,8 @@ interface GodEyeGlobeProps {
   selectedEvent: ConflictEvent | null;
   selectedTheater: ConflictTheater | null;
   focusTarget: GodEyeFocusTarget | null;
+  /** Supplies the camera center when a globe instance is constructed (notably after a rendering-mode remount). A getter lets the parent keep camera motion out of React rendering. */
+  getInitialCamera?: () => GodEyeCameraState | null;
   layers: GodEyeLayerToggles;
   visualMode: GodEyeVisualMode;
   autoRotate: boolean;
@@ -89,6 +94,8 @@ interface GodEyeGlobeProps {
   onCivilAircraftSelect: (aircraft: OsintAircraft) => void;
   onVesselSelect: (vessel: OsintVessel) => void;
   onTheaterSelect: (theater: ConflictTheater) => void;
+  /** Raw globe center notifications. Consumers must throttle/persist outside React if they use this for URL state. */
+  onCameraChange?: (camera: GodEyeCameraState) => void;
   onRenderFailure?: () => void;
 }
 
@@ -591,6 +598,7 @@ export default function GodEyeGlobe({
   selectedEvent,
   selectedTheater,
   focusTarget,
+  getInitialCamera,
   layers,
   visualMode,
   autoRotate,
@@ -601,6 +609,7 @@ export default function GodEyeGlobe({
   onCivilAircraftSelect,
   onVesselSelect,
   onTheaterSelect,
+  onCameraChange,
   onRenderFailure,
 }: GodEyeGlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -610,7 +619,17 @@ export default function GodEyeGlobe({
   const [wasmCore, setWasmCore] = useState<GodseyeWasmCore | null>(null);
   const cloudsRef = useRef<Mesh | null>(null);
   const layersRef = useRef(layers);
+  const getInitialCameraRef = useRef(getInitialCamera);
+  const onCameraChangeRef = useRef(onCameraChange);
   const [countryFeatures, setCountryFeatures] = useState<CountryFeature[]>([]);
+
+  useEffect(() => {
+    getInitialCameraRef.current = getInitialCamera;
+  }, [getInitialCamera]);
+
+  useEffect(() => {
+    onCameraChangeRef.current = onCameraChange;
+  }, [onCameraChange]);
 
   useEffect(() => {
     let active = true;
@@ -787,7 +806,7 @@ export default function GodEyeGlobe({
       .atmosphereAltitude(0.145)
       .width(container.clientWidth)
       .height(container.clientHeight)
-      .pointOfView({ lat: 24, lng: 12, altitude: 2.25 });
+      .pointOfView(getInitialCameraRef.current?.() ?? { lat: 24, lng: 12, altitude: 2.25 });
 
     if (visualMode === "satellite") {
       globe
@@ -838,6 +857,13 @@ export default function GodEyeGlobe({
         renderer.setPixelRatio(desiredPixelRatio);
       }
       materialRef.current?.uniforms.globeRotation.value.set(pov.lng ?? 0, pov.lat ?? 0);
+      if (
+        typeof pov.lat === "number" && Number.isFinite(pov.lat)
+        && typeof pov.lng === "number" && Number.isFinite(pov.lng)
+        && Number.isFinite(altitude)
+      ) {
+        onCameraChangeRef.current?.({ lat: pov.lat, lng: pov.lng, altitude });
+      }
       const now = performance.now();
       if (now - lastFocusUpdate < 140) return;
       lastFocusUpdate = now;

@@ -13,13 +13,19 @@ import {
   normalizeMapOfWarsEvent,
 } from "@/lib/conflictData";
 import { useConflictEvents } from "@/hooks/useConflictEvents";
-import { useIncidentPlayback } from "@/hooks/useIncidentPlayback";
+import { useIncidentPlayback, type IncidentPlaybackRestoreState } from "@/hooks/useIncidentPlayback";
 import { useOsintSnapshot } from "@/hooks/useOsintSnapshot";
 import { useDomainConvergence } from "@/hooks/useDomainConvergence";
 import { useWatchRules } from "@/hooks/useWatchRules";
+import { useOperatorUrlStateSync } from "@/hooks/useOperatorUrlStateSync";
 import { analyzeEscalationSurge } from "@/lib/escalationSurge";
 import { evaluateWatchRules } from "@/lib/watchRules";
 import { measureIncidentTemporalCoverage } from "@/lib/incidentTime";
+import {
+  DEFAULT_OPERATOR_LAYERS,
+  type OperatorCameraUrlState,
+  type OperatorUrlState,
+} from "@/lib/operatorUrlState";
 import TopCommandBar from "./TopCommandBar";
 import TheaterList from "./TheaterList";
 import EventFeed from "./EventFeed";
@@ -50,22 +56,7 @@ function createDefaultFilters(): ConflictFilters {
   };
 }
 
-const DEFAULT_LAYERS: GodEyeLayerToggles = {
-  density: true,
-  beacons: true,
-  signals: true,
-  theaterLabels: true,
-  borders: true,
-  clouds: true,
-  orbitalAssets: false,
-  aircraft: true,
-  civilAviation: true,
-  maritime: true,
-  environmental: false,
-  gpsInterference: true,
-  internetOutages: true,
-  gdeltGeoNews: true,
-};
+const DEFAULT_LAYERS: GodEyeLayerToggles = DEFAULT_OPERATOR_LAYERS;
 
 export default function GodEyeCommandCenter() {
   const osintSnapshot = useOsintSnapshot();
@@ -102,6 +93,13 @@ export default function GodEyeCommandCenter() {
   const [watchOpen, setWatchOpen] = useState(false);
   const [selectedTheaterSlug, setSelectedTheaterSlug] = useState<string | null>(null);
   const [focusTarget, setFocusTarget] = useState<GodEyeFocusTarget | null>(null);
+  const cameraRef = useRef<OperatorCameraUrlState | null>(null);
+  const focusSequenceRef = useRef(0);
+  const urlRestoreSequenceRef = useRef(0);
+  const pendingSpatialRestoreRef = useRef<{ eventId: string | null; theater: string | null } | null>(null);
+  const pendingPlaybackRestoreRef = useRef<IncidentPlaybackRestoreState | null>(null);
+  const playbackRestoreAcknowledgedRef = useRef(false);
+  const loadingRef = useRef(loading);
 
 
   useEffect(() => {
@@ -114,14 +112,8 @@ export default function GodEyeCommandCenter() {
     return () => window.clearTimeout(timeout);
   }, []);
 
-  useEffect(() => {
-    const applyInitialMode = window.setTimeout(() => {
-      if (new URLSearchParams(window.location.search).get("mode") === "satellite") {
-        setVisualMode("satellite");
-      }
-    }, 0);
-    return () => window.clearTimeout(applyInitialMode);
-  }, []);
+  // Legacy ?mode=satellite links are interpreted by the versioned operator-state
+  // decoder in useOperatorUrlStateSync below; no separate query parser is needed here.
 
   const scopeFilters = useMemo(() => ({ ...filters, theater: null }), [filters]);
   const scopeEvents = useMemo(() => filterConflictEvents(events, scopeFilters), [events, scopeFilters]);
@@ -196,6 +188,228 @@ export default function GodEyeCommandCenter() {
     return theaters.find((theater) => theater.slug === selectedTheaterSlug) ?? null;
   }, [theaters, selectedTheaterSlug]);
 
+  const restorePlayback = playback.restore;
+  const playbackActive = playback.active;
+  const playbackPlaying = playback.playing;
+  const playbackMode = playback.mode;
+  const playbackFrameIndex = playback.frameIndex;
+  const playbackFrameStart = playback.frame?.start ?? null;
+  const playbackSpeedMultiplier = playback.speedMultiplier;
+  const playbackResolutionPreference = playback.resolutionPreference;
+  const playbackTrailHours = playback.trailHours;
+  const playbackRestoring = playback.restoring;
+
+  const focusCamera = useCallback((lat: number, lng: number, altitude: number, keyPrefix: string) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(altitude)) return;
+    focusSequenceRef.current += 1;
+    const camera = { lat, lng, altitude };
+    cameraRef.current = camera;
+    setFocusTarget({
+      ...camera,
+      key: `${keyPrefix}-${focusSequenceRef.current}`,
+    });
+  }, []);
+
+  const applyOperatorState = useCallback((nextState: OperatorUrlState) => {
+    // Tour mode is a transient guided transition, not shareable workspace truth; a
+    // permalink always restores a stable operator-controlled view.
+    setTourActive(false);
+    setVisualMode(nextState.visualMode);
+    setLayers({ ...nextState.layers });
+    setFilters({
+      timeWindow: nextState.filters.timeWindow,
+      categoryGroups: [...nextState.filters.categoryGroups],
+      severities: [...nextState.filters.severities],
+      theater: nextState.filters.theater,
+      query: nextState.filters.query,
+    });
+    setSelectedTheaterSlug(nextState.filters.theater);
+    setSelectedEventId(nextState.selectedEventId);
+    setSelectedAircraft(null);
+    setSelectedCivilAircraft(null);
+    setSelectedVessel(null);
+    setSourcePanelOpen(nextState.panels.source);
+    setTheaterPanelOpen(nextState.panels.theater);
+    setIncidentPanelOpen(nextState.panels.incident);
+    setConvergenceOpen(nextState.panels.inspector === "convergence");
+    setWatchOpen(nextState.panels.inspector === "watch");
+    setPaused(nextState.refreshPaused);
+
+    const playbackSnapshot = { ...nextState.playback };
+    pendingPlaybackRestoreRef.current = playbackSnapshot;
+    if (!loadingRef.current) {
+      restorePlayback(playbackSnapshot);
+      // Inactive playback is restored synchronously; active playback remains pending
+      // until the playback hook reports that frame-grid resolution has completed.
+      if (!playbackSnapshot.active) pendingPlaybackRestoreRef.current = null;
+    }
+
+    if (nextState.camera) {
+      // A fixed shared camera would immediately lie if drift were still enabled.
+      setAutoRotate(false);
+      pendingSpatialRestoreRef.current = null;
+      urlRestoreSequenceRef.current += 1;
+      cameraRef.current = { ...nextState.camera };
+      setFocusTarget({
+        ...nextState.camera,
+        key: `url-camera-${urlRestoreSequenceRef.current}`,
+      });
+    } else {
+      // Older v1 links and links copied while drift is active carry no fixed camera
+      // constraint. Derive a useful focus from the selected event/theater once data arrives.
+      pendingSpatialRestoreRef.current = {
+        eventId: nextState.selectedEventId,
+        theater: nextState.filters.theater,
+      };
+    }
+  }, [restorePlayback, setPaused]);
+
+  const buildOperatorState = useCallback((): OperatorUrlState => ({
+    visualMode,
+    layers: { ...layers },
+    filters: {
+      timeWindow: filters.timeWindow,
+      categoryGroups: [...filters.categoryGroups],
+      severities: [...filters.severities],
+      theater: filters.theater,
+      query: filters.query,
+    },
+    selectedEventId,
+    refreshPaused: paused,
+    panels: {
+      theater: theaterPanelOpen,
+      incident: incidentPanelOpen,
+      source: sourcePanelOpen,
+      inspector: watchOpen ? "watch" : convergenceOpen ? "convergence" : "feed",
+    },
+    playback: {
+      active: playbackActive,
+      playing: playbackActive && playbackPlaying,
+      mode: playbackMode,
+      frameIndex: playbackActive ? playbackFrameIndex : null,
+      frameStart: playbackActive ? playbackFrameStart : null,
+      speedMultiplier: playbackSpeedMultiplier,
+      resolutionPreference: playbackResolutionPreference,
+      trailHours: playbackTrailHours,
+    },
+    // Continuously persisting a drifting camera would churn the URL and still be
+    // non-reproducible. A camera center is encoded only once the operator pauses drift.
+    camera: !autoRotate && !tourActive ? cameraRef.current : null,
+  }), [
+    autoRotate,
+    convergenceOpen,
+    filters,
+    incidentPanelOpen,
+    layers,
+    paused,
+    playbackActive,
+    playbackFrameIndex,
+    playbackFrameStart,
+    playbackMode,
+    playbackPlaying,
+    playbackResolutionPreference,
+    playbackSpeedMultiplier,
+    playbackTrailHours,
+    selectedEventId,
+    sourcePanelOpen,
+    theaterPanelOpen,
+    tourActive,
+    visualMode,
+    watchOpen,
+  ]);
+
+  const {
+    scheduleSync: scheduleOperatorUrlSync,
+    copyPermalink,
+    shareFeedback,
+    urlNotice,
+  } = useOperatorUrlStateSync({
+    applyState: applyOperatorState,
+    buildState: buildOperatorState,
+    canSync: () => (
+      !loadingRef.current
+      && pendingPlaybackRestoreRef.current === null
+      && pendingSpatialRestoreRef.current === null
+      && !playbackRestoring
+    ),
+  });
+
+  useEffect(() => {
+    loadingRef.current = loading;
+    if (loading) return;
+    const pendingPlayback = pendingPlaybackRestoreRef.current;
+    if (!pendingPlayback) return;
+    restorePlayback(pendingPlayback);
+    if (!pendingPlayback.active) pendingPlaybackRestoreRef.current = null;
+  }, [loading, restorePlayback]);
+
+  useEffect(() => {
+    if (playbackRestoring && pendingPlaybackRestoreRef.current) {
+      playbackRestoreAcknowledgedRef.current = true;
+      return;
+    }
+    if (!playbackRestoring && playbackRestoreAcknowledgedRef.current) {
+      playbackRestoreAcknowledgedRef.current = false;
+      pendingPlaybackRestoreRef.current = null;
+    }
+  }, [playbackRestoring]);
+
+  useEffect(() => {
+    if (loading) return;
+    const pendingSpatial = pendingSpatialRestoreRef.current;
+    if (!pendingSpatial) return;
+    pendingSpatialRestoreRef.current = null;
+
+    if (pendingSpatial.eventId) {
+      const event = events.find((item) => item.id === pendingSpatial.eventId);
+      if (event) focusCamera(event.lat, event.lng, 0.82, `url-event-${event.id}`);
+      return;
+    }
+    if (pendingSpatial.theater) {
+      const theater = theaters.find((item) => item.slug === pendingSpatial.theater);
+      if (theater) focusCamera(theater.lat, theater.lng, 1.34, `url-theater-${theater.slug}`);
+    }
+  }, [events, theaters, loading, focusCamera]);
+
+  // React state changes are coalesced by the synchronizer. The timer is intentionally
+  // not reset for every playback frame/camera movement, so continuous interaction gets
+  // a trailing write at a bounded cadence instead of a history or render storm.
+  useEffect(() => {
+    scheduleOperatorUrlSync();
+  }, [
+    scheduleOperatorUrlSync,
+    visualMode,
+    layers,
+    filters,
+    selectedEventId,
+    focusTarget,
+    paused,
+    sourcePanelOpen,
+    theaterPanelOpen,
+    incidentPanelOpen,
+    convergenceOpen,
+    watchOpen,
+    playbackActive,
+    playbackPlaying,
+    playbackMode,
+    playbackFrameIndex,
+    playbackFrameStart,
+    playbackSpeedMultiplier,
+    playbackResolutionPreference,
+    playbackTrailHours,
+    playbackRestoring,
+    loading,
+    autoRotate,
+    tourActive,
+  ]);
+
+  const handleCameraChange = useCallback((camera: OperatorCameraUrlState) => {
+    cameraRef.current = camera;
+    if (!autoRotate && !tourActive) scheduleOperatorUrlSync();
+  }, [autoRotate, scheduleOperatorUrlSync, tourActive]);
+
+  const getInitialCamera = useCallback(() => cameraRef.current, []);
+
   const handleGlobeRenderFailure = useCallback(() => setGlobeUnavailable(true), []);
 
   const handleEventSelect = useCallback((event: ConflictEvent) => {
@@ -205,13 +419,8 @@ export default function GodEyeCommandCenter() {
     setSelectedCivilAircraft(null);
     setSelectedVessel(null);
     setSelectedEventId(event.id);
-    setFocusTarget({
-      lat: event.lat,
-      lng: event.lng,
-      altitude: 0.82,
-      key: `event-${event.id}-${Date.now()}`,
-    });
-  }, [pausePlayback]);
+    focusCamera(event.lat, event.lng, 0.82, `event-${event.id}`);
+  }, [focusCamera, pausePlayback]);
 
   const handleAircraftSelect = useCallback((aircraft: MilitaryAircraft) => {
     setAutoRotate(false);
@@ -219,13 +428,8 @@ export default function GodEyeCommandCenter() {
     setSelectedCivilAircraft(null);
     setSelectedVessel(null);
     setSelectedAircraft(aircraft);
-    setFocusTarget({
-      lat: aircraft.lat,
-      lng: aircraft.lng,
-      altitude: 1.05,
-      key: `aircraft-${aircraft.id}-${Date.now()}`,
-    });
-  }, []);
+    focusCamera(aircraft.lat, aircraft.lng, 1.05, `aircraft-${aircraft.id}`);
+  }, [focusCamera]);
 
   const handleCivilAircraftSelect = useCallback((aircraft: OsintAircraft) => {
     setAutoRotate(false);
@@ -233,8 +437,8 @@ export default function GodEyeCommandCenter() {
     setSelectedAircraft(null);
     setSelectedVessel(null);
     setSelectedCivilAircraft(aircraft);
-    setFocusTarget({ lat: aircraft.lat, lng: aircraft.lng, altitude: 1.0, key: `civil-${aircraft.id}-${Date.now()}` });
-  }, []);
+    focusCamera(aircraft.lat, aircraft.lng, 1.0, `civil-${aircraft.id}`);
+  }, [focusCamera]);
 
   const handleVesselSelect = useCallback((vessel: OsintVessel) => {
     setAutoRotate(false);
@@ -242,8 +446,8 @@ export default function GodEyeCommandCenter() {
     setSelectedAircraft(null);
     setSelectedCivilAircraft(null);
     setSelectedVessel(vessel);
-    setFocusTarget({ lat: vessel.lat, lng: vessel.lng, altitude: 0.72, key: `vessel-${vessel.id}-${Date.now()}` });
-  }, []);
+    focusCamera(vessel.lat, vessel.lng, 0.72, `vessel-${vessel.id}`);
+  }, [focusCamera]);
 
   const handleTheaterSelect = useCallback((theater: ConflictTheater) => {
     setAutoRotate(false);
@@ -256,26 +460,16 @@ export default function GodEyeCommandCenter() {
       theater: alreadySelected ? null : theater.slug,
     }));
     if (!alreadySelected) {
-      setFocusTarget({
-        lat: theater.lat,
-        lng: theater.lng,
-        altitude: 1.34,
-        key: `theater-${theater.slug}-${Date.now()}`,
-      });
+      focusCamera(theater.lat, theater.lng, 1.34, `theater-${theater.slug}`);
     }
-  }, [filters.theater]);
+  }, [filters.theater, focusCamera]);
 
   const isolateTheater = useCallback((theater: ConflictTheater) => {
     setSelectedEventId(null);
     setSelectedTheaterSlug(theater.slug);
     setFilters((current) => ({ ...current, theater: theater.slug }));
-    setFocusTarget({
-      lat: theater.lat,
-      lng: theater.lng,
-      altitude: 1.34,
-      key: `theater-${theater.slug}-${Date.now()}`,
-    });
-  }, []);
+    focusCamera(theater.lat, theater.lng, 1.34, `theater-${theater.slug}`);
+  }, [focusCamera]);
 
   const focusTheaterBySlug = useCallback((slug: string) => {
     const normalized = slug.trim().toLowerCase().replace(/\s+/g, " ");
@@ -368,12 +562,7 @@ export default function GodEyeCommandCenter() {
       setSelectedEventId(null);
       setSelectedTheaterSlug(theater.slug);
       setFilters((current) => ({ ...current, theater: theater.slug }));
-      setFocusTarget({
-        lat: theater.lat,
-        lng: theater.lng,
-        altitude: 1.24,
-        key: `tour-${theater.slug}-${Date.now()}`,
-      });
+      focusCamera(theater.lat, theater.lng, 1.24, `tour-${theater.slug}`);
     };
     const initial = window.setTimeout(focusTheater, 500);
     const interval = window.setInterval(focusTheater, 9000);
@@ -381,7 +570,7 @@ export default function GodEyeCommandCenter() {
       window.clearTimeout(initial);
       window.clearInterval(interval);
     };
-  }, [tourActive]);
+  }, [tourActive, focusCamera]);
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-[#01040a] text-white">
@@ -411,6 +600,7 @@ export default function GodEyeCommandCenter() {
           selectedEvent={selectedEvent}
           selectedTheater={selectedTheater}
           focusTarget={focusTarget}
+          getInitialCamera={getInitialCamera}
           layers={layers}
           visualMode={visualMode}
           autoRotate={autoRotate}
@@ -421,6 +611,7 @@ export default function GodEyeCommandCenter() {
           onCivilAircraftSelect={handleCivilAircraftSelect}
           onVesselSelect={handleVesselSelect}
           onTheaterSelect={handleTheaterSelect}
+          onCameraChange={handleCameraChange}
           onRenderFailure={handleGlobeRenderFailure}
         />
       )}
@@ -441,6 +632,8 @@ export default function GodEyeCommandCenter() {
           onTogglePause={() => setPaused(!paused)}
           sourcePanelOpen={sourcePanelOpen}
           onToggleSourcePanel={() => setSourcePanelOpen((open) => !open)}
+          onCopyPermalink={() => { void copyPermalink(); }}
+          shareFeedback={shareFeedback}
         />
 
         {sourcePanelOpen ? (
@@ -592,8 +785,14 @@ export default function GodEyeCommandCenter() {
           OSINT: WarHeatMap · MapOfWars/UCDP · CC BY 4.0
         </a>
 
+        {urlNotice ? (
+          <div role="status" className="pointer-events-auto absolute left-1/2 top-20 z-30 w-[min(34rem,calc(100vw-2rem))] -translate-x-1/2 rounded-sm border border-sky-300/20 bg-sky-400/10 px-3 py-2 text-center font-mono text-[10px] uppercase leading-relaxed tracking-[0.14em] text-sky-100/78 backdrop-blur-md">
+            {urlNotice}
+          </div>
+        ) : null}
+
         {error && source === "fallback" && (
-          <div className="pointer-events-auto absolute left-1/2 top-20 z-30 -translate-x-1/2 rounded-sm border border-amber-300/20 bg-amber-400/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.16em] text-amber-100/76 backdrop-blur-md">
+          <div className={`pointer-events-auto absolute left-1/2 z-30 -translate-x-1/2 rounded-sm border border-amber-300/20 bg-amber-400/10 px-3 py-2 font-mono text-[10px] uppercase tracking-[0.16em] text-amber-100/76 backdrop-blur-md ${urlNotice ? "top-32" : "top-20"}`}>
             Live feed unavailable — using cached intelligence snapshot
           </div>
         )}

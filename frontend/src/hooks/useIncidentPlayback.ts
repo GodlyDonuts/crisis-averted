@@ -17,6 +17,19 @@ import {
 export const PLAYBACK_SPEED_OPTIONS = [0.25, 0.5, 1, 2, 4, 8, 16, 32] as const;
 export const PLAYBACK_TRAIL_OPTIONS_HOURS = [24, 72, 24 * 7, 24 * 30] as const;
 
+export interface IncidentPlaybackRestoreState {
+  active: boolean;
+  playing: boolean;
+  mode: PlaybackMode;
+  speedMultiplier: number;
+  resolutionPreference: TemporalResolutionPreference;
+  trailHours: number;
+  /** Corpus-dependent zero-based frame index captured in a permalink. */
+  frameIndex: number | null;
+  /** Epoch-millisecond frame start. Exact grid alignment is preferred over the index when available. */
+  frameStart: number | null;
+}
+
 export interface IncidentPlaybackController {
   active: boolean;
   playing: boolean;
@@ -32,6 +45,8 @@ export interface IncidentPlaybackController {
   events: ConflictEvent[];
   eventSummary: PlaybackEventSummary;
   reducedMotion: boolean;
+  /** True while a permalink playback snapshot is being resolved onto the current deterministic frame grid. */
+  restoring: boolean;
   dataTimePerWallSecondMs: number;
   toggleActive: () => void;
   togglePlaying: () => void;
@@ -41,6 +56,7 @@ export interface IncidentPlaybackController {
   jumpToStart: () => void;
   jumpToEnd: () => void;
   reset: () => void;
+  restore: (state: IncidentPlaybackRestoreState) => void;
   setMode: (mode: PlaybackMode) => void;
   setSpeedMultiplier: (speed: number) => void;
   cycleSpeed: (direction: -1 | 1) => void;
@@ -96,6 +112,8 @@ export function useIncidentPlayback(scopeEvents: ConflictEvent[]): IncidentPlayb
   const [resolutionPreference, setResolutionPreferenceState] = useState<TemporalResolutionPreference>("auto");
   const [trailHours, setTrailHoursState] = useState(24 * 7);
   const [cursor, setCursor] = useState<number | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const pendingRestoreRef = useRef<IncidentPlaybackRestoreState | null>(null);
 
   const analysis = useMemo(
     () => buildIncidentTemporalAnalysis(scopeEvents, { resolution: resolutionPreference }),
@@ -173,6 +191,100 @@ export function useIncidentPlayback(scopeEvents: ConflictEvent[]): IncidentPlayb
     setPlaying(false);
     if (analysis.frameCount > 0) setCursor(analysis.domainStart);
   }, [analysis.frameCount, analysis.domainStart]);
+
+  const restore = useCallback((state: IncidentPlaybackRestoreState) => {
+    const mode: PlaybackMode = state.mode === "step" || state.mode === "trailing" || state.mode === "cumulative" ? state.mode : "trailing";
+    const speedMultiplier = PLAYBACK_SPEED_OPTIONS.some((option) => option === state.speedMultiplier) ? state.speedMultiplier : 1;
+    const resolutionPreference: TemporalResolutionPreference = state.resolutionPreference === "auto"
+      || state.resolutionPreference === "hour"
+      || state.resolutionPreference === "sixHour"
+      || state.resolutionPreference === "day"
+      || state.resolutionPreference === "week"
+      ? state.resolutionPreference
+      : "auto";
+    const trailHours = PLAYBACK_TRAIL_OPTIONS_HOURS.some((option) => option === state.trailHours) ? state.trailHours : 24 * 7;
+
+    setModeState(mode);
+    setSpeedMultiplierState(speedMultiplier);
+    setResolutionPreferenceState(resolutionPreference);
+    setTrailHoursState(trailHours);
+
+    if (!state.active) {
+      pendingRestoreRef.current = null;
+      setRestoring(false);
+      setPlaying(false);
+      setActive(false);
+      return;
+    }
+
+    pendingRestoreRef.current = {
+      ...state,
+      mode,
+      speedMultiplier,
+      resolutionPreference,
+      trailHours,
+      playing: state.playing === true,
+    };
+    // Transport playback never starts before the pending frame resolution effect below;
+    // the shared frame is resolved first, then the restored play/pause state is applied.
+    setPlaying(false);
+    setRestoring(true);
+    setActive(true);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingRestoreRef.current || pendingRestoreRef.current.resolutionPreference !== resolutionPreference) return undefined;
+
+    const timeout = window.setTimeout(() => {
+      const pending = pendingRestoreRef.current;
+      if (!pending || pending.resolutionPreference !== resolutionPreference) return;
+
+      if (analysis.frameCount === 0) {
+        pendingRestoreRef.current = null;
+        setRestoring(false);
+        setPlaying(false);
+        return;
+      }
+
+      let targetFrame: number | null = null;
+      if (pending.frameStart !== null && Number.isFinite(pending.frameStart)) {
+        const gridPosition = (pending.frameStart - analysis.domainStart) / analysis.stepMs;
+        const rounded = Math.round(gridPosition);
+        // Frame timestamps are URL-quantized to integer milliseconds. Compare in
+        // milliseconds rather than as an exact floating-point grid fraction so a
+        // half-millisecond rounding difference cannot defeat truthful timestamp restore.
+        const alignedFrameStart = analysis.domainStart + rounded * analysis.stepMs;
+        if (Number.isFinite(gridPosition) && Math.abs(alignedFrameStart - pending.frameStart) <= 0.501) {
+          if (rounded >= 0 && rounded < analysis.frameCount) targetFrame = rounded;
+        }
+      }
+
+      if (targetFrame === null && pending.frameIndex !== null && Number.isFinite(pending.frameIndex)) {
+        const requested = Math.trunc(pending.frameIndex);
+        if (requested >= 0 && requested < analysis.frameCount) targetFrame = requested;
+      }
+
+      const requestedFramePosition = pending.frameStart !== null || pending.frameIndex !== null;
+      if (requestedFramePosition && targetFrame === null) {
+        // Truthful restoration is preferable to a plausible-looking but false position:
+        // when a changed corpus makes the shared frame unresolvable, playback stays off.
+        pendingRestoreRef.current = null;
+        setRestoring(false);
+        setPlaying(false);
+        setActive(false);
+        return;
+      }
+
+      const nextFrame = targetFrame ?? 0;
+      pendingRestoreRef.current = null;
+      setRestoring(false);
+      setCursor(analysis.domainStart + nextFrame * analysis.stepMs);
+      // Shared transport state is honored unless the recipient asked the OS for reduced motion.
+      setPlaying(pending.playing && !reducedMotion);
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+  }, [analysis, resolutionPreference, reducedMotion, restoring]);
 
   const setMode = useCallback((nextMode: PlaybackMode) => setModeState(nextMode), []);
   const setSpeedMultiplier = useCallback((speed: number) => {
@@ -293,6 +405,7 @@ export function useIncidentPlayback(scopeEvents: ConflictEvent[]): IncidentPlayb
     events,
     eventSummary,
     reducedMotion,
+    restoring,
     dataTimePerWallSecondMs: analysis.stepMs * speedMultiplier,
     toggleActive,
     togglePlaying,
@@ -302,6 +415,7 @@ export function useIncidentPlayback(scopeEvents: ConflictEvent[]): IncidentPlayb
     jumpToStart,
     jumpToEnd,
     reset,
+    restore,
     setMode,
     setSpeedMultiplier,
     cycleSpeed,

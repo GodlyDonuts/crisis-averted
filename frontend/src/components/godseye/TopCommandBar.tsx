@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Activity, Crosshair, Globe2, Menu, Pause, Play, Radio, RefreshCw, Satellite, Search } from "lucide-react";
+import { Activity, Crosshair, Globe2, Link2, Menu, Pause, Play, Radio, RefreshCw, Satellite, Search } from "lucide-react";
 import type { ConflictSummary } from "@/types/conflict";
+import type { OperatorShareFeedback } from "@/hooks/useOperatorUrlStateSync";
+import { MAX_OPERATOR_QUERY_LENGTH } from "@/lib/operatorUrlState";
 import type { GodEyeVisualMode } from "./GodEyeGlobe";
 import { formatCompact, formatRelativeTime } from "@/lib/conflictData";
 
@@ -21,6 +23,8 @@ interface TopCommandBarProps {
   onTogglePause: () => void;
   sourcePanelOpen: boolean;
   onToggleSourcePanel: () => void;
+  onCopyPermalink: () => void;
+  shareFeedback: OperatorShareFeedback | null;
 }
 
 function useUtcClock(): string {
@@ -52,12 +56,25 @@ export default function TopCommandBar({
   onTogglePause,
   sourcePanelOpen,
   onToggleSourcePanel,
+  onCopyPermalink,
+  shareFeedback,
 }: TopCommandBarProps) {
   const utcTime = useUtcClock();
   const searchRef = useRef<HTMLInputElement>(null);
   const mobileSearchRef = useRef<HTMLInputElement>(null);
   const [draftQuery, setDraftQuery] = useState(query);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    // Permalink/browser-hash restoration is an external query mutation; both search
+    // inputs must truthfully reflect it rather than retaining a stale local draft.
+    // The zero timeout keeps this external synchronization out of the synchronous
+    // render/effect cascade while remaining imperceptible to the operator.
+    const timeout = window.setTimeout(() => {
+      setDraftQuery((current) => (current === query ? current : query));
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [query]);
 
   useEffect(() => {
     if (draftQuery === query) return undefined;
@@ -120,6 +137,7 @@ export default function TopCommandBar({
             <input
               ref={searchRef}
               value={draftQuery}
+              maxLength={MAX_OPERATOR_QUERY_LENGTH}
               onChange={(event) => setDraftQuery(event.target.value)}
               placeholder="Search incidents, countries or theaters…"
               className="h-10 w-full rounded-sm border border-amber-200/12 bg-white/[0.035] pl-9 pr-14 font-mono text-xs text-white outline-none transition placeholder:text-white/25 focus:border-amber-200/35 focus:bg-amber-400/[0.055]"
@@ -147,6 +165,20 @@ export default function TopCommandBar({
               Sat
             </button>
           </div>
+
+          <button
+            type="button"
+            onClick={onCopyPermalink}
+            aria-label="Copy shareable permalink for the current public workspace state"
+            aria-describedby="permalink-state-description"
+            title="Copy permalink — restores view, search/filters, panels and playback frame; camera is included when drift is paused. Secret-like search text is withheld."
+            className="flex h-10 w-10 items-center justify-center rounded-sm border border-white/10 bg-white/[0.03] text-white/55 transition hover:border-amber-200/25 hover:text-amber-100"
+          >
+            <Link2 className="h-4 w-4" />
+          </button>
+          <span id="permalink-state-description" className="sr-only">
+            Copies a link whose URL hash restores public visual, layer, filter, panel, playback-frame, refresh-pause, and paused-drift camera state. It contains no credentials; search text that looks secret-shaped is withheld.
+          </span>
 
           <button
             type="button"
@@ -188,6 +220,15 @@ export default function TopCommandBar({
         </div>
       </div>
 
+      {shareFeedback ? (
+        <div
+          role={shareFeedback.kind === "error" ? "alert" : "status"}
+          className={`absolute right-3 top-[calc(100%+0.5rem)] z-50 w-[min(34rem,calc(100vw-1.5rem))] rounded-sm border px-3 py-2 font-mono text-[10px] uppercase leading-relaxed tracking-[0.13em] backdrop-blur-md ${shareFeedback.kind === "error" ? "border-red-300/24 bg-red-400/10 text-red-100/82" : "border-emerald-300/20 bg-emerald-400/10 text-emerald-100/78"}`}
+        >
+          {shareFeedback.message}
+        </div>
+      ) : null}
+
       {mobileMenuOpen && (
         <div className="godseye-panel absolute right-3 top-[4.35rem] z-50 w-[min(20rem,calc(100vw-1.5rem))] p-3 lg:hidden" role="menu" aria-label="Mobile command controls">
           <label className="relative flex items-center">
@@ -195,6 +236,7 @@ export default function TopCommandBar({
             <input
               ref={mobileSearchRef}
               value={draftQuery}
+              maxLength={MAX_OPERATOR_QUERY_LENGTH}
               onChange={(event) => setDraftQuery(event.target.value)}
               placeholder="Search incidents or theaters…"
               className="h-10 w-full rounded-sm border border-amber-200/12 bg-white/[0.035] pl-9 pr-3 font-mono text-xs text-white outline-none placeholder:text-white/25 focus:border-amber-200/35"
@@ -210,6 +252,9 @@ export default function TopCommandBar({
           </div>
           <p className="mt-3 font-mono text-[9px] uppercase leading-relaxed tracking-[0.14em] text-white/30">
             UTC {utcTime} · {formatCompact(summary.totalEvents)} incidents · {formatCompact(summary.criticalEvents)} critical
+          </p>
+          <p className="mt-2 border-t border-white/8 pt-2 font-mono text-[9px] uppercase leading-relaxed tracking-[0.13em] text-white/34">
+            The link control copies public workspace state in the URL hash, including visible search text unless it looks secret-shaped. Camera is included only when drift is paused.
           </p>
         </div>
       )}

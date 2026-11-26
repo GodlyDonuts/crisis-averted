@@ -7,7 +7,8 @@
     "prebuild": "node ../scripts/build-wasm-core.mjs && node ../scripts/build-osint-snapshot.mjs",
     "build": "next build",
     "start": "node ../scripts/serve-static.mjs",
-    "lint": "eslint"
+    "lint": "eslint",
+    "validate:url-state": "node ../scripts/validate-operator-url-state.mjs"
   },
   "dependencies": {
     "@elevenlabs/react": "^0.14.0",
