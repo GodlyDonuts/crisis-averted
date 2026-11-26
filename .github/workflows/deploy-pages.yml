@@ -59,6 +59,17 @@ jobs:
           UCDP_API_TOKEN: ${{ secrets.UCDP_API_TOKEN }}
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
 
+      - name: Validate source governance before publication
+        run: node scripts/validate-source-governance.mjs
+        env:
+          WINDY_WEBCAMS_KEY: ${{ secrets.WINDY_WEBCAMS_KEY }}
+          AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
+          FIRMS_MAP_KEY: ${{ secrets.FIRMS_MAP_KEY }}
+          ACLED_API_KEY: ${{ secrets.ACLED_API_KEY }}
+          ACLED_EMAIL: ${{ secrets.ACLED_EMAIL }}
+          UCDP_API_TOKEN: ${{ secrets.UCDP_API_TOKEN }}
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+
       - name: Save vulnerability enrichment cache
         if: hashFiles('scripts/.cache/nvd-cve-enrichment.json') != ''
         uses: actions/cache/save@v4

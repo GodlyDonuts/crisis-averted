@@ -7,6 +7,7 @@ import { assetPath } from "@/lib/assets";
 const EMPTY_SNAPSHOT: OsintSnapshot = {
   fetchedAt: "",
   sources: {},
+  provenanceLedger: null,
   militaryAircraft: [],
   aircraft: [],
   vessels: [],

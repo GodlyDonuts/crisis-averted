@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "node ../scripts/serve-static.mjs",
     "lint": "eslint",
-    "validate:url-state": "node ../scripts/validate-operator-url-state.mjs"
+    "validate:url-state": "node ../scripts/validate-operator-url-state.mjs",
+    "validate:source-governance": "node ../scripts/validate-source-governance.mjs"
   },
   "dependencies": {
     "@elevenlabs/react": "^0.14.0",

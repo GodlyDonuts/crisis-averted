@@ -3,6 +3,7 @@
 import { Activity, AlertTriangle, Database, X } from "lucide-react";
 import type { IncidentCorrelationStats, NvdConfiguration, NvdCvssMetric, OsintSnapshot } from "@/types/conflict";
 import { formatRelativeTime } from "@/lib/conflictData";
+import { assetPath } from "@/lib/assets";
 import { useGlobeRenderStatus } from "@/hooks/useGlobeRenderStatus";
 import type { GlobeRenderStatusStore } from "@/lib/globeRendering";
 
@@ -79,6 +80,14 @@ function apiAge(value: string | null): string {
   return value ? formatRelativeTime(Date.parse(value)) : "no live retrieval";
 }
 
+function formatLedgerAge(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) return "unknown age";
+  if (seconds < 90) return `${seconds}s`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 129600) return `${Math.round(seconds / 3600)}h`;
+  return `${Math.round(seconds / 86400)}d`;
+}
+
 function Row({ label, value, warn = false }: { label: string; value: string; warn?: boolean }) {
   return (
     <div className="flex items-center justify-between gap-4 border-b border-white/7 px-3 py-2 last:border-b-0">
@@ -119,6 +128,13 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
   const epssValue = cyberMeta
     ? `${cyberMeta.epss.enrichedCveCount}/${cyberMeta.epss.requestedCveCount} scored · ${cyberMeta.epss.status}`
     : "metadata unavailable";
+  const governance = snapshot.provenanceLedger ?? null;
+  const governanceValue = governance
+    ? `${governance.summary.involvedSourceCount} sources · ${governance.summary.unknownLicenseCount} unknown license · ${governance.summary.highRiskSourceCount} high-review`
+    : "ledger unavailable";
+  const accessValue = governance
+    ? `${governance.summary.keyedSourceCount} credential-capable · ${governance.summary.staleOrPreservedCollectionCount} stale/preserved collections`
+    : "ledger unavailable";
   return (
     <aside className="godseye-panel godseye-scrollbar pointer-events-auto absolute right-4 top-[4.5rem] z-50 hidden max-h-[calc(100vh-5.5rem)] w-[360px] overflow-y-auto xl:block">
       <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
@@ -172,7 +188,54 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
         <Row label="Known exploited CVEs" value={cyberValue} warn={cyberMeta?.status !== "ok"} />
         <Row label="EPSS scoring" value={epssValue} warn={cyberMeta?.epss.status !== "ok"} />
         <Row label="Webcam metadata" value={snapshot.webcams.length > 0 ? String(snapshot.webcams.length) : "key not configured"} warn={snapshot.webcams.length === 0} />
+        <Row label="License/provenance audit" value={governanceValue} warn={!governance || governance.summary.unknownLicenseCount > 0 || governance.summary.highRiskSourceCount > 0} />
+        <Row label="Access/staleness modes" value={accessValue} warn={!governance || governance.summary.staleOrPreservedCollectionCount > 0} />
       </div>
+
+      {governance ? (
+        <div className="border-t border-white/8 px-4 py-3">
+          <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/34">
+            <Activity className="h-3.5 w-3.5" /> Source governance ledger
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-white/54">
+            Registry {governance.registryVersion}; every emitted collection is tied to machine-readable owner, endpoint, authentication/browser mode, license/terms evidence, attribution, redistribution risk, cadence, retention, connector version, and confidence characteristics. Unknown or restricted entries are review findings, not claims of legal compliance.
+          </p>
+          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 font-mono text-[9px] uppercase tracking-[0.12em]">
+            <a href={assetPath("/data/source-registry.json")} target="_blank" rel="noreferrer" className="text-cyan-100/44 underline decoration-cyan-100/20 underline-offset-2 hover:text-cyan-100/72">machine registry</a>
+            <a href={assetPath("/data/provenance-ledger.json")} target="_blank" rel="noreferrer" className="text-cyan-100/44 underline decoration-cyan-100/20 underline-offset-2 hover:text-cyan-100/72">full provenance ledger</a>
+          </div>
+          <div className="mt-2 grid grid-cols-3 gap-1.5 font-mono text-[9px] uppercase tracking-[0.1em]">
+            <div className="rounded-sm border border-white/8 bg-white/[0.025] px-2 py-1.5 text-white/48">{governance.summary.unknownLicenseCount}<span className="block text-white/28">unknown license</span></div>
+            <div className="rounded-sm border border-amber-200/15 bg-amber-300/[0.04] px-2 py-1.5 text-amber-100/65">{governance.summary.reviewRequiredSourceCount}<span className="block text-amber-100/35">review sources</span></div>
+            <div className="rounded-sm border border-cyan-200/15 bg-cyan-300/[0.035] px-2 py-1.5 text-cyan-100/62">{governance.summary.keyedSourceCount}<span className="block text-cyan-100/32">credential-capable</span></div>
+          </div>
+          <details className="mt-2 rounded-sm border border-white/8 bg-white/[0.025] px-2 py-1.5">
+            <summary className="cursor-pointer font-mono text-[9px] uppercase tracking-[0.14em] text-white/38 hover:text-white/62">Collection provenance, freshness, and access modes</summary>
+            <div className="mt-2 space-y-2">
+              {Object.values(governance.collections).map((collection) => (
+                <div key={collection.collection} className="border-l border-white/8 pl-2 text-[10px] leading-relaxed text-white/48">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="font-mono text-white/66">{collection.collection}</span>
+                    <span className="text-white/32">{collection.recordCount} rows</span>
+                    <span className={collection.freshness.state === "current" ? "text-emerald-100/58" : "text-amber-100/68"}>{collection.freshness.state}{collection.freshness.ageSeconds !== null ? ` · ${formatLedgerAge(collection.freshness.ageSeconds)}` : ""}</span>
+                    {collection.dataVintage.newestRecordTimestamp ? <span className="text-white/30">record newest {apiAge(collection.dataVintage.newestRecordTimestamp)}</span> : <span className="text-white/24">no trustworthy row time</span>}
+                  </div>
+                  <div className="mt-1 space-y-1">
+                    {collection.sources.map((source) => (
+                      <div key={`${collection.collection}-${source.sourceId}`} className="rounded-sm bg-white/[0.018] px-1.5 py-1">
+                        <span className="font-mono text-white/58">{source.displayName}</span>
+                        <span className="text-white/30"> · {source.retrieval.status} · {source.browserMode}/{source.authenticationMode} · license {source.license.status} · redistribution {source.redistribution.publicStaticRisk}</span>
+                        <div className="text-white/34">{source.attribution.text}</div>
+                        {source.license.termsUrl ? <a href={source.license.termsUrl} target="_blank" rel="noreferrer" className="font-mono text-[9px] uppercase tracking-[0.1em] text-cyan-100/42 underline decoration-cyan-100/20 underline-offset-2 hover:text-cyan-100/70">terms/evidence</a> : <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-amber-100/42">terms unknown</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+      ) : null}
 
       <div className="border-t border-white/8 px-4 py-3">
         <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/34">

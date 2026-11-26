@@ -1,0 +1,1621 @@
+{
+  "schemaVersion": "source-registry/v1",
+  "registryVersion": "2026.11.26.1",
+  "updatedAt": "2026-11-26",
+  "documentation": "docs/SOURCE_GOVERNANCE.md",
+  "formatNote": "Canonical JSON is used instead of YAML because the repository does not pin a YAML parser and adding one solely for configuration parsing would expand the supply-chain surface. The custom validator treats this file as the machine-readable registry contract. Values are provenance audit statements, not legal advice or compliance certification.",
+  "sources": [
+    {
+      "id": "warheatmap-events",
+      "displayName": "WarHeatMap.app public events feed",
+      "owner": "WarHeatMap.app",
+      "endpoint": {
+        "urls": ["https://warheatmap.app/functions/eventsLite"],
+        "protocol": "https-json",
+        "documentationUrl": "https://warheatmap.app/api"
+      },
+      "license": {
+        "status": "open-license",
+        "name": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        "termsUrl": "https://warheatmap.app/api",
+        "evidenceUrl": "https://creativecommons.org/licenses/by/4.0/",
+        "note": "The publisher API documentation states that the feed is licensed CC BY 4.0 and responses carry a license link. The committed conflict-fallback artifact also declares CC BY 4.0."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "Source: WarHeatMap.app (https://warheatmap.app), CC BY 4.0; event links and embedded publisher citations retained.",
+        "evidenceUrl": "https://warheatmap.app/api",
+        "note": "Publisher asks for credit to WarHeatMap.app with a link to the event page or site."
+      },
+      "cadence": {
+        "publisherCadence": "live feed with short HTTP cache lifetime",
+        "expectedUpdateSeconds": 300,
+        "retrievalCadence": "the committed fallback artifact is refreshed out-of-band; the live interface may fetch the publisher feed directly",
+        "retention": {
+          "mode": "static-fallback",
+          "maxCacheAgeSeconds": null,
+          "note": "The fallback artifact is a point-in-time emergency cache, not a complete history."
+        },
+        "freshness": {
+          "warnAfterSeconds": 21600,
+          "staleAfterSeconds": 86400,
+          "timestampBasis": "artifact-generatedAt-and-record-updatedAt",
+          "note": "Fallback age is measured from generatedAt; live rows also carry updatedAt."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "direct-keyless-browser-permitted",
+          "cors": "enabled",
+          "runtimeFetchAllowed": true,
+          "note": "Publisher documents a keyless public API; runtime fallback remains separate from the build-time OSINT snapshot."
+        }
+      },
+      "redistribution": {
+        "status": "permitted-with-conditions",
+        "publicStaticRisk": "low",
+        "bulkPublicExport": "permitted-with-conditions",
+        "constraints": ["credit WarHeatMap.app with a link", "retain license notice", "embedded article citations belong to their original publishers"],
+        "note": "The registry records the publisher's stated CC BY terms; it does not certify that every downstream display satisfies those terms."
+      },
+      "confidence": {
+        "authority": "independent-osint-aggregator",
+        "verification": "publisher-curated event records with per-event source citations; verification state is supplied by the publisher and is not independently re-verified here",
+        "coverage": "global conflict events selected by the publisher; absence is not absence of violence",
+        "automation": "human/editorial curation combined with publisher automation, exact mix not exposed",
+        "caveats": ["location precision can be coarse", "reported casualty fields are publisher-carried claims", "embedded news sources retain their own rights and reliability"]
+      },
+      "collections": ["conflictFallback"],
+      "connectorVersion": "godseye-conflict-fallback/2026.11.26.1"
+    },
+    {
+      "id": "natural-earth-vector",
+      "displayName": "Natural Earth vector reference geography",
+      "owner": "Natural Earth / nvkelso natural-earth-vector project",
+      "endpoint": {
+        "urls": [
+          "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_10m_admin_0_countries.geojson",
+          "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_10m_admin_1_states_provinces.geojson"
+        ],
+        "protocol": "https-geojson",
+        "documentationUrl": "https://www.naturalearthdata.com/"
+      },
+      "license": {
+        "status": "public-domain",
+        "name": "Public domain",
+        "termsUrl": "https://www.naturalearthdata.com/about/terms-of-use/",
+        "evidenceUrl": "https://www.naturalearthdata.com/about/terms-of-use/",
+        "note": "Natural Earth's terms page states that its vector data are public domain. The generated reference-point file carries this evidence URL."
+      },
+      "attribution": {
+        "requirement": "not-required",
+        "text": "Reference geography: Natural Earth (public domain).",
+        "evidenceUrl": "https://www.naturalearthdata.com/about/terms-of-use/",
+        "note": "Credit is retained as good provenance practice even though Natural Earth does not require it."
+      },
+      "cadence": {
+        "publisherCadence": "infrequent versioned reference releases",
+        "expectedUpdateSeconds": 31536000,
+        "retrievalCadence": "manually regenerated only when the pinned reference version changes",
+        "retention": {
+          "mode": "pinned-versioned-static",
+          "maxCacheAgeSeconds": null,
+          "note": "The pinned v5.1.2 input is intentionally retained until deliberately upgraded."
+        },
+        "freshness": {
+          "warnAfterSeconds": 63072000,
+          "staleAfterSeconds": 126144000,
+          "timestampBasis": "pinned-dataset-version",
+          "note": "Reference geography changes slowly; stale means the pinned version is old, not that coordinates are wrong."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "Reference geography is mirrored into version-controlled static files."
+        }
+      },
+      "redistribution": {
+        "status": "open",
+        "publicStaticRisk": "low",
+        "bulkPublicExport": "permitted",
+        "constraints": ["no known redistribution constraint for Natural Earth vector data", "third-party host platform terms do not transfer dataset ownership"],
+        "note": "Public-domain status is based on the publisher terms URL recorded here."
+      },
+      "confidence": {
+        "authority": "reference-data",
+        "verification": "cartographic reference dataset, not live operational geography or legal boundary adjudication",
+        "coverage": "global countries and admin-1 regions at the pinned scale/version",
+        "automation": "deterministic extraction of publisher label/reference coordinates",
+        "caveats": ["coordinates are cartographic reference placements", "boundaries can be disputed or politically sensitive", "not suitable for legal sovereignty conclusions"]
+      },
+      "collections": ["referenceBasemap", "internetOutages"],
+      "connectorVersion": "godseye-natural-earth-reference/2026.11.26.1"
+    },
+    {
+      "id": "ioda-outages",
+      "displayName": "IODA v2 Internet outage events",
+      "owner": "Internet Intelligence Lab, Georgia Institute of Technology",
+      "endpoint": {
+        "urls": ["https://api.ioda.inetintel.cc.gatech.edu/v2/outages/events"],
+        "protocol": "https-json",
+        "documentationUrl": "https://api.ioda.inetintel.cc.gatech.edu/v2/"
+      },
+      "license": {
+        "status": "unknown",
+        "name": null,
+        "termsUrl": null,
+        "evidenceUrl": "https://ioda.inetintel.cc.gatech.edu/",
+        "note": "No machine-readable license or bulk redistribution grant was located in the public IODA API documentation during registry curation. Treat reuse rights as explicitly unknown."
+      },
+      "attribution": {
+        "requirement": "unknown",
+        "text": "Outage detections: IODA, Internet Intelligence Lab, Georgia Institute of Technology.",
+        "evidenceUrl": "https://ioda.inetintel.cc.gatech.edu/",
+        "note": "Conservative source credit is shown; the registry does not claim that this credit satisfies an unstated license."
+      },
+      "cadence": {
+        "publisherCadence": "near-real-time outage detection, queried over explicit Unix-second windows",
+        "expectedUpdateSeconds": 900,
+        "retrievalCadence": "twice-hourly static build",
+        "retention": {
+          "mode": "latest-plus-previous-build-fallback",
+          "maxCacheAgeSeconds": null,
+          "note": "A failed ingest may preserve the prior build-time snapshot with an explicit preserved status."
+        },
+        "freshness": {
+          "warnAfterSeconds": 3600,
+          "staleAfterSeconds": 21600,
+          "timestampBasis": "query-window-and-event-time",
+          "note": "Event windows are publisher-supplied Unix seconds; preserved fallback age is separately visible."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "The connector deliberately mirrors data into static JSON rather than making browsers depend on endpoint CORS behavior."
+        }
+      },
+      "redistribution": {
+        "status": "unknown",
+        "publicStaticRisk": "high",
+        "bulkPublicExport": "unknown",
+        "constraints": ["no redistribution license located", "outage rows are republished in normalized form", "legal/reuse review required before relying on bulk redistribution"],
+        "note": "High risk means unresolved permission, not a determination of infringement or compliance."
+      },
+      "confidence": {
+        "authority": "research-network-measurement",
+        "verification": "automated macroscopic connectivity detection; not causal attribution and not a verified shutdown inventory",
+        "coverage": "country/region entities and data-source coverage chosen by IODA; absence is not an all-clear",
+        "automation": "automated measurement and event detection",
+        "caveats": ["coordinates are external Natural Earth reference placements", "event windows can extend beyond the query horizon", "a detection does not identify cause, actor, intent, or user impact"]
+      },
+      "collections": ["internetOutages"],
+      "connectorVersion": "godseye-ioda-outages/2026.11.26.1"
+    },
+    {
+      "id": "adsb-lol-military",
+      "displayName": "adsb.lol military aircraft API",
+      "owner": "adsb.lol community ADS-B network",
+      "endpoint": {
+        "urls": ["https://api.adsb.lol/v2/mil"],
+        "protocol": "https-json",
+        "documentationUrl": "https://www.adsb.lol/docs/open-data/api"
+      },
+      "license": {
+        "status": "open-license",
+        "name": "Open Data Commons Open Database License 1.0 (ODbL 1.0)",
+        "termsUrl": "https://opendatacommons.org/licenses/odbl/1-0/",
+        "evidenceUrl": "https://www.adsb.lol/docs/open-data/api",
+        "note": "The adsb.lol API documentation states that public API data are ODbL 1.0. ODbL duties can include attribution and share-alike for derivative databases; this registry does not certify downstream compliance."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "Military aircraft positions: adsb.lol community ADS-B data, ODbL 1.0.",
+        "evidenceUrl": "https://www.adsb.lol/docs/open-data/api",
+        "note": "ODbL attribution/share-alike obligations require legal review for the exact derivative-database form published here."
+      },
+      "cadence": {
+        "publisherCadence": "live aircraft state snapshots",
+        "expectedUpdateSeconds": 30,
+        "retrievalCadence": "twice-hourly static build",
+        "retention": {
+          "mode": "latest-plus-previous-build-fallback",
+          "maxCacheAgeSeconds": null,
+          "note": "Only a bounded snapshot of current aircraft is retained."
+        },
+        "freshness": {
+          "warnAfterSeconds": 1800,
+          "staleAfterSeconds": 7200,
+          "timestampBasis": "retrieval-time",
+          "note": "Individual rows do not carry a publisher timestamp in the normalized subset, so retrieval time is the honest freshness basis."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "The static mirror avoids browser rate-limit multiplication and CORS dependence."
+        }
+      },
+      "redistribution": {
+        "status": "permitted-with-conditions",
+        "publicStaticRisk": "medium",
+        "bulkPublicExport": "permitted-with-conditions",
+        "constraints": ["ODbL attribution", "possible derivative-database/share-alike duties", "receiver observations are incomplete and can be erroneous"],
+        "note": "Medium risk reflects unresolved ODbL derivative-database analysis, not a claim of noncompliance."
+      },
+      "confidence": {
+        "authority": "community-observation",
+        "verification": "receiver-network observations; aircraft voluntarily broadcasting ADS-B only",
+        "coverage": "depends on volunteer receiver coverage and transponder use; non-transmitting military aircraft are absent",
+        "automation": "automated radio reception and API filtering",
+        "caveats": ["positions can be spoofed, stale, incomplete, or misclassified", "operator/type inference is not authoritative", "absence is not evidence of no military aviation"]
+      },
+      "collections": ["militaryAircraft"],
+      "connectorVersion": "godseye-adsb-lol-mil/2026.11.26.1"
+    },
+    {
+      "id": "opensky-network",
+      "displayName": "OpenSky Network live state vectors",
+      "owner": "The OpenSky Network association",
+      "endpoint": {
+        "urls": ["https://opensky-network.org/api/states/all"],
+        "protocol": "https-json",
+        "documentationUrl": "https://openskynetwork.github.io/opensky-api/"
+      },
+      "license": {
+        "status": "terms-identified",
+        "name": "OpenSky General Terms of Use & Data License Agreement",
+        "termsUrl": "https://opensky-network.org/about/terms-of-use",
+        "evidenceUrl": "https://opensky-network.org/about/terms-of-use",
+        "note": "OpenSky terms state that operational REST API use requires a prior written agreement and commercial/for-profit use requires a written license. The repository contains no evidence of such an agreement."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "Aircraft state vectors: The OpenSky Network (https://opensky-network.org); publication citation requested: Schaefer et al., Bringing Up OpenSky, IPSN 2014.",
+        "evidenceUrl": "https://openskynetwork.github.io/opensky-api/",
+        "note": "OpenSky documentation requests the original OpenSky paper citation for publications and mentions the project URL where appropriate."
+      },
+      "cadence": {
+        "publisherCadence": "live state vectors, normally updated continuously",
+        "expectedUpdateSeconds": 60,
+        "retrievalCadence": "twice-hourly static build",
+        "retention": {
+          "mode": "latest-plus-previous-build-fallback",
+          "maxCacheAgeSeconds": null,
+          "note": "Only a bounded anonymous public snapshot is retained."
+        },
+        "freshness": {
+          "warnAfterSeconds": 1800,
+          "staleAfterSeconds": 7200,
+          "timestampBasis": "publisher-lastContact-and-retrieval",
+          "note": "Rows carry lastContact when supplied; static snapshot age is also displayed."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "Build-time mirroring avoids uncontrolled browser requests; legal authorization for operational use is not established by this registry."
+        }
+      },
+      "redistribution": {
+        "status": "restricted-review",
+        "publicStaticRisk": "high",
+        "bulkPublicExport": "license-or-permission-required",
+        "constraints": ["operational REST API use requires prior written agreement under the terms", "commercial/for-profit use requires a written license", "publication attribution/citation requested", "no authorization evidence is present in this repository"],
+        "note": "This is a high-priority review finding. It is not a legal conclusion because the deployer may hold external permission unknown to the repository."
+      },
+      "confidence": {
+        "authority": "research-community-observation",
+        "verification": "receiver-network state vectors; not an authoritative air traffic control feed",
+        "coverage": "dependent on receiver coverage, transponder use, and anonymous API rate limits",
+        "automation": "automated receiver ingestion and state-vector API",
+        "caveats": ["positions and identity can be missing or incorrect", "aircraft operator class in this project is inferred", "absence is not evidence of no aviation activity"]
+      },
+      "collections": ["aircraft"],
+      "connectorVersion": "godseye-opensky-states/2026.11.26.1"
+    },
+    {
+      "id": "digitraffic-ais",
+      "displayName": "Fintraffic Digitraffic marine AIS",
+      "owner": "Fintraffic",
+      "endpoint": {
+        "urls": [
+          "https://meri.digitraffic.fi/api/ais/v1/locations",
+          "https://meri.digitraffic.fi/api/ais/v1/vessels"
+        ],
+        "protocol": "https-json-geojson",
+        "documentationUrl": "https://www.digitraffic.fi/en/marine-traffic/"
+      },
+      "license": {
+        "status": "open-license",
+        "name": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        "termsUrl": "https://www.digitraffic.fi/en/terms-of-service/",
+        "evidenceUrl": "https://www.digitraffic.fi/en/terms-of-service/",
+        "note": "Fintraffic states that Digitraffic open data are CC BY 4.0 and provides detailed attribution instructions."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "Source: Fintraffic / digitraffic.fi, license CC 4.0 BY; normalized and merged with other AIS sources where disclosed.",
+        "evidenceUrl": "https://www.digitraffic.fi/en/terms-of-service/",
+        "note": "The publisher specifically gives this attribution form and requires a license hyperlink and modification notice where applicable."
+      },
+      "cadence": {
+        "publisherCadence": "near-real-time AIS positions and vessel metadata",
+        "expectedUpdateSeconds": 120,
+        "retrievalCadence": "twice-hourly static build",
+        "retention": {
+          "mode": "latest-plus-previous-build-fallback",
+          "maxCacheAgeSeconds": null,
+          "note": "A bounded regional snapshot is retained; no full track history is kept."
+        },
+        "freshness": {
+          "warnAfterSeconds": 1800,
+          "staleAfterSeconds": 7200,
+          "timestampBasis": "publisher-timestampExternal-and-retrieval",
+          "note": "Rows carry publisher external timestamps when supplied."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "The connector sends the requested Digitraffic-User identification header during build-time fetches."
+        }
+      },
+      "redistribution": {
+        "status": "permitted-with-conditions",
+        "publicStaticRisk": "low",
+        "bulkPublicExport": "permitted-with-conditions",
+        "constraints": ["CC BY attribution", "link to license and original material where technically possible", "indicate normalization/modification"],
+        "note": "The publisher terms expressly permit copying, adaptation, sharing, and commercial/non-commercial use with attribution."
+      },
+      "confidence": {
+        "authority": "official-operational-open-data",
+        "verification": "AIS observations and vessel registry metadata operated by Fintraffic; still dependent on vessels transmitting correct AIS",
+        "coverage": "primarily Finnish/Baltic regional coverage, not global",
+        "automation": "operational automated ingest",
+        "caveats": ["regional absence is not global absence", "AIS identity fields can be wrong or manually misconfigured", "non-transmitting vessels are invisible"]
+      },
+      "collections": ["vessels"],
+      "connectorVersion": "godseye-digitraffic-ais/2026.11.26.1"
+    },
+    {
+      "id": "aisstream-global",
+      "displayName": "AISStream global AIS WebSocket",
+      "owner": "AISStream",
+      "endpoint": {
+        "urls": ["wss://stream.aisstream.io/v0/stream"],
+        "protocol": "wss-json",
+        "documentationUrl": "https://www.aisstream.io/documentation"
+      },
+      "license": {
+        "status": "unknown",
+        "name": null,
+        "termsUrl": null,
+        "evidenceUrl": "https://www.aisstream.io/documentation",
+        "note": "No public data license or redistribution terms were located during registry curation. The service documentation is explicit about credential containment but not reuse rights."
+      },
+      "attribution": {
+        "requirement": "unknown",
+        "text": "AIS positions: AISStream.io (where merged rows carry this source label).",
+        "evidenceUrl": "https://www.aisstream.io/",
+        "note": "Conservative credit is shown; no attribution requirement was located."
+      },
+      "cadence": {
+        "publisherCadence": "real-time streaming position reports",
+        "expectedUpdateSeconds": 30,
+        "retrievalCadence": "ten-second bounded sample during twice-hourly static builds",
+        "retention": {
+          "mode": "latest-bounded-sample",
+          "maxCacheAgeSeconds": null,
+          "note": "The connector deliberately samples the stream for a short bounded window and does not retain a complete global feed."
+        },
+        "freshness": {
+          "warnAfterSeconds": 1800,
+          "staleAfterSeconds": 7200,
+          "timestampBasis": "publisher-time_utc-and-retrieval",
+          "note": "Rows carry MetaData time_utc where supplied."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "websocket-api-key", "required": true, "envVars": ["AISSTREAM_API_KEY"] },
+        "browser": {
+          "mode": "browser-prohibited-by-provider",
+          "cors": "disabled",
+          "runtimeFetchAllowed": false,
+          "note": "AISStream documentation says direct browser connections are not permitted; the API key must remain server/build-time only."
+        }
+      },
+      "redistribution": {
+        "status": "unknown",
+        "publicStaticRisk": "high",
+        "bulkPublicExport": "unknown",
+        "constraints": ["no redistribution license located", "vessel positions and identities are operationally sensitive", "direct browser access is prohibited", "written provider clarification is advisable before public redistribution"],
+        "note": "High risk means unresolved permission and sensitivity, not a legal determination."
+      },
+      "confidence": {
+        "authority": "commercial-or-private-aggregator",
+        "verification": "AIS messages self-reported by vessels and received by a third-party network; not independently verified",
+        "coverage": "coverage depends on receiving stations and the short bounded sampling window; absence is not absence of vessels",
+        "automation": "automated streaming ingest",
+        "caveats": ["sample is opportunistic and incomplete", "AIS data can be spoofed or misconfigured", "military/non-transmitting vessels are not represented unless voluntarily broadcasting"]
+      },
+      "collections": ["vessels"],
+      "connectorVersion": "godseye-aisstream-sample/2026.11.26.1"
+    },
+    {
+      "id": "celestrak-gp",
+      "displayName": "CelesTrak public NORAD general perturbations element sets",
+      "owner": "CelesTrak",
+      "endpoint": {
+        "urls": ["https://celestrak.org/NORAD/elements/gp.php"],
+        "protocol": "https-tle-text",
+        "documentationUrl": "https://celestrak.org/NORAD/documentation/gp-data-formats.php"
+      },
+      "license": {
+        "status": "terms-identified",
+        "name": "CelesTrak Usage Policy",
+        "termsUrl": "https://celestrak.org/usage-policy.php",
+        "evidenceUrl": "https://celestrak.org/usage-policy.php",
+        "note": "CelesTrak publishes an operational usage policy. Registry curation did not locate a formal open-data license or explicit bulk redistribution grant, so redistribution rights remain uncertain."
+      },
+      "attribution": {
+        "requirement": "requested",
+        "text": "Orbital element sets: CelesTrak public NORAD GP data.",
+        "evidenceUrl": "https://celestrak.org/usage-policy.php",
+        "note": "Credit is retained because the data lineage and operational service are externally provided."
+      },
+      "cadence": {
+        "publisherCadence": "GP data updated approximately once every two hours according to CelesTrak policy",
+        "expectedUpdateSeconds": 7200,
+        "retrievalCadence": "twice-hourly static build",
+        "retention": {
+          "mode": "latest-plus-previous-build-fallback",
+          "maxCacheAgeSeconds": null,
+          "note": "Only selected groups and a bounded object count are stored; this is not a full catalog mirror."
+        },
+        "freshness": {
+          "warnAfterSeconds": 10800,
+          "staleAfterSeconds": 28800,
+          "timestampBasis": "tle-epoch-and-retrieval",
+          "note": "TLE epoch is preserved in each row but the UI currently summarizes retrieval age."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "Build-time grouping and bounded selection avoid repeated browser downloads of public TLE files."
+        }
+      },
+      "redistribution": {
+        "status": "unknown",
+        "publicStaticRisk": "medium",
+        "bulkPublicExport": "unknown",
+        "constraints": ["follow CelesTrak query/update policy", "no formal redistribution license located", "selected TLEs are republished in normalized static form"],
+        "note": "Medium risk reflects uncertain redistribution permission rather than a claim of noncompliance."
+      },
+      "confidence": {
+        "authority": "official-derived-reference-data",
+        "verification": "public element sets derived from USSF catalog data and republished by CelesTrak; propagation uncertainty grows after epoch",
+        "coverage": "selected military/station/GPS/weather groups, capped by this project; not the full catalog",
+        "automation": "authoritative catalog generation upstream with deterministic project parsing",
+        "caveats": ["TLEs are mean elements, not exact real-time positions", "legacy TLE format cannot represent six-digit catalog numbers", "classification of a group is not proof of mission or ownership"]
+      },
+      "collections": ["satellites"],
+      "connectorVersion": "godseye-celestrak-tle/2026.11.26.1"
+    },
+    {
+      "id": "gdelt-gkg",
+      "displayName": "GDELT Global Knowledge Graph 2.1 fifteen-minute files",
+      "owner": "The GDELT Project",
+      "endpoint": {
+        "urls": [
+          "https://data.gdeltproject.org/gdeltv2/lastupdate.txt",
+          "https://data.gdeltproject.org/gdeltv2/lastupdate-translation.txt"
+        ],
+        "protocol": "https-zip-csv",
+        "documentationUrl": "https://blog.gdeltproject.org/gdelt-2-0-our-global-world-in-realtime/"
+      },
+      "license": {
+        "status": "open-license",
+        "name": "GDELT Terms of Use",
+        "termsUrl": "https://www.gdeltproject.org/about.html",
+        "evidenceUrl": "https://www.gdeltproject.org/about.html",
+        "note": "GDELT states that its datasets may be used, redistributed, rehosted, republished, and mirrored without fee, with required citation to The GDELT Project and a link."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "Geolocated news mentions courtesy of The GDELT Project (https://www.gdeltproject.org/).",
+        "evidenceUrl": "https://www.gdeltproject.org/about.html",
+        "note": "GDELT terms require citation and a link for use or redistribution."
+      },
+      "cadence": {
+        "publisherCadence": "fifteen-minute monitoring slots",
+        "expectedUpdateSeconds": 900,
+        "retrievalCadence": "two newest downloadable slots per collection during twice-hourly builds",
+        "retention": {
+          "mode": "latest-plus-previous-build-fallback",
+          "maxCacheAgeSeconds": null,
+          "note": "Only bounded normalized mentions are retained, not full GKG rows or article text."
+        },
+        "freshness": {
+          "warnAfterSeconds": 2700,
+          "staleAfterSeconds": 10800,
+          "timestampBasis": "slotTime-and-opportunistic-seenAt",
+          "note": "slotTime is monitoring time, not article publication time; seenAt exists only through DOC cross-reference."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "Large zip slices are inappropriate for direct browser ingestion and are normalized at build time."
+        }
+      },
+      "redistribution": {
+        "status": "permitted-with-conditions",
+        "publicStaticRisk": "low",
+        "bulkPublicExport": "permitted-with-conditions",
+        "constraints": ["required GDELT citation and link", "underlying articles remain subject to publisher rights", "this project stores metadata/derived mentions, not article bodies"],
+        "note": "Permission applies to GDELT datasets/metadata as stated by GDELT, not necessarily to the underlying news content."
+      },
+      "confidence": {
+        "authority": "automated-media-analysis",
+        "verification": "automated theme, location, translation, and tone extraction; mentions are media attention, not verified incidents",
+        "coverage": "global online news visible to GDELT in the ingested slots; selection is capped and sub-national only",
+        "automation": "fully automated upstream extraction plus deterministic local filtering",
+        "caveats": ["geocoding can be wrong", "administrative centroids are symbolic placements", "a location mention near a conflict theme is not an incident location", "deduplication and caps omit material"]
+      },
+      "collections": ["gdeltGeoNews"],
+      "connectorVersion": "godseye-gdelt-gkg-geo/2026.11.26.1"
+    },
+    {
+      "id": "gdelt-doc",
+      "displayName": "GDELT DOC 2.0 article API",
+      "owner": "The GDELT Project",
+      "endpoint": {
+        "urls": ["https://api.gdeltproject.org/api/v2/doc/doc"],
+        "protocol": "https-json",
+        "documentationUrl": "https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/"
+      },
+      "license": {
+        "status": "open-license",
+        "name": "GDELT Terms of Use",
+        "termsUrl": "https://www.gdeltproject.org/about.html",
+        "evidenceUrl": "https://www.gdeltproject.org/about.html",
+        "note": "Same GDELT dataset terms as the GKG source: broad use/redistribution with required citation and link. Underlying article content remains with original publishers."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "News metadata courtesy of The GDELT Project (https://www.gdeltproject.org/).",
+        "evidenceUrl": "https://www.gdeltproject.org/about.html",
+        "note": "GDELT citation is mandatory under the publisher terms."
+      },
+      "cadence": {
+        "publisherCadence": "near-real-time article index, commonly fifteen-minute freshness",
+        "expectedUpdateSeconds": 900,
+        "retrievalCadence": "bounded conflict query and opportunistic title cross-reference during twice-hourly builds",
+        "retention": {
+          "mode": "latest-bounded-list",
+          "maxCacheAgeSeconds": null,
+          "note": "Only titles, URLs, domains, and first-seen metadata are stored for a small result set."
+        },
+        "freshness": {
+          "warnAfterSeconds": 2700,
+          "staleAfterSeconds": 10800,
+          "timestampBasis": "publisher-seendate-and-retrieval",
+          "note": "seendate is GDELT first-seen time, not necessarily original article publication time."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "The connector throttles requests serially because the API is rate-limited."
+        }
+      },
+      "redistribution": {
+        "status": "permitted-with-conditions",
+        "publicStaticRisk": "low",
+        "bulkPublicExport": "permitted-with-conditions",
+        "constraints": ["required GDELT citation and link", "do not treat linked publisher content as cleared by GDELT's license", "only bounded metadata is republished"],
+        "note": "Permission applies to GDELT metadata under its terms; article text is not stored."
+      },
+      "confidence": {
+        "authority": "automated-media-analysis",
+        "verification": "automated news indexing and first-seen metadata; ranking is not verification",
+        "coverage": "online news visible to GDELT and matching the query; not a complete conflict-news inventory",
+        "automation": "automated indexing",
+        "caveats": ["query terms shape coverage", "first-seen time is not publication time", "headline metadata does not verify events"]
+      },
+      "collections": ["news", "gdeltGeoNews"],
+      "connectorVersion": "godseye-gdelt-doc/2026.11.26.1"
+    },
+    {
+      "id": "google-news-rss",
+      "displayName": "Google News RSS conflict-query fallback",
+      "owner": "Google",
+      "endpoint": {
+        "urls": ["https://news.google.com/rss/search"],
+        "protocol": "https-rss-xml",
+        "documentationUrl": null
+      },
+      "license": {
+        "status": "terms-identified",
+        "name": "Google News Terms of Use",
+        "termsUrl": "https://www.google.com/intl/en_us/terms_google_news.html",
+        "evidenceUrl": "https://www.google.com/intl/en_us/terms_google_news.html",
+        "note": "The legacy Google News terms restrict the service to personal non-commercial use and prohibit copying/reformatting/public display outside that scope. Applicability to the current undocumented RSS endpoint is not resolved here."
+      },
+      "attribution": {
+        "requirement": "unknown",
+        "text": "Fallback news metadata: Google News RSS; linked articles remain with their publishers.",
+        "evidenceUrl": "https://www.google.com/intl/en_us/terms_google_news.html",
+        "note": "Credit is descriptive only and does not resolve permission."
+      },
+      "cadence": {
+        "publisherCadence": "near-real-time search feed",
+        "expectedUpdateSeconds": 900,
+        "retrievalCadence": "fallback only when the GDELT article query yields no rows",
+        "retention": {
+          "mode": "latest-bounded-list",
+          "maxCacheAgeSeconds": null,
+          "note": "Only title, link, source label, and publication date are retained."
+        },
+        "freshness": {
+          "warnAfterSeconds": 2700,
+          "staleAfterSeconds": 10800,
+          "timestampBasis": "publisher-pubDate-and-retrieval",
+          "note": "RSS pubDate is publisher feed metadata and is not independently verified."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "The endpoint is undocumented and treated as build-time-only fallback."
+        }
+      },
+      "redistribution": {
+        "status": "restricted-review",
+        "publicStaticRisk": "high",
+        "bulkPublicExport": "license-or-permission-required",
+        "constraints": ["terms found during curation restrict use to personal non-commercial purposes", "copying/reformatting/public display is expressly restricted in those terms", "underlying publisher headlines/content have separate rights", "fallback should be replaced or legally reviewed"],
+        "note": "This is a high-priority review finding, not an automated legal conclusion."
+      },
+      "confidence": {
+        "authority": "commercial-or-private-aggregator",
+        "verification": "search aggregation metadata; not fact verification",
+        "coverage": "query-dependent Google News results, capped at 30",
+        "automation": "automated aggregation and ranking",
+        "caveats": ["undocumented endpoint", "query bias and personalization/localization can shape results", "links may be redirects", "fallback use carries unresolved reuse risk"]
+      },
+      "collections": ["news"],
+      "connectorVersion": "godseye-google-news-rss-fallback/2026.11.26.1"
+    },
+    {
+      "id": "launch-library-2",
+      "displayName": "Launch Library 2 upcoming launch API",
+      "owner": "The Space Devs",
+      "endpoint": {
+        "urls": ["https://ll.thespacedevs.com/2.2.0/launch/upcoming/"],
+        "protocol": "https-json",
+        "documentationUrl": "https://thespacedevs.com/llapi/"
+      },
+      "license": {
+        "status": "terms-identified",
+        "name": "The Space Devs Terms of Use",
+        "termsUrl": "https://github.com/TheSpaceDevs/Tutorials/blob/main/faqs/faq_TSD.md",
+        "evidenceUrl": "https://github.com/TheSpaceDevs/Tutorials/blob/main/faqs/faq_TSD.md",
+        "note": "The Space Devs FAQ says data may be used in any way and shared when value is added, while attribution is encouraged rather than mandatory."
+      },
+      "attribution": {
+        "requirement": "requested",
+        "text": "Launch schedule data: The Space Devs, Launch Library 2.",
+        "evidenceUrl": "https://github.com/TheSpaceDevs/Tutorials/blob/main/faqs/faq_TSD.md",
+        "note": "Attribution is encouraged by the publisher and retained to avoid circular sourcing."
+      },
+      "cadence": {
+        "publisherCadence": "curated launch schedule updates as launch plans change",
+        "expectedUpdateSeconds": 21600,
+        "retrievalCadence": "twice-hourly static build",
+        "retention": {
+          "mode": "latest-plus-previous-build-fallback",
+          "maxCacheAgeSeconds": null,
+          "note": "Only the next bounded set of upcoming launches with usable coordinates is retained."
+        },
+        "freshness": {
+          "warnAfterSeconds": 43200,
+          "staleAfterSeconds": 259200,
+          "timestampBasis": "publisher-net-and-retrieval",
+          "note": "Launch times are scheduled estimates and can slip without immediate reflection in the static snapshot."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "The free unauthenticated tier is rate-limited, so build-time mirroring prevents client fan-out."
+        }
+      },
+      "redistribution": {
+        "status": "permitted-with-conditions",
+        "publicStaticRisk": "low",
+        "bulkPublicExport": "permitted-with-conditions",
+        "constraints": ["add value rather than merely forwarding the dataset", "attribution encouraged", "image licenses can differ and images are not republished here"],
+        "note": "Based on publisher FAQ; not legal advice."
+      },
+      "confidence": {
+        "authority": "independent-curated-reference",
+        "verification": "manually curated launch schedule data; schedules are plans, not observations",
+        "coverage": "upcoming launches represented in Launch Library 2 with pad coordinates",
+        "automation": "human curation exposed through API",
+        "caveats": ["launch schedules slip", "pad coordinate is not a launch observation", "absence does not mean no launch is planned"]
+      },
+      "collections": ["launches"],
+      "connectorVersion": "godseye-launch-library/2026.11.26.1"
+    },
+    {
+      "id": "nasa-eonet",
+      "displayName": "NASA EONET natural event metadata",
+      "owner": "NASA Earth Observatory / NASA Earth Science Data Systems Program",
+      "endpoint": {
+        "urls": ["https://eonet.gsfc.nasa.gov/api/v3/events"],
+        "protocol": "https-json",
+        "documentationUrl": "https://eonet.gsfc.nasa.gov/docs/v3"
+      },
+      "license": {
+        "status": "terms-identified",
+        "name": "NASA Earthdata data-use guidance and EONET disclaimer",
+        "termsUrl": "https://www.earthdata.nasa.gov/engage/open-data-services-software-policies/data-use-guidance",
+        "evidenceUrl": "https://eonet.gsfc.nasa.gov/docs/v3",
+        "note": "NASA general guidance supports open use of NASA-generated content, but EONET events can be curated from third-party sources and the API docs emphasize source metadata/disclaimers. Mixed upstream rights are not fully resolved."
+      },
+      "attribution": {
+        "requirement": "requested",
+        "text": "Natural event metadata: NASA EONET and the event-specific sources linked by EONET.",
+        "evidenceUrl": "https://www.earthdata.nasa.gov/engage/open-data-services-software-policies/data-use-guidance",
+        "note": "NASA asks to be acknowledged as source; event-specific upstream sources should remain visible."
+      },
+      "cadence": {
+        "publisherCadence": "continuously updated curated near-real-time event metadata",
+        "expectedUpdateSeconds": 3600,
+        "retrievalCadence": "twice-hourly static build",
+        "retention": {
+          "mode": "latest-bounded-list",
+          "maxCacheAgeSeconds": null,
+          "note": "Only open events with usable geometry are retained in a bounded merge."
+        },
+        "freshness": {
+          "warnAfterSeconds": 7200,
+          "staleAfterSeconds": 86400,
+          "timestampBasis": "publisher-geometry-date-and-retrieval",
+          "note": "Geometry dates often carry day precision rather than exact event onset."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "Mirrored in static JSON with other hazard feeds."
+        }
+      },
+      "redistribution": {
+        "status": "permitted-with-conditions",
+        "publicStaticRisk": "medium",
+        "bulkPublicExport": "permitted-with-conditions",
+        "constraints": ["acknowledge NASA", "do not imply endorsement", "third-party event sources can carry separate terms", "metadata is for visualization/general information and approximate"],
+        "note": "Medium risk reflects mixed upstream curation, not a claim that NASA-generated data is restricted."
+      },
+      "confidence": {
+        "authority": "official-curated-mixed-evidence",
+        "verification": "NASA-curated event metadata but source quality and geometry precision vary by upstream provider",
+        "coverage": "selected open natural events visible to EONET, not a complete disaster inventory",
+        "automation": "mixed manual/automated upstream curation",
+        "caveats": ["event definitions are fluid", "geometry may be approximate or polygon-sample based", "not a warning or life-safety service"]
+      },
+      "collections": ["naturalEvents"],
+      "connectorVersion": "godseye-nasa-eonet/2026.11.26.1"
+    },
+    {
+      "id": "usgs-earthquake-feed",
+      "displayName": "USGS significant earthquakes GeoJSON feed",
+      "owner": "U.S. Geological Survey",
+      "endpoint": {
+        "urls": ["https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson"],
+        "protocol": "https-geojson",
+        "documentationUrl": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php"
+      },
+      "license": {
+        "status": "public-domain",
+        "name": "U.S. Government work public domain status",
+        "termsUrl": "https://www.usgs.gov/data-management/data-licensing",
+        "evidenceUrl": "https://www.usgs.gov/data-management/data-licensing",
+        "note": "USGS explains that works prepared by federal employees as part of official duties are in the U.S. public domain, subject to caveats and third-party content."
+      },
+      "attribution": {
+        "requirement": "requested",
+        "text": "Earthquake data: U.S. Geological Survey.",
+        "evidenceUrl": "https://www.usgs.gov/data-management/data-licensing",
+        "note": "Credit is retained even where public-domain status means attribution is not a copyright condition."
+      },
+      "cadence": {
+        "publisherCadence": "real-time earthquake feed, significant-week product",
+        "expectedUpdateSeconds": 300,
+        "retrievalCadence": "twice-hourly static build",
+        "retention": {
+          "mode": "latest-bounded-list",
+          "maxCacheAgeSeconds": null,
+          "note": "Only the feed's current significant events are merged into the bounded natural-events collection."
+        },
+        "freshness": {
+          "warnAfterSeconds": 3600,
+          "staleAfterSeconds": 86400,
+          "timestampBasis": "publisher-event-time-and-retrieval",
+          "note": "Significant earthquakes can remain in the weekly product after they are no longer operationally new."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "Mirrored with other hazard data."
+        }
+      },
+      "redistribution": {
+        "status": "open",
+        "publicStaticRisk": "low",
+        "bulkPublicExport": "permitted",
+        "constraints": ["do not imply USGS endorsement", "third-party contributed content can be marked separately upstream"],
+        "note": "Based on USGS public-domain/data-licensing documentation."
+      },
+      "confidence": {
+        "authority": "official-authoritative",
+        "verification": "authoritative seismological network processing; magnitudes/locations can be revised",
+        "coverage": "significant earthquakes in the selected weekly product, not all seismicity",
+        "automation": "automated and reviewed scientific processing",
+        "caveats": ["significant-feed selection is a filter", "magnitude and location can update", "not a tsunami or safety warning product"]
+      },
+      "collections": ["naturalEvents"],
+      "connectorVersion": "godseye-usgs-earthquakes/2026.11.26.1"
+    },
+    {
+      "id": "gdacs-events",
+      "displayName": "GDACS red/orange disaster event API",
+      "owner": "Global Disaster Alert and Coordination System (UN OCHA/UNOSAT and European Commission partners)",
+      "endpoint": {
+        "urls": ["https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH"],
+        "protocol": "https-geojson",
+        "documentationUrl": "https://www.gdacs.org/gdacsapi/swagger/index.html"
+      },
+      "license": {
+        "status": "terms-identified",
+        "name": "GDACS Terms of Use",
+        "termsUrl": "https://www.gdacs.org/Documents/GDACS_Terms_of_use.pdf",
+        "evidenceUrl": "https://www.gdacs.org/Documents/2025/GDACS_API_quickstart_v2.pdf",
+        "note": "GDACS quick-start documentation says data are free through the API and requests acknowledgement as GDACS; event resources may carry European Union CC BY 4.0 notices. Exact per-resource rights should be preserved."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "Disaster alert data: Global Disaster Awareness and Coordination System, GDACS.",
+        "evidenceUrl": "https://www.gdacs.org/Documents/2025/GDACS_API_quickstart_v2.pdf",
+        "note": "The API quick start explicitly requests this acknowledgement."
+      },
+      "cadence": {
+        "publisherCadence": "automatic disaster alerts updated as events evolve",
+        "expectedUpdateSeconds": 3600,
+        "retrievalCadence": "twice-hourly static build",
+        "retention": {
+          "mode": "latest-bounded-list",
+          "maxCacheAgeSeconds": null,
+          "note": "Only red/orange events in selected hazard categories are retained in the bounded merge."
+        },
+        "freshness": {
+          "warnAfterSeconds": 7200,
+          "staleAfterSeconds": 86400,
+          "timestampBasis": "publisher-fromdate-or-datemodified-and-retrieval",
+          "note": "Alert timestamps can represent event start or modification rather than current operational severity."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "Mirrored with other hazard data."
+        }
+      },
+      "redistribution": {
+        "status": "permitted-with-conditions",
+        "publicStaticRisk": "low",
+        "bulkPublicExport": "permitted-with-conditions",
+        "constraints": ["acknowledge GDACS", "retain as-is/no-warranty and non-substitution-for-authorities caveat", "third-party scientific inputs can retain their own terms"],
+        "note": "Publisher documentation supports free API access and acknowledgement; exact legal analysis remains external."
+      },
+      "confidence": {
+        "authority": "official-intergovernmental-automated-analysis",
+        "verification": "automatic modelled alerts not reviewed by human experts before issuance",
+        "coverage": "selected sudden-onset hazards and red/orange alert levels; not all disasters",
+        "automation": "automatic algorithms using scientific and authoritative inputs",
+        "caveats": ["not a substitute for national/local warnings", "modelled impact estimates are uncertain", "events can be revised"]
+      },
+      "collections": ["naturalEvents"],
+      "connectorVersion": "godseye-gdacs-events/2026.11.26.1"
+    },
+    {
+      "id": "noaa-nws-alerts",
+      "displayName": "NOAA/NWS active weather alerts API",
+      "owner": "National Weather Service / NOAA",
+      "endpoint": {
+        "urls": ["https://api.weather.gov/alerts/active"],
+        "protocol": "https-json-ld-geojson",
+        "documentationUrl": "https://www.weather.gov/documentation/services-web-api"
+      },
+      "license": {
+        "status": "public-domain",
+        "name": "NWS public-domain/open-data terms unless specifically noted",
+        "termsUrl": "https://www.weather.gov/disclaimer",
+        "evidenceUrl": "https://www.weather.gov/documentation/services-web-api",
+        "note": "NWS states API information is open data free for any purpose and its disclaimer says NWS Web information is public domain unless specifically noted, with trademark/endorsement limits."
+      },
+      "attribution": {
+        "requirement": "requested",
+        "text": "U.S. weather alert data: NOAA/National Weather Service; normalized display is not an official NWS product.",
+        "evidenceUrl": "https://www.weather.gov/disclaimer",
+        "note": "Credit plus non-official-status language avoids implying endorsement or presenting modified content as official."
+      },
+      "cadence": {
+        "publisherCadence": "continuous operational alert lifecycle",
+        "expectedUpdateSeconds": 300,
+        "retrievalCadence": "twice-hourly static build",
+        "retention": {
+          "mode": "latest-bounded-list",
+          "maxCacheAgeSeconds": null,
+          "note": "Only active alerts with extractable representative coordinates are retained; polygons are simplified to first coordinate."
+        },
+        "freshness": {
+          "warnAfterSeconds": 1800,
+          "staleAfterSeconds": 7200,
+          "timestampBasis": "publisher-onset-or-sent-and-retrieval",
+          "note": "Active alerts are operationally time-sensitive; static snapshots must not be used as warning sources."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "Build-time mirroring prevents client fan-out; a unique User-Agent is supplied by the connector."
+        }
+      },
+      "redistribution": {
+        "status": "open",
+        "publicStaticRisk": "low",
+        "bulkPublicExport": "permitted",
+        "constraints": ["do not imply NOAA/NWS endorsement", "do not present modified content as official government material", "trademark/logo restrictions remain"],
+        "note": "Based on publisher disclaimer and API documentation."
+      },
+      "confidence": {
+        "authority": "official-authoritative",
+        "verification": "official U.S. weather alert feed, but this project lossily samples geometry and is not a warning service",
+        "coverage": "active U.S. alerts only; global weather hazards require other sources",
+        "automation": "official operational issuance",
+        "caveats": ["static snapshots can be dangerously stale", "representative point is not alert footprint", "users must follow local official warning channels"]
+      },
+      "collections": ["naturalEvents"],
+      "connectorVersion": "godseye-noaa-alerts/2026.11.26.1"
+    },
+    {
+      "id": "nasa-firms",
+      "displayName": "NASA FIRMS VIIRS S-NPP near-real-time active fires",
+      "owner": "NASA Earthdata / LANCE FIRMS",
+      "endpoint": {
+        "urls": ["https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/VIIRS_SNPP_NRT/world/1"],
+        "protocol": "https-csv",
+        "documentationUrl": "https://firms.modaps.eosdis.nasa.gov/api/"
+      },
+      "license": {
+        "status": "terms-identified",
+        "name": "NASA Earthdata open data policy with FIRMS citation/disclaimer guidance",
+        "termsUrl": "https://www.earthdata.nasa.gov/data/tools/firms",
+        "evidenceUrl": "https://www.earthdata.nasa.gov/data/tools/firms",
+        "note": "NASA states support for full and open sharing of FIRMS data and asks third-party redistribution to follow acknowledgement/disclaimer guidelines."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "Active fire data: NASA FIRMS and LANCE/EOSDIS; near-real-time detections are not science-quality complete fire perimeters.",
+        "evidenceUrl": "https://www.earthdata.nasa.gov/data/tools/firms",
+        "note": "FIRMS requests acknowledgement and replication/linking of its disclaimer when data are supplied to third parties."
+      },
+      "cadence": {
+        "publisherCadence": "near-real-time, commonly within about three hours of satellite observation",
+        "expectedUpdateSeconds": 10800,
+        "retrievalCadence": "one-day global CSV during twice-hourly builds when MAP_KEY is configured",
+        "retention": {
+          "mode": "latest-bounded-list",
+          "maxCacheAgeSeconds": null,
+          "note": "Only the highest-FRP bounded subset is retained after normalization."
+        },
+        "freshness": {
+          "warnAfterSeconds": 14400,
+          "staleAfterSeconds": 86400,
+          "timestampBasis": "publisher-acquisition-datetime-and-retrieval",
+          "note": "Rows use acquisition date/time when present."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "api-key-path", "required": true, "envVars": ["FIRMS_MAP_KEY"] },
+        "browser": {
+          "mode": "keyed-build-time-only",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "The MAP_KEY appears in the request path upstream and must never be serialized into public artifacts."
+        }
+      },
+      "redistribution": {
+        "status": "permitted-with-conditions",
+        "publicStaticRisk": "low",
+        "bulkPublicExport": "permitted-with-conditions",
+        "constraints": ["acknowledge NASA FIRMS/LANCE", "retain or link no-warranty/NRT disclaimer", "do not present detections as complete fire extent or science-quality product"],
+        "note": "Based on publisher guidance; exact downstream wording should be reviewed by the deployer."
+      },
+      "confidence": {
+        "authority": "official-satellite-derived",
+        "verification": "automated satellite thermal anomaly detections; near-real-time product is not science quality or a perimeter",
+        "coverage": "one-day VIIRS S-NPP global detections, bounded and ranked locally",
+        "automation": "automated satellite retrieval and detection algorithm",
+        "caveats": ["cloud/sensor gaps cause omission", "centroid is pixel-level detection not fire extent", "FRP ranking omits lower-value detections"]
+      },
+      "collections": ["naturalEvents"],
+      "connectorVersion": "godseye-nasa-firms/2026.11.26.1"
+    },
+    {
+      "id": "map-of-wars",
+      "displayName": "Map of Wars public event lattice",
+      "owner": "Map of Wars",
+      "endpoint": {
+        "urls": ["https://mapofwars.org/api/events"],
+        "protocol": "https-json",
+        "documentationUrl": "https://mapofwars.org/media"
+      },
+      "license": {
+        "status": "terms-identified",
+        "name": "Map of Wars media/developer terms",
+        "termsUrl": "https://mapofwars.org/media",
+        "evidenceUrl": "https://mapofwars.org/media",
+        "note": "The publisher says feeds are free for articles, broadcasts, research, and non-commercial sites, asks that the Map of Wars link/source be kept, and warns that embedded upstream sources retain their own licenses. Commercial rights are not established."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "Source: Map of Wars (mapofwars.org); embedded events retain their named upstream sources and licenses.",
+        "evidenceUrl": "https://mapofwars.org/media",
+        "note": "Publisher asks for source credit/link and explicit naming of upstream sources."
+      },
+      "cadence": {
+        "publisherCadence": "live event feed; publisher asks not to poll more often than once per minute",
+        "expectedUpdateSeconds": 60,
+        "retrievalCadence": "twice-hourly static build",
+        "retention": {
+          "mode": "latest-plus-previous-build-fallback",
+          "maxCacheAgeSeconds": null,
+          "note": "Bounded cache of selected event kinds; failed ingest may preserve prior rows."
+        },
+        "freshness": {
+          "warnAfterSeconds": 3600,
+          "staleAfterSeconds": 21600,
+          "timestampBasis": "publisher-event-ts-and-retrieval",
+          "note": "Rows carry Unix-second event timestamps; those are event times, not verification times."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "direct-keyless-browser-permitted",
+          "cors": "enabled",
+          "runtimeFetchAllowed": true,
+          "note": "Publisher documents open CORS for its feed. This project still uses the static snapshot as the authoritative baseline."
+        }
+      },
+      "redistribution": {
+        "status": "restricted-review",
+        "publicStaticRisk": "high",
+        "bulkPublicExport": "license-or-permission-required",
+        "constraints": ["free terms named by publisher are limited to articles, broadcasts, research, and non-commercial sites", "commercial or operational redistribution rights are not established", "embedded UCDP/adsb.lol/Cloudflare/NEPTUN and other sources retain separate licenses", "exact /api/events endpoint used here is not the documented /api/feed endpoint"],
+        "note": "High risk reflects the non-commercial scope and mixed upstream rights; it is not a final legal conclusion."
+      },
+      "confidence": {
+        "authority": "independent-osint-aggregator",
+        "verification": "mixed official, community, and media evidence with publisher reliability grades; not a warning system",
+        "coverage": "publisher-selected global conflict/disaster events; absence is not absence of activity",
+        "automation": "mixed automated aggregation and publisher processing",
+        "caveats": ["locations can be approximate", "records aggregate other sources with differing licenses and latency", "publisher warns it is unofficial and incomplete"]
+      },
+      "collections": ["mapOfWarsEvents"],
+      "connectorVersion": "godseye-map-of-wars/2026.11.26.1"
+    },
+    {
+      "id": "ucdp-ged-candidate",
+      "displayName": "UCDP GED Candidate monthly events API",
+      "owner": "Uppsala Conflict Data Program, Uppsala University",
+      "endpoint": {
+        "urls": ["https://ucdpapi.pcr.uu.se/api/gedevents/26.0.10"],
+        "protocol": "https-json",
+        "documentationUrl": "https://ucdp.uu.se/apidocs/"
+      },
+      "license": {
+        "status": "open-license",
+        "name": "Creative Commons Attribution 4.0 International (CC BY 4.0)",
+        "termsUrl": "https://ucdp.uu.se/Downloads/",
+        "evidenceUrl": "https://ucdp.uu.se/Downloads/",
+        "note": "UCDP states that current datasets are free and licensed CC BY 4.0 with citation of relevant publications. Exact candidate citation requirements should follow the dataset/version page."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "UCDP Candidate Events Dataset v26.0.x, Uppsala Conflict Data Program, CC BY 4.0; cite the relevant UCDP publications and include dataset version.",
+        "evidenceUrl": "https://ucdp.uu.se/Downloads/",
+        "note": "UCDP requires citation of relevant publications and version; candidate rows are preliminary."
+      },
+      "cadence": {
+        "publisherCadence": "monthly candidate release",
+        "expectedUpdateSeconds": 2592000,
+        "retrievalCadence": "immutable versioned release fetched during twice-hourly builds when token configured",
+        "retention": {
+          "mode": "pinned-release-plus-previous-authenticated-fallback",
+          "maxCacheAgeSeconds": null,
+          "note": "The connector intentionally fetches a fixed immutable candidate release and preserves prior authenticated rows only with explicit degraded status."
+        },
+        "freshness": {
+          "warnAfterSeconds": 3888000,
+          "staleAfterSeconds": 7776000,
+          "timestampBasis": "publisher-event-date-range-and-dataset-version",
+          "note": "Candidate events lag real time by design; freshness means release currency, not incident recency."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "api-key-header", "required": true, "envVars": ["UCDP_API_TOKEN"] },
+        "browser": {
+          "mode": "keyed-build-time-only",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "Token travels only in x-ucdp-access-token on build-time requests and must never be serialized."
+        }
+      },
+      "redistribution": {
+        "status": "permitted-with-conditions",
+        "publicStaticRisk": "medium",
+        "bulkPublicExport": "permitted-with-conditions",
+        "constraints": ["CC BY attribution and dataset/version citation", "candidate preliminary status must remain visible", "source article text is not redistributed", "fatality uncertainty and precision metadata must not be stripped"],
+        "note": "Medium risk reflects the need to preserve citation/preliminary context in a transformed public extract."
+      },
+      "confidence": {
+        "authority": "official-academic-authoritative-preliminary",
+        "verification": "research-coded organized-violence events with source references; candidate rows are preliminary and can be revised or dropped before annual GED",
+        "coverage": "events meeting UCDP organized-violence definitions in the pinned release; project further selects a high-value subset",
+        "automation": "human research coding exposed through API plus deterministic project filtering",
+        "caveats": ["preliminary monthly data", "location/date precision varies", "fatalities are low/best/high estimates", "high-value local selection is not a complete mirror"]
+      },
+      "collections": ["mapOfWarsEvents"],
+      "connectorVersion": "godseye-ucdp-candidate/2026.11.26.1"
+    },
+    {
+      "id": "acled-political-violence",
+      "displayName": "ACLED political violence API",
+      "owner": "Armed Conflict Location & Event Data (ACLED)",
+      "endpoint": {
+        "urls": ["https://api.acleddata.com/acled/read"],
+        "protocol": "https-json",
+        "documentationUrl": "https://acleddata.com/terms-use"
+      },
+      "license": {
+        "status": "terms-identified",
+        "name": "ACLED End User License Agreement, Content Usage Terms, and Attribution Policy",
+        "termsUrl": "https://acleddata.com/eula",
+        "evidenceUrl": "https://acleddata.com/contentusage",
+        "note": "ACLED terms distinguish non-commercial and licensed commercial/public-sector use and impose detailed attribution requirements. The repository contains no evidence of a commercial license or written authorization."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "ACLED political violence data, accessed during the static build; filtered API fields are normalized and merged. Data are publicly available from ACLED (https://acleddata.com/).",
+        "evidenceUrl": "https://acleddata.com/contentusage",
+        "note": "ACLED asks for clear prominent acknowledgement including access date, filters, manipulation, and additions; this exact normalized extract should be legally reviewed."
+      },
+      "cadence": {
+        "publisherCadence": "weekly curated dataset updates with living-dataset revisions",
+        "expectedUpdateSeconds": 604800,
+        "retrievalCadence": "bounded API extract during twice-hourly builds when key/email configured",
+        "retention": {
+          "mode": "latest-bounded-extract",
+          "maxCacheAgeSeconds": null,
+          "note": "The connector stores only selected fields for a bounded number of rows, but this is still a public extract requiring review."
+        },
+        "freshness": {
+          "warnAfterSeconds": 864000,
+          "staleAfterSeconds": 1814400,
+          "timestampBasis": "publisher-event-date-and-access-time",
+          "note": "Rows are historical event dates; access date must accompany attribution because ACLED is a living dataset."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "email-key-query", "required": true, "envVars": ["ACLED_API_KEY", "ACLED_EMAIL"] },
+        "browser": {
+          "mode": "keyed-build-time-only",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "Key/email credentials are query parameters upstream and must never appear in request URLs serialized to the client."
+        }
+      },
+      "redistribution": {
+        "status": "restricted-review",
+        "publicStaticRisk": "high",
+        "bulkPublicExport": "license-or-permission-required",
+        "constraints": ["governmental/quasi-governmental/multilateral users require a public-sector license", "commercial entities require corporate licensing", "detailed attribution policy applies to direct or manipulated data", "public redistribution of a 1200-row normalized extract requires written/legal review", "scraping is prohibited; only credentialed API access is used"],
+        "note": "High-priority review finding. It is not a final infringement/compliance determination because external licenses may exist."
+      },
+      "confidence": {
+        "authority": "independent-research-coded",
+        "verification": "human-reviewed conflict event coding with source notes; still dependent on reporting availability and coding methodology",
+        "coverage": "bounded recent political-violence extract selected by API sort/fields; not a complete global mirror",
+        "automation": "human research coding exposed through API plus deterministic local normalization",
+        "caveats": ["reported fatalities are not independently verified here", "location precision varies", "living dataset rows can be revised", "local flattening to battle kind loses event-type nuance unless detail fields are read"]
+      },
+      "collections": ["mapOfWarsEvents"],
+      "connectorVersion": "godseye-acled-extract/2026.11.26.1"
+    },
+    {
+      "id": "gpsjam-daily-h3",
+      "displayName": "gpsjam.org daily H3 interference CSV",
+      "owner": "John Wiseman / GPSJAM",
+      "endpoint": {
+        "urls": [
+          "https://gpsjam.org/data/manifest.csv",
+          "https://gpsjam.org/data/{date}-h3_4.csv"
+        ],
+        "protocol": "https-csv",
+        "documentationUrl": "https://gpsjam.org/faq"
+      },
+      "license": {
+        "status": "unknown",
+        "name": null,
+        "termsUrl": null,
+        "evidenceUrl": "https://gpsjam.org/about",
+        "note": "The public About/FAQ pages describe free use and upstream airplanes.live/ADS-B Exchange inputs, but registry curation did not locate a bulk-download license or explicit redistribution grant."
+      },
+      "attribution": {
+        "requirement": "unknown",
+        "text": "GNSS interference grid: gpsjam.org, derived from aircraft navigation-accuracy reports.",
+        "evidenceUrl": "https://gpsjam.org/about",
+        "note": "Conservative credit is shown; it does not resolve redistribution rights."
+      },
+      "cadence": {
+        "publisherCadence": "daily UTC aggregation",
+        "expectedUpdateSeconds": 86400,
+        "retrievalCadence": "latest manifest row during twice-hourly static builds",
+        "retention": {
+          "mode": "latest-plus-previous-build-fallback",
+          "maxCacheAgeSeconds": null,
+          "note": "Only H3 cells meeting local count/share filters are retained."
+        },
+        "freshness": {
+          "warnAfterSeconds": 108000,
+          "staleAfterSeconds": 259200,
+          "timestampBasis": "manifest-date-and-retrieval",
+          "note": "A daily grid describes the publisher aggregation day, not minute-level interference."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "disabled",
+          "runtimeFetchAllowed": false,
+          "note": "The endpoint is mirrored at build time; direct browser CORS is not relied on."
+        }
+      },
+      "redistribution": {
+        "status": "unknown",
+        "publicStaticRisk": "high",
+        "bulkPublicExport": "unknown",
+        "constraints": ["no bulk redistribution license located", "derived upstream ADS-B inputs can carry separate restrictions", "the pipeline republishes filtered H3 rows publicly", "written permission/legal review is advisable"],
+        "note": "High risk means unresolved permission, not a legal conclusion."
+      },
+      "confidence": {
+        "authority": "independent-derived-measurement",
+        "verification": "statistical aggregation of aircraft navigation-accuracy reports; it does not identify cause, jammer location, intent, or even GPS versus other navigation systems",
+        "coverage": "H3 resolution-4 cells with enough observed aircraft; sparse airspace has no meaningful coverage",
+        "automation": "automated upstream aggregation plus deterministic local filtering",
+        "caveats": ["low accuracy can have non-jamming causes", "aircraft-derived coverage is biased toward flight paths", "absence of a red cell is not absence of interference"]
+      },
+      "collections": ["gpsInterference"],
+      "connectorVersion": "godseye-gpsjam-h3/2026.11.26.1"
+    },
+    {
+      "id": "cisa-kev",
+      "displayName": "CISA Known Exploited Vulnerabilities catalog",
+      "owner": "Cybersecurity and Infrastructure Security Agency",
+      "endpoint": {
+        "urls": ["https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"],
+        "protocol": "https-json",
+        "documentationUrl": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog"
+      },
+      "license": {
+        "status": "open-license",
+        "name": "Creative Commons CC0 1.0 Universal",
+        "termsUrl": "https://www.cisa.gov/sites/default/files/licenses/kev/license.txt",
+        "evidenceUrl": "https://www.cisa.gov/sites/default/files/licenses/kev/license.txt",
+        "note": "The KEV license file states CC0 1.0 and warns that third-party links inside the database remain subject to their own policies."
+      },
+      "attribution": {
+        "requirement": "not-required",
+        "text": "Known-exploitation evidence: CISA KEV catalog (CC0 1.0); no endorsement implied.",
+        "evidenceUrl": "https://www.cisa.gov/sites/default/files/licenses/kev/license.txt",
+        "note": "Attribution is retained for auditability; CC0 does not require it and use does not authorize CISA/DHS marks."
+      },
+      "cadence": {
+        "publisherCadence": "catalog updated as CISA adds/removes entries",
+        "expectedUpdateSeconds": 86400,
+        "retrievalCadence": "twice-hourly static build with latest-release metadata",
+        "retention": {
+          "mode": "latest-bounded-selection",
+          "maxCacheAgeSeconds": null,
+          "note": "The 30 most recently added valid unique records are selected, not the full catalog."
+        },
+        "freshness": {
+          "warnAfterSeconds": 172800,
+          "staleAfterSeconds": 604800,
+          "timestampBasis": "catalog-dateReleased-dateAdded-and-retrieval",
+          "note": "Catalog may legitimately go quiet between additions; stale fallback is more important than release age alone."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "Mirrored into static JSON."
+        }
+      },
+      "redistribution": {
+        "status": "open",
+        "publicStaticRisk": "low",
+        "bulkPublicExport": "permitted",
+        "constraints": ["third-party links inside records retain their own terms", "do not use CISA logo/DHS seal or imply endorsement"],
+        "note": "Based on the publisher's CC0 license file."
+      },
+      "confidence": {
+        "authority": "official-authoritative",
+        "verification": "CISA authoritative confirmation that listed vulnerabilities are known to have been exploited; not a complete exploitation inventory",
+        "coverage": "latest 30 additions in this interface, not all KEV entries",
+        "automation": "official catalog publication",
+        "caveats": ["absence from the selected slice is not absence of exploitation", "ransomwareUse is limited to known use", "remediation deadlines are policy inputs, not exploit mechanics"]
+      },
+      "collections": ["cyberVulnerabilities"],
+      "connectorVersion": "godseye-cisa-kev/2026.11.26.1"
+    },
+    {
+      "id": "nvd-cve-api",
+      "displayName": "NIST NVD CVE 2.0 API enrichment",
+      "owner": "National Institute of Standards and Technology",
+      "endpoint": {
+        "urls": ["https://services.nvd.nist.gov/rest/json/cves/2.0"],
+        "protocol": "https-json",
+        "documentationUrl": "https://nvd.nist.gov/developers/vulnerabilities"
+      },
+      "license": {
+        "status": "public-domain",
+        "name": "NIST public-domain data with NVD API Terms of Use",
+        "termsUrl": "https://nvd.nist.gov/developers/terms-of-use",
+        "evidenceUrl": "https://nvd.nist.gov/developers/start-here",
+        "note": "NVD says NIST publications/data are public domain and asks services to display a non-endorsement notice. Terms also say modified API content may not be attributed as NVD; the UI therefore describes normalized NVD-derived evidence carefully."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "This product uses data from the NVD API but is not endorsed or certified by the NVD. Evidence shown here is normalized/bounded and may omit fields.",
+        "evidenceUrl": "https://nvd.nist.gov/developers/terms-of-use",
+        "note": "NVD specifically requests this prominent notice and prohibits implying endorsement."
+      },
+      "cadence": {
+        "publisherCadence": "CVE records updated continuously",
+        "expectedUpdateSeconds": 21600,
+        "retrievalCadence": "bounded cveIds batches during twice-hourly builds, with six-hour positive/negative cache",
+        "retention": {
+          "mode": "bounded-cache-plus-prior-snapshot-fallback",
+          "maxCacheAgeSeconds": 21600,
+          "note": "The enrichment cache is build-time only and preserves original retrieval timestamps."
+        },
+        "freshness": {
+          "warnAfterSeconds": 21600,
+          "staleAfterSeconds": 172800,
+          "timestampBasis": "nvd-retrievedAt-and-publication-chronology",
+          "note": "retrievedAt is when evidence was obtained; published/lastModified are CVE chronology, not retrieval freshness."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "optional-api-key-header", "required": false, "envVars": ["NVD_API_KEY"] },
+        "browser": {
+          "mode": "keyed-build-time-only",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "API key, when configured, is sent only as a build-time apiKey header. Even anonymous use is mirrored to control strict rate limits."
+        }
+      },
+      "redistribution": {
+        "status": "permitted-with-conditions",
+        "publicStaticRisk": "low",
+        "bulkPublicExport": "permitted-with-conditions",
+        "constraints": ["display NVD non-endorsement notice", "do not imply NVD endorsement/certification", "clearly disclose normalization and bounded omissions", "respect rate limits"],
+        "note": "Based on NVD public documentation; downstream legal certainty is not asserted."
+      },
+      "confidence": {
+        "authority": "official-enrichment",
+        "verification": "NVD enrichment of CVE records; NIST does not test software or warrant accuracy",
+        "coverage": "only CVEs selected from the bounded KEV slice; configurations/CPE evidence is deliberately truncated",
+        "automation": "automated API enrichment with schema validation",
+        "caveats": ["CVSS/CWE/configurations can change", "bounded omission counts must stay visible", "absence of NVD evidence is explicit non-coverage, not low risk"]
+      },
+      "collections": ["cyberVulnerabilities"],
+      "connectorVersion": "godseye-nvd-cve-enrichment/2026.11.26.1"
+    },
+    {
+      "id": "first-epss",
+      "displayName": "FIRST EPSS exploitability scores",
+      "owner": "FIRST.org EPSS SIG / Empirical Security",
+      "endpoint": {
+        "urls": ["https://api.first.org/data/v1/epss"],
+        "protocol": "https-json",
+        "documentationUrl": "https://www.first.org/epss/api"
+      },
+      "license": {
+        "status": "terms-identified",
+        "name": "EPSS Usage Agreement / FIRST Services Terms",
+        "termsUrl": "https://www.first.org/epss/faq",
+        "evidenceUrl": "https://www.first.org/about/policies/terms",
+        "note": "FIRST says EPSS scores are published freely by CSV/API without registration and asks for attribution when used in publications or products."
+      },
+      "attribution": {
+        "requirement": "requested",
+        "text": "EPSS scores by FIRST.org (https://www.first.org/epss/); probability estimates, not observed exploitation evidence.",
+        "evidenceUrl": "https://www.first.org/epss/faq",
+        "note": "Attribution is requested by FIRST."
+      },
+      "cadence": {
+        "publisherCadence": "daily model scoring",
+        "expectedUpdateSeconds": 86400,
+        "retrievalCadence": "bounded CVE batches during twice-hourly builds, with six-hour cache",
+        "retention": {
+          "mode": "bounded-cache-plus-prior-snapshot-fallback",
+          "maxCacheAgeSeconds": 21600,
+          "note": "Scores preserve original retrieval timestamps when cache/prior fallback is used."
+        },
+        "freshness": {
+          "warnAfterSeconds": 129600,
+          "staleAfterSeconds": 432000,
+          "timestampBasis": "epss-score-date-and-retrievedAt",
+          "note": "EPSS estimates the next-30-day probability for the score date."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "none", "required": false, "envVars": [] },
+        "browser": {
+          "mode": "keyless-build-time-mirror",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "Mirrored to keep API batching/cache behavior deterministic."
+        }
+      },
+      "redistribution": {
+        "status": "permitted-with-conditions",
+        "publicStaticRisk": "low",
+        "bulkPublicExport": "permitted-with-conditions",
+        "constraints": ["provide appropriate attribution where possible", "represent scores as modelled probabilities rather than observed exploitation", "FIRST terms can change"],
+        "note": "Based on FIRST public FAQ/usage agreement text."
+      },
+      "confidence": {
+        "authority": "expert-modelled-estimate",
+        "verification": "data-driven probability estimate, intentionally not a feed of observed exploitation",
+        "coverage": "scores for requested CVEs only; missing scores are explicit gaps",
+        "automation": "model inference published daily",
+        "caveats": ["probability is not a binary prediction", "recent exploitation does not directly set the next score", "low score does not mean safe"]
+      },
+      "collections": ["cyberVulnerabilities"],
+      "connectorVersion": "godseye-first-epss/2026.11.26.1"
+    },
+    {
+      "id": "windy-webcams",
+      "displayName": "Windy Webcams API v3 metadata",
+      "owner": "Windyty / Windy.com",
+      "endpoint": {
+        "urls": ["https://api.windy.com/webcams/api/v3/webcams"],
+        "protocol": "https-json",
+        "documentationUrl": "https://api.windy.com/webcams/docs"
+      },
+      "license": {
+        "status": "terms-identified",
+        "name": "Windy Webcams API Terms of Use",
+        "termsUrl": "https://api.windy.com/webcams/terms",
+        "evidenceUrl": "https://account.windy.com/agreements/windy-webcams-api-terms-of-use",
+        "note": "Windy terms require use of API-provided URLs, linking displayed images back to Windy/player pages, and a Windy courtesy notice. Image URL tokens expire; this project stores metadata/player links, not image files."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "Webcams provided by windy.com — add a webcam; every displayed webcam/image must link to the Windy detail or player page.",
+        "evidenceUrl": "https://api.windy.com/webcams/terms",
+        "note": "The courtesy example and linking rule are explicit in Windy documentation."
+      },
+      "cadence": {
+        "publisherCadence": "near-real-time webcam metadata/image token lifecycle",
+        "expectedUpdateSeconds": 600,
+        "retrievalCadence": "bounded nearby queries during twice-hourly builds when key configured",
+        "retention": {
+          "mode": "latest-bounded-metadata",
+          "maxCacheAgeSeconds": 86400,
+          "note": "Free-tier image URLs expire rapidly, so static metadata can become stale even when webcam positions remain valid."
+        },
+        "freshness": {
+          "warnAfterSeconds": 1800,
+          "staleAfterSeconds": 86400,
+          "timestampBasis": "retrieval-time",
+          "note": "Rows do not expose a publisher metadata update timestamp in the retained subset."
+        }
+      },
+      "access": {
+        "authentication": { "mode": "api-key-header", "required": true, "envVars": ["WINDY_WEBCAMS_KEY"] },
+        "browser": {
+          "mode": "keyed-build-time-only",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "x-windy-api-key is confined to build-time requests and must never reach the browser."
+        }
+      },
+      "redistribution": {
+        "status": "permitted-with-conditions",
+        "publicStaticRisk": "medium",
+        "bulkPublicExport": "permitted-with-conditions",
+        "constraints": ["use data as delivered", "link webcam/image displays back to Windy", "show Windy courtesy", "do not store expired image tokens as durable content", "API key must remain secret"],
+        "note": "Medium risk reflects exact presentation requirements and expiring media URLs; this registry does not certify the UI satisfies them."
+      },
+      "confidence": {
+        "authority": "commercial-or-private-aggregator",
+        "verification": "publisher webcam metadata; availability/status can change and public webcam presence does not verify nearby events",
+        "coverage": "bounded locations chosen by this project near selected crisis regions, not global webcam coverage",
+        "automation": "publisher index queried automatically",
+        "caveats": ["camera view direction/field of view are not evidence", "images can be stale or unavailable", "selection is geographically biased"]
+      },
+      "collections": ["webcams"],
+      "connectorVersion": "godseye-windy-webcams/2026.11.26.1"
+    }
+  ]
+}

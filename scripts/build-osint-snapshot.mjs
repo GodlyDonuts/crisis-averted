@@ -3,10 +3,30 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
+import {
+  buildMasterProvenanceLedger,
+  buildSnapshotProvenanceLedger,
+  createIngestionTracker,
+  loadSourceRegistry,
+  validateSnapshotGovernance,
+  validateSourceRegistry,
+} from './lib/source-governance.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const outFile = join(root, 'frontend/public/data/osint-snapshot.json');
+const registryOutFile = join(root, 'frontend/public/data/source-registry.json');
+const provenanceOutFile = join(root, 'frontend/public/data/provenance-ledger.json');
 mkdirSync(dirname(outFile), { recursive: true });
+
+const { registry: sourceRegistry, text: sourceRegistryText } = loadSourceRegistry(join(root, 'scripts', 'source-registry.json'));
+const registryValidation = validateSourceRegistry(sourceRegistry);
+if (registryValidation.errors.length > 0) {
+  throw new Error(`Source registry validation failed before ingestion: ${registryValidation.errors.slice(0, 8).join('; ')}`);
+}
+const ingestionTracker = createIngestionTracker();
+function markSource(sourceId, status, detail = null, extra = {}) {
+  ingestionTracker.record(sourceId, status, detail, extra);
+}
 
 async function getJson(url, timeout = 14000, extraHeaders = {}) {
   const controller = new AbortController();
@@ -285,6 +305,19 @@ function parseGdeltTone(field) {
   };
 }
 
+function safePublicMediaUrl(value) {
+  if (!/^https?:\/\//i.test(value || '')) return null;
+  try {
+    const url = new URL(value);
+    for (const key of url.searchParams.keys()) {
+      if (/(^|[_-])(api[-_]?key|key|token|access[-_]?token|secret|password)([_-]|$)/i.test(key)) return null;
+    }
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 function normalizeGdeltArticleUrl(url) {
   try {
     const parsed = new URL(url);
@@ -384,7 +417,7 @@ async function collectGdeltGeoNews() {
         if (themeOffsets.length === 0) continue;
         meta.conflictThemeRowCount += 1;
         const tone = parseGdeltTone(cols[15]);
-        const sharingImage = /^https?:\/\//i.test(cols[18] || '') ? cols[18] : null;
+        const sharingImage = safePublicMediaUrl(cols[18]);
 
         // Within one article, keep the nearest mention per location identity.
         const nearestByLocation = new Map();
@@ -2093,11 +2126,13 @@ try { if (existsSync(outFile)) previousSnapshot = JSON.parse(readFileSync(outFil
 const iodaQueryWindow = createIodaQueryWindow();
 const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], aircraft: [], vessels: [], satellites: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], cyberVulnerabilities: [], cyberVulnerabilityMeta: createCyberVulnerabilityMeta('unavailable'), internetOutages: [], internetOutageMeta: createIodaUnavailableMeta(iodaQueryWindow), ucdpMeta: createUcdpMeta('unconfigured'), gdeltGeoNews: [], gdeltGeoMeta: createGdeltGeoMeta('unavailable'), errors: [] };
 
+markSource('natural-earth-vector', 'bundled', 'Pinned Natural Earth v5.1.2 reference points are bundled for coarse IODA placement');
 try {
   const ioda = await collectIodaOutages(iodaQueryWindow);
   result.internetOutages = ioda.outages;
   result.internetOutageMeta = ioda.meta;
   result.sources.internetOutages = `IODA v2 outage events (country/region, explicit Unix-second window ${iodaQueryWindow.from}-${iodaQueryWindow.until}) + Natural Earth reference coordinates`;
+  markSource('ioda-outages', 'fetched', null, { recordCount: result.internetOutages.length });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   result.errors.push(`IODA: ${message}`);
@@ -2111,12 +2146,14 @@ try {
     };
     result.sources.internetOutages = 'IODA v2 outage events (prior build-time snapshot preserved after transient ingestion failure)';
     result.errors.push('internetOutages: transient failure; preserved previous snapshot');
+    markSource('ioda-outages', 'preserved', `Transient ingestion failure; prior snapshot retained. ${message}`, { recordCount: result.internetOutages.length, retrievedAt: previousSnapshot.fetchedAt ?? result.fetchedAt });
   } else {
     result.internetOutageMeta = {
       ...createIodaUnavailableMeta(iodaQueryWindow),
       statusDetail: message,
     };
     result.sources.internetOutages = 'IODA v2 outage events unavailable during build';
+    markSource('ioda-outages', 'failed', message, { recordCount: 0 });
   }
 }
 
@@ -2138,7 +2175,11 @@ try {
       squawk: a.squawk || null,
     }));
   result.sources.militaryAircraft = 'adsb.lol /v2/mil';
-} catch (error) { result.errors.push(`adsb.lol: ${error.message}`); }
+  markSource('adsb-lol-military', 'fetched', null, { recordCount: result.militaryAircraft.length });
+} catch (error) {
+  result.errors.push(`adsb.lol: ${error.message}`);
+  markSource('adsb-lol-military', 'failed', error.message, { recordCount: 0 });
+}
 
 
 function shipTypeLabel(type) {
@@ -2195,7 +2236,11 @@ try {
       };
     });
   result.sources.aircraft = 'OpenSky Network live state vectors (anonymous public snapshot)';
-} catch (error) { result.errors.push(`OpenSky: ${error.message}`); }
+  markSource('opensky-network', 'fetched', null, { recordCount: result.aircraft.length });
+} catch (error) {
+  result.errors.push(`OpenSky: ${error.message}`);
+  markSource('opensky-network', 'failed', error.message, { recordCount: 0 });
+}
 
 
 async function collectAisStreamVessels(apiKey) {
@@ -2283,7 +2328,11 @@ try {
     .filter(Boolean)
     .slice(0, 1100);
   result.sources.vessels = 'Fintraffic Digitraffic AIS (Finnish/Baltic regional coverage)';
-} catch (error) { result.errors.push(`Digitraffic AIS: ${error.message}`); }
+  markSource('digitraffic-ais', 'fetched', null, { recordCount: result.vessels.length });
+} catch (error) {
+  result.errors.push(`Digitraffic AIS: ${error.message}`);
+  markSource('digitraffic-ais', 'failed', error.message, { recordCount: 0 });
+}
 
 
 if (process.env.AISSTREAM_API_KEY) {
@@ -2295,9 +2344,14 @@ if (process.env.AISSTREAM_API_KEY) {
       result.vessels = [...merged.values()].slice(0, 1600);
       result.sources.vessels = `AISStream global AIS + Fintraffic Digitraffic regional AIS (${streamVessels.length} streamed positions)`;
     }
-  } catch (error) { result.errors.push(`AISStream: ${error.message}`); }
+    markSource('aisstream-global', streamVessels.length > 0 ? 'fetched' : 'unavailable', streamVessels.length > 0 ? null : 'bounded WebSocket sample returned no usable position reports', { recordCount: streamVessels.length });
+  } catch (error) {
+    result.errors.push(`AISStream: ${error.message}`);
+    markSource('aisstream-global', 'failed', error.message, { recordCount: 0 });
+  }
 } else {
   result.errors.push('AISStream: AISSTREAM_API_KEY not configured; using keyless Digitraffic Baltic coverage only');
+  markSource('aisstream-global', 'not-configured', 'AISSTREAM_API_KEY is not configured in the build-time environment', { recordCount: 0 });
 }
 
 
@@ -2322,13 +2376,18 @@ try {
   }
   result.satellites = satellites;
   result.sources.satellites = 'CelesTrak public NORAD TLE groups (military, stations, GPS, weather)';
-} catch (error) { result.errors.push(`CelesTrak: ${error.message}`); }
+  markSource('celestrak-gp', satellites.length > 0 ? 'partial' : 'failed', satellites.length > 0 ? 'one or more CelesTrak groups can fail; emitted rows are the bounded groups successfully parsed in this build' : 'no TLE group yielded usable rows', { recordCount: satellites.length });
+} catch (error) {
+  result.errors.push(`CelesTrak: ${error.message}`);
+  markSource('celestrak-gp', 'failed', error.message, { recordCount: 0 });
+}
 
 try {
   const gdeltGeo = await collectGdeltGeoNews();
   result.gdeltGeoNews = gdeltGeo.mentions;
   result.gdeltGeoMeta = gdeltGeo.meta;
   result.sources.gdeltGeoNews = `GDELT GKG 2.1 fifteen-minute feeds (${gdeltGeo.meta.slotsIngested.length} slots) — geolocated conflict-news media mentions, not verified incidents`;
+  markSource('gdelt-gkg', 'fetched', null, { recordCount: result.gdeltGeoNews.length });
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   result.errors.push(`GDELT geo news: ${message}`);
@@ -2342,9 +2401,11 @@ try {
     };
     result.sources.gdeltGeoNews = 'GDELT GKG 2.1 feeds (prior build-time snapshot preserved after transient ingestion failure)';
     result.errors.push('gdeltGeoNews: transient failure; preserved previous snapshot');
+    markSource('gdelt-gkg', 'preserved', `Transient ingestion failure; prior snapshot retained. ${message}`, { recordCount: result.gdeltGeoNews.length, retrievedAt: previousSnapshot.fetchedAt ?? result.fetchedAt });
   } else {
     result.gdeltGeoMeta = { ...createGdeltGeoMeta('unavailable'), statusDetail: message };
     result.sources.gdeltGeoNews = 'GDELT GKG 2.1 geolocated news unavailable during build';
+    markSource('gdelt-gkg', 'failed', message, { recordCount: 0 });
   }
 }
 
@@ -3101,7 +3162,7 @@ function validateGdeltGeoMeta(snapshot, errors) {
 
 function validateSnapshot(snapshot) {
   const errors = [];
-  for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'cyberVulnerabilities', 'internetOutages', 'gdeltGeoNews']) {
+  for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'webcams', 'cyberVulnerabilities', 'internetOutages', 'gdeltGeoNews']) {
     if (!Array.isArray(snapshot[key])) errors.push(`${key} missing or not an array`);
   }
   for (const item of snapshot.militaryAircraft ?? []) validateCoordinate(item, 'militaryAircraft', errors);
@@ -3205,7 +3266,83 @@ for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'new
 }
 result.cyberVulnerabilities = result.cyberVulnerabilities.map(normalizeCyberRecordDefaults);
 
+function hasSourceTelemetry(sourceId) {
+  return ingestionTracker.events.some((event) => event.sourceId === sourceId);
+}
+function markSourceIfAbsent(sourceId, status, detail = null, extra = {}) {
+  if (!hasSourceTelemetry(sourceId)) markSource(sourceId, status, detail, extra);
+}
+function collectionWasPreserved(collection) {
+  return result.errors.some((message) => message.startsWith(`${collection}: transiently empty; preserved`));
+}
+
+// Fill any connector telemetry not explicitly recorded beside the ingestion code. These
+// inferences are deliberately conservative: when a joint upstream request fails, the detail
+// says the individual outcome is indeterminate rather than pretending precise per-source truth.
+markSourceIfAbsent('launch-library-2', result.launches.length > 0 ? 'fetched' : 'failed', result.launches.length > 0 ? null : 'Launch Library 2 unavailable or yielded no geolocated rows', { recordCount: result.launches.length });
+if (result.sources.news === 'GDELT DOC 2.0 artlist') {
+  markSourceIfAbsent('gdelt-doc', 'fetched', 'GDELT DOC artlist supplied the bounded conflict-news collection', { recordCount: result.news.length });
+  markSourceIfAbsent('google-news-rss', 'not-attempted', 'fallback not needed because GDELT DOC supplied rows', { recordCount: 0 });
+} else if (result.sources.news === 'Google News RSS conflict query') {
+  markSourceIfAbsent('gdelt-doc', result.gdeltGeoMeta?.titleEnrichment?.status === 'ok' ? 'partial' : 'failed', 'GDELT DOC artlist did not supply rows; separate DOC title-enrichment status is disclosed in gdeltGeoMeta', { recordCount: 0 });
+  markSourceIfAbsent('google-news-rss', 'fetched', 'fallback RSS supplied the bounded conflict-news collection', { recordCount: result.news.length });
+} else {
+  markSourceIfAbsent('gdelt-doc', result.gdeltGeoMeta?.titleEnrichment?.status === 'ok' ? 'partial' : 'failed', 'GDELT DOC artlist unavailable and no direct rows emitted', { recordCount: 0 });
+  markSourceIfAbsent('google-news-rss', result.news.length > 0 ? 'unknown' : 'failed', result.news.length > 0 ? 'rows exist but the supplying headline connector cannot be identified from source metadata' : 'fallback RSS unavailable or yielded no rows', { recordCount: result.news.length });
+}
+for (const sourceId of ['nasa-eonet', 'usgs-earthquake-feed', 'gdacs-events', 'noaa-nws-alerts']) {
+  const failed = result.errors.some((message) => message.startsWith('Natural events:'));
+  markSourceIfAbsent(sourceId, failed ? 'failed' : 'fetched', failed ? 'joint natural-event request failed; individual upstream outcome indeterminate' : 'joint natural-event request completed', { recordCount: null });
+}
+markSourceIfAbsent('nasa-firms', process.env.FIRMS_MAP_KEY ? (result.sources.firms ? 'fetched' : 'failed') : 'not-configured', result.sources.firms ? null : 'FIRMS active-fire rows unavailable in this build', { recordCount: null });
+const mapOfWarsIngestFailed = result.errors.some((message) => message.startsWith('Map of Wars:'));
+markSourceIfAbsent('map-of-wars', String(result.sources.mapOfWars ?? '').includes('preserved') ? 'preserved' : mapOfWarsIngestFailed ? 'failed' : result.mapOfWarsEvents.length > 0 ? 'fetched' : 'failed', mapOfWarsIngestFailed ? 'aggregator ingestion failed even though authenticated/preserved rows may remain in the combined collection' : null, { recordCount: mapOfWarsIngestFailed ? 0 : result.mapOfWarsEvents.length });
+if (result.ucdpMeta.status === 'ok') markSourceIfAbsent('ucdp-ged-candidate', 'fetched', null, { recordCount: result.ucdpMeta.mergedEventCount });
+else if (result.ucdpMeta.preservedPriorEventCount > 0) markSourceIfAbsent('ucdp-ged-candidate', 'preserved', result.ucdpMeta.statusDetail, { recordCount: result.ucdpMeta.preservedPriorEventCount, retrievedAt: previousSnapshot.fetchedAt ?? result.fetchedAt });
+else markSourceIfAbsent('ucdp-ged-candidate', result.ucdpMeta.status === 'unconfigured' ? 'not-configured' : 'failed', result.ucdpMeta.statusDetail, { recordCount: 0 });
+markSourceIfAbsent('acled-political-violence', process.env.ACLED_API_KEY && process.env.ACLED_EMAIL ? (result.sources.acled ? 'fetched' : 'failed') : 'not-configured', result.sources.acled ? null : 'ACLED authenticated extract unavailable in this build', { recordCount: null });
+markSourceIfAbsent('gpsjam-daily-h3', result.gpsInterference.length > 0 ? 'fetched' : 'failed', result.gpsInterference.length > 0 ? null : 'gpsjam manifest or daily H3 CSV unavailable', { recordCount: result.gpsInterference.length });
+for (const [sourceId, service] of [['cisa-kev', result.cyberVulnerabilityMeta.kev], ['nvd-cve-api', result.cyberVulnerabilityMeta.nvd], ['first-epss', result.cyberVulnerabilityMeta.epss]]) {
+  const status = service?.status === 'ok' ? 'fetched' : service?.status === 'partial' ? 'partial' : service?.status === 'preserved' ? 'preserved' : service?.status === 'not-attempted' ? 'not-attempted' : 'failed';
+  const count = sourceId === 'cisa-kev' ? result.cyberVulnerabilities.length : sourceId === 'nvd-cve-api' ? result.cyberVulnerabilities.filter((item) => item.nvd).length : result.cyberVulnerabilities.filter((item) => item.epss).length;
+  markSourceIfAbsent(sourceId, status, service?.statusDetail ?? service?.detail ?? null, { recordCount: count, retrievedAt: service?.retrievedAt ?? result.fetchedAt });
+}
+markSourceIfAbsent('windy-webcams', process.env.WINDY_WEBCAMS_KEY ? (result.webcams.length > 0 ? 'fetched' : 'failed') : 'not-configured', process.env.WINDY_WEBCAMS_KEY ? null : 'WINDY_WEBCAMS_KEY is not configured in the build-time environment', { recordCount: result.webcams.length });
+
+const preservationSources = {
+  militaryAircraft: ['adsb-lol-military'],
+  aircraft: ['opensky-network'],
+  vessels: ['digitraffic-ais', 'aisstream-global'],
+  satellites: ['celestrak-gp'],
+  news: [result.sources.news === 'Google News RSS conflict query' ? 'google-news-rss' : 'gdelt-doc'],
+  launches: ['launch-library-2'],
+  naturalEvents: ['nasa-eonet', 'usgs-earthquake-feed', 'gdacs-events', 'noaa-nws-alerts', 'nasa-firms'],
+  gpsInterference: ['gpsjam-daily-h3'],
+  mapOfWarsEvents: ['map-of-wars', 'ucdp-ged-candidate', 'acled-political-violence'],
+};
+for (const [collection, sourceIds] of Object.entries(preservationSources)) {
+  if (!collectionWasPreserved(collection)) continue;
+  for (const sourceId of sourceIds) {
+    markSource(sourceId, 'preserved', 'collection-level previous snapshot retained after a transiently empty/failed ingest; row-level source mix is not separable', { recordCount: null, retrievedAt: previousSnapshot.fetchedAt ?? result.fetchedAt });
+  }
+}
+
 validateSnapshot(result);
-writeFileSync(outFile, JSON.stringify(result));
+result.provenanceLedger = buildSnapshotProvenanceLedger({ registry: sourceRegistry, snapshot: result, ingestionEvents: ingestionTracker.events, previousSnapshot });
+const snapshotGovernance = validateSnapshotGovernance(result, sourceRegistry);
+if (snapshotGovernance.errors.length > 0) {
+  throw new Error(`Source governance validation failed: ${snapshotGovernance.errors.slice(0, 10).join('; ')}`);
+}
+for (const warning of snapshotGovernance.warnings.slice(0, 20)) console.warn(`source-governance review: ${warning}`);
+const masterLedger = buildMasterProvenanceLedger({ root, registry: sourceRegistry, snapshotLedger: result.provenanceLedger });
+if (masterLedger.artifactErrors.length > 0) throw new Error(`Static artifact provenance incomplete: ${masterLedger.artifactErrors.join('; ')}`);
+function writeTextAtomic(path, text) {
+  const temporary = `${path}.tmp`;
+  writeFileSync(temporary, text);
+  renameSync(temporary, path);
+}
+writeTextAtomic(registryOutFile, sourceRegistryText.endsWith('\n') ? sourceRegistryText : `${sourceRegistryText}\n`);
+writeTextAtomic(provenanceOutFile, JSON.stringify(masterLedger));
+writeTextAtomic(outFile, JSON.stringify(result));
 const ucdpConsoleSuffix = result.ucdpMeta.preservedPriorEventCount > 0 ? `, ${result.ucdpMeta.preservedPriorEventCount} preserved` : '';
 console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.ucdpMeta.mergedEventCount} UCDP official records (${result.ucdpMeta.status}${ucdpConsoleSuffix}), ${result.webcams.length} webcams, ${result.internetOutages.length} IODA outage detections (${result.internetOutageMeta.status}), ${result.cyberVulnerabilities.length} KEV records (${result.cyberVulnerabilityMeta.nvd.enrichedCveCount}/${result.cyberVulnerabilityMeta.nvd.requestedCveCount} NVD, ${result.cyberVulnerabilityMeta.epss.enrichedCveCount}/${result.cyberVulnerabilityMeta.epss.requestedCveCount} EPSS, ${result.cyberVulnerabilityMeta.status}), ${result.gdeltGeoNews.length} GDELT geo-news mentions (${result.gdeltGeoMeta.status}, ${result.gdeltGeoMeta.titleEnrichedArticleCount} title-enriched)`);

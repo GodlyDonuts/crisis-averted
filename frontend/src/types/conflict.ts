@@ -822,9 +822,106 @@ export interface GdeltGeoIngestionMeta {
   preservedAt?: string;
 }
 
+export interface SourceRegistryLicense {
+  status: "open-license" | "public-domain" | "terms-identified" | "unknown";
+  name: string | null;
+  termsUrl: string | null;
+  evidenceUrl: string | null;
+  note: string;
+}
+
+export interface SourceRegistryAttribution {
+  requirement: "required" | "requested" | "unknown" | "not-required";
+  text: string;
+  evidenceUrl: string | null;
+  note: string;
+}
+
+export interface SourceRegistryRedistribution {
+  status: "open" | "permitted-with-conditions" | "restricted-review" | "unknown";
+  publicStaticRisk: "low" | "medium" | "high" | "unknown";
+  bulkPublicExport: "permitted" | "permitted-with-conditions" | "license-or-permission-required" | "unknown" | "prohibited";
+  constraints: string[];
+  note: string;
+}
+
+export interface SourceLedgerEntry {
+  sourceId: string;
+  displayName: string;
+  owner: string;
+  endpointUrls: string[];
+  documentationUrl: string | null;
+  connectorVersion: string;
+  authenticationMode: string;
+  authenticationRequired: boolean;
+  browserMode: string;
+  cors: "enabled" | "disabled" | "unknown";
+  runtimeFetchAllowed: boolean;
+  license: SourceRegistryLicense;
+  attribution: SourceRegistryAttribution;
+  redistribution: SourceRegistryRedistribution;
+  cadence: {
+    publisherCadence: string;
+    freshness: { warnAfterSeconds: number; staleAfterSeconds: number; timestampBasis: string; note: string };
+  };
+  confidence: { authority: string; verification: string; coverage: string; automation: string; caveats: string[] };
+  retrieval: { status: string; detail: string | null; retrievedAt: string; recordCount: number | null };
+}
+
+export interface CollectionProvenanceLedgerEntry {
+  collection: string;
+  artifact: string;
+  jsonPointer: string;
+  recordCount: number;
+  sourceIds: string[];
+  sources: SourceLedgerEntry[];
+  retrievalState: string;
+  retrievedAt: string | null;
+  freshness: {
+    state: "current" | "aging" | "stale" | "preserved" | "unavailable" | "unknown";
+    ageSeconds: number | null;
+    basis: string;
+    warnAfterSeconds: number;
+    staleAfterSeconds: number;
+  };
+  dataVintage: { newestRecordTimestamp: string | null; timestampedRecordCount: number; note: string };
+  normalizationSha256: string;
+  provenanceSha256: string;
+}
+
+export interface SourceGovernanceSummary {
+  collectionCount: number;
+  involvedSourceCount: number;
+  keyedSourceCount: number;
+  keyedSourceIds: string[];
+  unknownLicenseCount: number;
+  unknownLicenseSourceIds: string[];
+  highRiskSourceCount: number;
+  highRiskSourceIds: string[];
+  reviewRequiredSourceCount: number;
+  reviewRequiredSourceIds: string[];
+  highRiskCollectionCount: number;
+  reviewRequiredCollectionCount: number;
+  staleOrPreservedCollectionCount: number;
+  licenseStatusCounts: Record<string, number>;
+  redistributionRiskCounts: Record<string, number>;
+  freshnessStateCounts: Record<string, number>;
+}
+
+export interface SourceGovernanceLedger {
+  schemaVersion: string;
+  governanceVersion: string;
+  registryVersion: string;
+  generatedAt: string;
+  legalPosition: string;
+  collections: Record<string, CollectionProvenanceLedgerEntry>;
+  summary: SourceGovernanceSummary;
+}
+
 export interface OsintSnapshot {
   fetchedAt: string;
   sources: Record<string, string>;
+  provenanceLedger?: SourceGovernanceLedger | null;
   militaryAircraft: MilitaryAircraft[];
   aircraft: OsintAircraft[];
   vessels: OsintVessel[];
