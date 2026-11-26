@@ -44,7 +44,7 @@ function parseRssItems(xml, limit = 30) {
 let previousSnapshot = {};
 try { if (existsSync(outFile)) previousSnapshot = JSON.parse(readFileSync(outFile, 'utf8')); } catch {}
 
-const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], aircraft: [], vessels: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], cyberVulnerabilities: [], errors: [] };
+const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], aircraft: [], vessels: [], satellites: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], cyberVulnerabilities: [], errors: [] };
 
 try {
   const payload = await getJson('https://api.adsb.lol/v2/mil');
@@ -225,6 +225,30 @@ if (process.env.AISSTREAM_API_KEY) {
 } else {
   result.errors.push('AISStream: AISSTREAM_API_KEY not configured; using keyless Digitraffic Baltic coverage only');
 }
+
+
+try {
+  const groups = [['military', 36], ['stations', 12], ['gps-ops', 32], ['weather', 20]];
+  const satellites = [];
+  for (const [group, limit] of groups) {
+    try {
+      const text = await getText(`https://celestrak.org/NORAD/elements/gp.php?GROUP=${group}&FORMAT=tle`, 18000);
+      const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      for (let index = 0; index + 2 < lines.length && satellites.length < 100; index += 1) {
+        if (!lines[index + 1]?.startsWith('1 ') || !lines[index + 2]?.startsWith('2 ')) continue;
+        const name = lines[index];
+        const line1 = lines[index + 1];
+        const line2 = lines[index + 2];
+        const catalog = line1.slice(2, 7).trim();
+        satellites.push({ id: catalog, name, group, catalogNumber: Number(catalog), line1, line2, epoch: line1.slice(18, 32).trim() });
+        index += 2;
+        if (satellites.filter((item) => item.group === group).length >= limit) break;
+      }
+    } catch (error) { result.errors.push(`CelesTrak ${group}: ${error.message}`); }
+  }
+  result.satellites = satellites;
+  result.sources.satellites = 'CelesTrak public NORAD TLE groups (military, stations, GPS, weather)';
+} catch (error) { result.errors.push(`CelesTrak: ${error.message}`); }
 
 try {
   const url = new URL('https://api.gdeltproject.org/api/v2/doc/doc');
@@ -436,7 +460,7 @@ if (process.env.WINDY_WEBCAMS_KEY) {
   } catch (error) { result.errors.push(`Windy Webcams: ${error.message}`); }
 }
 
-for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'cyberVulnerabilities']) {
+for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'cyberVulnerabilities']) {
   if (result[key].length === 0 && Array.isArray(previousSnapshot[key]) && previousSnapshot[key].length > 0) {
     result[key] = previousSnapshot[key];
     result.errors.push(`${key}: transiently empty; preserved previous snapshot`);
@@ -444,4 +468,4 @@ for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'news', 'launches'
 }
 
 writeFileSync(outFile, JSON.stringify(result));
-console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.webcams.length} webcams`);
+console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.webcams.length} webcams`);

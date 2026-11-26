@@ -44,6 +44,7 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
         <Row label="Military aircraft" value={String(snapshot.militaryAircraft.length)} />
         <Row label="Civil aviation tracks" value={String(snapshot.aircraft.length)} />
         <Row label="AIS vessels" value={String(snapshot.vessels.length)} />
+        <Row label="Tracked satellites" value={String(snapshot.satellites.length)} />
         <Row label="News articles" value={String(snapshot.news.length)} />
         <Row label="Launch pads" value={String(snapshot.launches.length)} />
         <Row label="Natural events" value={String(snapshot.naturalEvents.length)} />

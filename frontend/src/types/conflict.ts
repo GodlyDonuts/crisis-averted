@@ -161,6 +161,17 @@ export interface OsintVessel {
   source: string;
 }
 
+
+export interface OsintSatellite {
+  id: string;
+  name: string;
+  group: string;
+  catalogNumber: number;
+  line1: string;
+  line2: string;
+  epoch: string;
+}
+
 export interface OsintNewsArticle {
   title: string;
   url: string;
@@ -197,6 +208,7 @@ export interface OsintSnapshot {
   militaryAircraft: MilitaryAircraft[];
   aircraft: OsintAircraft[];
   vessels: OsintVessel[];
+  satellites: OsintSatellite[];
   news: OsintNewsArticle[];
   launches: OsintLaunch[];
   naturalEvents: OsintNaturalEvent[];

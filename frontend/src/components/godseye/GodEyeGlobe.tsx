@@ -27,7 +27,8 @@ import {
 } from "three";
 import { assetPath } from "@/lib/assets";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import type { ConflictEvent, ConflictTheater, MilitaryAircraft, OsintAircraft, OsintLaunch, OsintNaturalEvent, OsintVessel, GpsInterferenceCell, SeverityKey } from "@/types/conflict";
+import type { ConflictEvent, ConflictTheater, MilitaryAircraft, OsintAircraft, OsintLaunch, OsintNaturalEvent, OsintSatellite, OsintVessel, GpsInterferenceCell, SeverityKey } from "@/types/conflict";
+import { degreesLat, degreesLong, eciToGeodetic, gstime, propagate, twoline2satrec } from "satellite.js";
 import { classifyAircraftRole, escapeHtml, formatRelativeTime, naturalEventColor, normalizeCategory, normalizeTheaterName, SEVERITY_META } from "@/lib/conflictData";
 
 export type GodEyeVisualMode = "cinematic" | "satellite";
@@ -60,6 +61,7 @@ interface GodEyeGlobeProps {
   militaryAircraft: MilitaryAircraft[];
   aircraft: OsintAircraft[];
   vessels: OsintVessel[];
+  satellites: OsintSatellite[];
   launches: OsintLaunch[];
   naturalEvents: OsintNaturalEvent[];
   gpsInterference: GpsInterferenceCell[];
@@ -93,6 +95,7 @@ type GlobePointObject =
   | (MilitaryAircraft & { objectKind: "aircraft" })
   | (OsintAircraft & { objectKind: "civilAircraft" })
   | (OsintVessel & { objectKind: "vessel" })
+  | (OsintSatellite & { objectKind: "satellite"; altitudeKm: number })
   | (OsintLaunch & { objectKind: "launch" })
   | (OsintNaturalEvent & { objectKind: "natural" });
 
@@ -111,6 +114,7 @@ interface BorderPath {
   intensity: number;
   kind?: "border" | "aircraft" | "gps";
   tooltip?: string;
+  trackColor?: string;
 }
 
 type GeoJsonPosition = [number, number];
@@ -278,12 +282,12 @@ function disposeDayNightMaterial(material: ShaderMaterial | null) {
   material.dispose();
 }
 
-function aircraftTrackPaths(aircraft: MilitaryAircraft[]): BorderPath[] {
+function aircraftTrackPaths(aircraft: Array<Pick<MilitaryAircraft, "lat" | "lng" | "track" | "speed" | "callsign">>, minSpeed = 70, horizonHours = 0.28, label = "PROJECTED MILITARY TRACK", color = "#b8c29a", maximum = 180): BorderPath[] {
   return aircraft
-    .filter((item) => typeof item.track === "number" && typeof item.speed === "number" && item.speed > 70)
-    .slice(0, 180)
+    .filter((item) => typeof item.track === "number" && typeof item.speed === "number" && item.speed > minSpeed)
+    .slice(0, maximum)
     .map((item) => {
-      const distanceNm = Math.min(260, (item.speed ?? 0) * 0.28);
+      const distanceNm = Math.min(260, (item.speed ?? 0) * horizonHours);
       const angularDistance = distanceNm / 3440.065;
       const bearing = ((item.track ?? 0) * Math.PI) / 180;
       const lat1 = (item.lat * Math.PI) / 180;
@@ -309,7 +313,8 @@ function aircraftTrackPaths(aircraft: MilitaryAircraft[]): BorderPath[] {
         points,
         intensity: 0,
         kind: "aircraft" as const,
-        tooltip: `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#b8c29a">PROJECTED MILITARY TRACK</div><div class="godseye-tooltip__title">${escapeHtml(item.callsign)}</div><div class="godseye-tooltip__meta">${Math.round(item.speed ?? 0)} kt · ${Math.round(item.track ?? 0)}° · short-horizon dead reckoning</div></div>`,
+        trackColor: color,
+        tooltip: `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:${color}">${label}</div><div class="godseye-tooltip__title">${escapeHtml(item.callsign)}</div><div class="godseye-tooltip__meta">${Math.round(item.speed ?? 0)} kt · ${Math.round(item.track ?? 0)}° · short-horizon dead reckoning</div></div>`,
       };
     });
 }
@@ -364,6 +369,7 @@ export default function GodEyeGlobe({
   militaryAircraft,
   aircraft,
   vessels,
+  satellites,
   launches,
   naturalEvents,
   gpsInterference,
@@ -453,6 +459,30 @@ export default function GodEyeGlobe({
       .slice(0, 8);
   }, [events]);
 
+  const [orbitTick, setOrbitTick] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = window.setInterval(() => setOrbitTick(Date.now()), 10000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const satellitePositions = useMemo(() => {
+    const now = new Date(orbitTick);
+    return satellites.slice(0, 110).flatMap((item) => {
+      try {
+        const record = twoline2satrec(item.line1, item.line2);
+        const propagated = propagate(record, now);
+        if (!propagated?.position) return [];
+        const geodetic = eciToGeodetic(propagated.position, gstime(now));
+        const lat = degreesLat(geodetic.latitude);
+        const lng = degreesLong(geodetic.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+        return [{ ...item, lat, lng, altitudeKm: geodetic.height, objectKind: "satellite" as const }];
+      } catch {
+        return [];
+      }
+    });
+  }, [satellites, orbitTick]);
+
   const aircraftTracks = useMemo(() => {
     const wasmTracks = wasmCore?.aircraftTrackGeometry(militaryAircraft);
     if (!wasmTracks) return aircraftTrackPaths(militaryAircraft);
@@ -462,10 +492,28 @@ export default function GodEyeGlobe({
         points: track.points,
         intensity: 0,
         kind: "aircraft" as const,
+        trackColor: "#b8c29a",
         tooltip: `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#b8c29a">PROJECTED MILITARY TRACK</div><div class="godseye-tooltip__title">${escapeHtml(item.callsign)}</div><div class="godseye-tooltip__meta">${Math.round(item.speed ?? 0)} kt · ${Math.round(item.track ?? 0)}° · Rust/WASM dead reckoning</div></div>`,
       };
     });
   }, [militaryAircraft, wasmCore]);
+  const civilAircraftTracks = useMemo(() => aircraftTrackPaths(
+    aircraft.map((item) => ({ lat: item.lat, lng: item.lng, track: item.track, speed: item.speed, callsign: item.callsign })),
+    90,
+    0.2,
+    "PROJECTED CIVIL AVIATION TRACK",
+    "#9fb7a8",
+    150,
+  ), [aircraft]);
+  const vesselTracks = useMemo(() => aircraftTrackPaths(
+    vessels.map((item) => ({ lat: item.lat, lng: item.lng, track: item.course, speed: item.speed, callsign: item.name })),
+    3,
+    3.5,
+    "PROJECTED VESSEL TRACK",
+    "#7da6a1",
+    180,
+  ), [vessels]);
+
   const gpsInterferencePaths = useMemo((): BorderPath[] => {
     return gpsInterference.map((cell) => {
       const boundary = cellToBoundary(cell.hex);
@@ -648,11 +696,7 @@ export default function GodEyeGlobe({
     const orbitalCleanup = (() => {
       const scene = globe.scene();
       const radius = globe.getGlobeRadius();
-      const orbitDefinitions = [
-        { radius: radius * 1.27, inclination: 0.48, speed: 0.00016, phase: 0.2, color: "#64d2ff" },
-        { radius: radius * 1.38, inclination: -0.72, speed: -0.00011, phase: 2.4, color: "#ff5f6d" },
-        { radius: radius * 1.48, inclination: 0.92, speed: 0.00008, phase: 4.1, color: "#8effff" },
-      ];
+      const orbitDefinitions: Array<{ radius: number; inclination: number; speed: number; phase: number; color: string }> = [];
       const orbitObjects: {
         mesh: Mesh;
         orbitLine: LineLoop;
@@ -817,6 +861,8 @@ export default function GodEyeGlobe({
     const activePaths = [
       ...(layers.borders ? borderPaths : []),
       ...(layers.aircraft ? aircraftTracks : []),
+      ...(layers.civilAviation ? civilAircraftTracks : []),
+      ...(layers.maritime ? vesselTracks : []),
       ...(layers.gpsInterference ? gpsInterferencePaths : []),
     ];
     if (activePaths.length > 0) {
@@ -834,7 +880,7 @@ export default function GodEyeGlobe({
             if (border.intensity > 0.04) return "rgba(255,138,0,0.36)";
             return "rgba(255,209,102,0.24)";
           }
-          if (border.kind === "aircraft") return ["rgba(184,194,154,0)", "rgba(184,194,154,0.34)"];
+          if (border.kind === "aircraft") return ["rgba(184,194,154,0)", border.trackColor ? `${border.trackColor}57` : "rgba(184,194,154,0.34)"];
           return border.intensity > 0.08
             ? `rgba(255,96,110,${0.13 + border.intensity * 0.18})`
             : "rgba(148,210,255,0.105)";
@@ -954,14 +1000,15 @@ export default function GodEyeGlobe({
         ...(layers.aircraft ? militaryAircraft.slice(0, detailLevel === 2 ? 240 : detailLevel === 1 ? 190 : 120).map((item) => ({ ...item, objectKind: "aircraft" as const })) : []),
         ...(layers.civilAviation ? aircraft.slice(0, detailLevel === 2 ? 700 : detailLevel === 1 ? 480 : 260).map((item) => ({ ...item, objectKind: "civilAircraft" as const })) : []),
         ...(layers.maritime ? vessels.slice(0, detailLevel === 2 ? 900 : detailLevel === 1 ? 650 : 380).map((vessel) => ({ ...vessel, objectKind: "vessel" as const })) : []),
+        ...(layers.orbitalAssets ? satellitePositions.map((satellite) => ({ ...satellite, objectKind: "satellite" as const })) : []),
         ...(layers.orbitalAssets ? launches.slice(0, 24).map((launch) => ({ ...launch, objectKind: "launch" as const })) : []),
         ...(layers.environmental ? naturalEvents.slice(0, 70).map((event) => ({ ...event, objectKind: "natural" as const })) : []),
       ] as GlobePointObject[])
       .pointLat("lat")
       .pointLng("lng")
-      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.016 : (point as GlobePointObject).objectKind === "vessel" ? 0.007 : (point as GlobePointObject).objectKind === "launch" ? 0.015 : (point as GlobePointObject).objectKind === "natural" ? 0.014 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
-      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? classifyAircraftRole((point as MilitaryAircraft).aircraftType).color : (point as GlobePointObject).objectKind === "civilAircraft" ? ((point as OsintAircraft).operatorClass.includes("cargo") ? "#f0a84f" : "#9fb7a8") : (point as GlobePointObject).objectKind === "vessel" ? ((point as OsintVessel).vesselClass === "Tanker" ? "#d59b6a" : (point as OsintVessel).vesselClass === "Cargo" ? "#7da6a1" : "#8f9b7d") : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "natural" ? naturalEventColor(point as OsintNaturalEvent) : pointColor(point as ConflictEvent))
-      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.035 : (point as GlobePointObject).objectKind === "vessel" ? 0.038 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
+      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.016 : (point as GlobePointObject).objectKind === "vessel" ? 0.007 : (point as GlobePointObject).objectKind === "satellite" ? Math.min(0.22, 0.035 + ((point as OsintSatellite & { altitudeKm: number }).altitudeKm / 22000)) : (point as GlobePointObject).objectKind === "launch" ? 0.015 : (point as GlobePointObject).objectKind === "natural" ? 0.014 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
+      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? classifyAircraftRole((point as MilitaryAircraft).aircraftType).color : (point as GlobePointObject).objectKind === "civilAircraft" ? ((point as OsintAircraft).operatorClass.includes("cargo") ? "#f0a84f" : "#9fb7a8") : (point as GlobePointObject).objectKind === "satellite" ? "#d8c77f" : (point as GlobePointObject).objectKind === "vessel" ? ((point as OsintVessel).vesselClass === "Tanker" ? "#d59b6a" : (point as OsintVessel).vesselClass === "Cargo" ? "#7da6a1" : "#8f9b7d") : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "natural" ? naturalEventColor(point as OsintNaturalEvent) : pointColor(point as ConflictEvent))
+      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.035 : (point as GlobePointObject).objectKind === "vessel" ? 0.038 : (point as GlobePointObject).objectKind === "satellite" ? 0.046 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
       .pointResolution(9)
       .pointsMerge(false)
       .pointsTransitionDuration(320)
@@ -973,11 +1020,15 @@ export default function GodEyeGlobe({
         }
         if ((point as GlobePointObject).objectKind === "civilAircraft") {
           const item = point as OsintAircraft;
-          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#9fb7a8">${escapeHtml(item.operatorClass.toUpperCase())}</div><div class="godseye-tooltip__title">${escapeHtml(item.callsign)}</div><div class="godseye-tooltip__meta">${escapeHtml(item.originCountry || "Unknown origin")} · ${item.altitude ? `${item.altitude.toLocaleString()} ft` : "altitude unknown"} · ${item.speed ? `${item.speed} kt` : "speed unknown"} · OpenSky</div></div>`;
+          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#9fb7a8">${escapeHtml(item.operatorClass.toUpperCase())}</div><div class="godseye-tooltip__title">${escapeHtml(item.callsign)}</div><div class="godseye-tooltip__meta">${escapeHtml(item.originCountry || "Unknown origin")} · ${item.altitude ? `${item.altitude.toLocaleString()} ft` : "altitude unknown"} · ${item.speed ? `${item.speed} kt` : "speed unknown"} · contact ${item.lastContact ? formatRelativeTime(Date.parse(item.lastContact)) : "unknown"} · OpenSky</div></div>`;
         }
         if ((point as GlobePointObject).objectKind === "vessel") {
           const vessel = point as OsintVessel;
-          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#7da6a1">${escapeHtml(vessel.vesselClass.toUpperCase())}</div><div class="godseye-tooltip__title">${escapeHtml(vessel.name)}</div><div class="godseye-tooltip__meta">MMSI ${vessel.mmsi} · ${vessel.speed != null ? `${vessel.speed.toFixed(1)} kt` : "speed unknown"} · ${escapeHtml(vessel.destination || "destination unavailable")} · Digitraffic AIS</div></div>`;
+          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#7da6a1">${escapeHtml(vessel.vesselClass.toUpperCase())}</div><div class="godseye-tooltip__title">${escapeHtml(vessel.name)}</div><div class="godseye-tooltip__meta">MMSI ${vessel.mmsi} · ${vessel.speed != null ? `${vessel.speed.toFixed(1)} kt` : "speed unknown"} · ${escapeHtml(vessel.destination || "destination unavailable")} · reported ${vessel.timestamp ? formatRelativeTime(Date.parse(vessel.timestamp)) : "unknown"} · Digitraffic AIS</div></div>`;
+        }
+        if ((point as GlobePointObject).objectKind === "satellite") {
+          const satellite = point as OsintSatellite & { altitudeKm: number };
+          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#d8c77f">TRACKED ORBITAL OBJECT</div><div class="godseye-tooltip__title">${escapeHtml(satellite.name)}</div><div class="godseye-tooltip__meta">NORAD ${satellite.catalogNumber} · ${Math.round(satellite.altitudeKm).toLocaleString()} km · ${escapeHtml(satellite.group)} · CelesTrak TLE propagated client-side</div></div>`;
         }
         if ((point as GlobePointObject).objectKind === "launch") {
           const launch = point as OsintLaunch;
@@ -1041,6 +1092,8 @@ export default function GodEyeGlobe({
     interactiveEvents,
     militaryAircraft,
     aircraftTracks,
+    civilAircraftTracks,
+    vesselTracks,
     gpsInterferencePaths,
     launches,
     naturalEvents,

@@ -298,6 +298,7 @@ export default function GodEyeCommandCenter() {
           militaryAircraft={osintSnapshot.militaryAircraft}
           aircraft={osintSnapshot.aircraft}
           vessels={osintSnapshot.vessels}
+          satellites={osintSnapshot.satellites}
           launches={osintSnapshot.launches}
           naturalEvents={osintSnapshot.naturalEvents}
           gpsInterference={osintSnapshot.gpsInterference}
