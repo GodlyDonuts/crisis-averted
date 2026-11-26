@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inflateRawSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const outFile = join(root, 'frontend/public/data/osint-snapshot.json');
@@ -29,6 +31,16 @@ async function getText(url, timeout = 16000) {
   } finally { clearTimeout(timer); }
 }
 
+async function getBinary(url, timeout = 45000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'GodseyeOSINT/1.0 (+https://github.com/GodlyDonuts/crisis-averted)' } });
+    if (!response.ok) throw new Error(`${response.status}`);
+    return Buffer.from(await response.arrayBuffer());
+  } finally { clearTimeout(timer); }
+}
+
 function decodeXml(value) {
   return value.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
@@ -39,6 +51,429 @@ function parseRssItems(xml, limit = 30) {
     const pick = (tag) => { const start = item.indexOf(`<${tag}>`); const end = item.indexOf(`</${tag}>`, start); return start < 0 || end < 0 ? "" : decodeXml(item.slice(start + tag.length + 2, end).replace(/<!\[CDATA\[|\]\]>/g, "").trim()); };
     return { title: pick('title'), url: pick('link'), source: pick('source') || 'Google News', publishedAt: pick('pubDate') || null };
   }).filter((article) => article.title && article.url);
+}
+
+// GDELT geolocated conflict-news ingestion. Research summary (verified live at implementation
+// time): the GDELT GEO 2.0 API (https://api.gdeltproject.org/api/v2/geo/geo) answers HTTP 404 for
+// its own documented example URLs and is treated as retired. The closest supported keyless public
+// surface is the GKG 2.1 fifteen-minute file feed at data.gdeltproject.org/gdeltv2 — the same
+// underlying data stream that powered the GEO API. This pipeline reproduces the GEO API's
+// documented PointData semantics from the raw feed: locations mentioned "within a sentence or two"
+// of a search term, implemented here as a documented 300-character proximity window measured with
+// the character offsets GDELT itself supplies in V2ENHANCEDTHEMES/V2ENHANCEDLOCATIONS.
+const GDELT_FEED_BASE_URL = 'https://data.gdeltproject.org/gdeltv2';
+const GDELT_DOC_API_URL = 'https://api.gdeltproject.org/api/v2/doc/doc';
+const GDELT_CONFLICT_THEMES = ['ARMEDCONFLICT', 'TERROR', 'REBELLION', 'INSURGENCY', 'VIOLENT_UNREST', 'CEASEFIRE', 'PEACEKEEPING'];
+const GDELT_CONFLICT_THEME_SET = new Set(GDELT_CONFLICT_THEMES);
+const GDELT_PROXIMITY_CHARS = 300;
+const GDELT_SLOTS_PER_COLLECTION = 2;
+const GDELT_MAX_SLOT_ATTEMPTS = 6;
+const GDELT_SLOT_STEP_MS = 15 * 60 * 1000;
+const GDELT_MAX_MENTIONS = 600;
+const GDELT_DOC_THROTTLE_MS = 5600;
+const GDELT_DOC_ENRICHMENT_MAX_RECORDS = 250;
+const GDELT_DOC_ENRICHMENT_TIMESPAN = '120min';
+const GDELT_LOCATION_PRECISION_BY_TYPE = {
+  2: { precision: 'us-state-centroid', rank: 1 },
+  3: { precision: 'us-city-or-landmark', rank: 2 },
+  4: { precision: 'world-city-or-landmark', rank: 2 },
+  5: { precision: 'world-admin1-centroid', rank: 1 },
+};
+const GDELT_LIMITATIONS = 'GDELT geolocated news points are locations mentioned inside news text within roughly a sentence or two (a documented 300-character window, measured with GDELT-supplied character offsets) of automated conflict-theme tags. They describe the geography of media attention, not verified incident locations, and a point is never evidence that an event occurred at that place. GDELT geocoding, machine translation, and theme assignment are fully automated and error-prone; city/landmark coordinates come from GDELT gazetteer matching, while US-state and world admin-1 matches plot at the centroid of that entire division as coarse symbolic placement, never at an incident site. The GKG feed does not supply per-article publication times: slotTime is the fifteen-minute monitoring slot in which the mention was captured and seenAt exists only where a DOC API cross-reference matched the exact article URL. Article headlines are not part of the GKG feed either and appear only through that same opportunistic cross-reference. Absence of coverage is not absence of conflict.';
+const GDELT_SELECTION_DESCRIPTION = `Ingests the newest ${GDELT_SLOTS_PER_COLLECTION} successfully downloaded fifteen-minute GKG 2.1 slots for both the English web and machine-translated collections (walking back up to ${GDELT_MAX_SLOT_ATTEMPTS} slots per collection when the newest files are not yet published), keeps rows carrying at least one of the documented conflict themes [${GDELT_CONFLICT_THEMES.join(', ')}] in V2ENHANCEDTHEMES, retains only sub-national location mentions (GDELT location types 2-5) within ${GDELT_PROXIMITY_CHARS} characters of a conflict-theme mention, deduplicates by normalized article URL plus location identity, then caps at ${GDELT_MAX_MENTIONS} mentions ranked by matched-theme count, spatial precision class, proximity, and recency. Country-level mentions (type 1) are out of scope by design and reported as an informational count rather than an omission.`;
+
+function createGdeltGeoOmissionCounts() {
+  return {
+    invalidCoordinates: 0,
+    notProximalToConflictTheme: 0,
+    duplicateMention: 0,
+    selectionCap: 0,
+  };
+}
+
+function createGdeltGeoEnrichmentMeta() {
+  return {
+    status: 'unavailable',
+    apiEndpoint: GDELT_DOC_API_URL,
+    query: `(${GDELT_CONFLICT_THEMES.map((theme) => `theme:${theme}`).join(' OR ')})`,
+    maxRecords: GDELT_DOC_ENRICHMENT_MAX_RECORDS,
+    timespan: GDELT_DOC_ENRICHMENT_TIMESPAN,
+    sort: 'datedesc',
+    fetchedArticleCount: 0,
+    matchedArticleCount: 0,
+    requestUrl: null,
+    detail: 'not attempted',
+  };
+}
+
+function createGdeltGeoMeta(status = 'unavailable') {
+  return {
+    status,
+    provider: 'The GDELT Project — Global Knowledge Graph (GKG) 2.1 fifteen-minute feeds',
+    attribution: 'GDELT terms of use require citation: The GDELT Project (https://www.gdeltproject.org/)',
+    geoApiNote: 'The GDELT GEO 2.0 API (api.gdeltproject.org/api/v2/geo/geo) answered HTTP 404 for its own documented example URLs at implementation time and is treated as retired; this pipeline reproduces its documented point-mode semantics from the supported keyless GKG 2.1 fifteen-minute files that powered it.',
+    feedBaseUrl: GDELT_FEED_BASE_URL,
+    conflictThemes: [...GDELT_CONFLICT_THEMES],
+    proximityChars: GDELT_PROXIMITY_CHARS,
+    slotsPerCollection: GDELT_SLOTS_PER_COLLECTION,
+    maxSlotAttempts: GDELT_MAX_SLOT_ATTEMPTS,
+    maxMentions: GDELT_MAX_MENTIONS,
+    slotsIngested: [],
+    failedSlotDownloadCount: 0,
+    rowsScanned: 0,
+    invalidRowCount: 0,
+    conflictThemeRowCount: 0,
+    countryLevelMentionCount: 0,
+    subnationalMentionCount: 0,
+    proximalMentionCount: 0,
+    uniqueMentionCount: 0,
+    ingestedMentionCount: 0,
+    uniqueArticleCount: 0,
+    uniqueLocationCount: 0,
+    titleEnrichedArticleCount: 0,
+    omittedMentionCount: 0,
+    omittedByReason: createGdeltGeoOmissionCounts(),
+    titleEnrichment: createGdeltGeoEnrichmentMeta(),
+    requestUrls: [],
+    selection: GDELT_SELECTION_DESCRIPTION,
+    caveat: GDELT_LIMITATIONS,
+  };
+}
+
+let lastGdeltDocRequestAt = 0;
+async function throttleGdeltDocApi() {
+  const wait = GDELT_DOC_THROTTLE_MS - (Date.now() - lastGdeltDocRequestAt);
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  lastGdeltDocRequestAt = Date.now();
+}
+
+function unzipFirstMember(buffer) {
+  let eocdOffset = -1;
+  for (let index = buffer.length - 22; index >= Math.max(0, buffer.length - 22 - 65536); index -= 1) {
+    if (buffer.readUInt32LE(index) === 0x06054b50) { eocdOffset = index; break; }
+  }
+  if (eocdOffset < 0) throw new Error('zip end-of-central-directory not found');
+  if (buffer.readUInt16LE(eocdOffset + 10) < 1) throw new Error('zip archive is empty');
+  const centralOffset = buffer.readUInt32LE(eocdOffset + 16);
+  if (buffer.readUInt32LE(centralOffset) !== 0x02014b50) throw new Error('zip central directory corrupt');
+  const compression = buffer.readUInt16LE(centralOffset + 10);
+  const compressedSize = buffer.readUInt32LE(centralOffset + 20);
+  const uncompressedSize = buffer.readUInt32LE(centralOffset + 24);
+  const nameLength = buffer.readUInt16LE(centralOffset + 28);
+  const localHeaderOffset = buffer.readUInt32LE(centralOffset + 42);
+  const name = buffer.toString('utf8', centralOffset + 46, centralOffset + 46 + nameLength);
+  if (buffer.readUInt32LE(localHeaderOffset) !== 0x04034b50) throw new Error('zip local header corrupt');
+  const localNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+  const localExtraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+  const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+  const compressed = buffer.subarray(dataStart, dataStart + compressedSize);
+  let data;
+  if (compression === 8) data = inflateRawSync(compressed);
+  else if (compression === 0) data = Buffer.from(compressed);
+  else throw new Error(`unsupported zip compression method ${compression}`);
+  if (data.length !== uncompressedSize) throw new Error('zip uncompressed size mismatch');
+  return { name, data };
+}
+
+function parseGdeltSlotDateTime(text) {
+  const match = typeof text === 'string' ? text.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/) : null;
+  if (!match) return null;
+  const [year, month, day, hour, minute, second] = match.slice(1).map(Number);
+  const epochMs = Date.UTC(year, month - 1, day, hour, minute, second);
+  const roundTrip = new Date(epochMs);
+  if (roundTrip.getUTCFullYear() !== year || roundTrip.getUTCMonth() !== month - 1 || roundTrip.getUTCDate() !== day || roundTrip.getUTCHours() !== hour || roundTrip.getUTCMinutes() !== minute) return null;
+  return epochMs;
+}
+
+function formatGdeltSlotDateTime(epochMs) {
+  const date = new Date(epochMs);
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}`;
+}
+
+function extractGdeltGkgSeed(text, fileSuffix) {
+  for (const line of text.split('\n')) {
+    const parts = line.trim().split(/\s+/);
+    const url = parts[2] ?? '';
+    if (!url.endsWith(fileSuffix)) continue;
+    const match = url.match(/(\d{14})\.[a-z.]*gkg\.csv\.zip$/i);
+    if (!match) continue;
+    const epochMs = parseGdeltSlotDateTime(match[1]);
+    if (epochMs !== null) return { epochMs, slotTimestamp: match[1], listingUrl: url };
+  }
+  return null;
+}
+
+const GDELT_GKG_COLLECTIONS = [
+  { key: 'english-web', lastUpdateUrl: `${GDELT_FEED_BASE_URL}/lastupdate.txt`, fileSuffix: '.gkg.csv.zip', fileInfix: '.' },
+  { key: 'machine-translated', lastUpdateUrl: `${GDELT_FEED_BASE_URL}/lastupdate-translation.txt`, fileSuffix: '.translation.gkg.csv.zip', fileInfix: '.translation.' },
+];
+
+async function collectGdeltGkgSlots(collection, meta) {
+  const listing = await getText(collection.lastUpdateUrl, 20000);
+  meta.requestUrls.push(collection.lastUpdateUrl);
+  const seed = extractGdeltGkgSeed(listing, collection.fileSuffix);
+  if (!seed) throw new Error(`${collection.key}: lastupdate listing has no usable ${collection.fileSuffix} member`);
+  const slots = [];
+  let lastError = null;
+  for (let step = 0; step < GDELT_MAX_SLOT_ATTEMPTS && slots.length < GDELT_SLOTS_PER_COLLECTION; step += 1) {
+    const slotEpochMs = seed.epochMs - step * GDELT_SLOT_STEP_MS;
+    const slotTimestamp = formatGdeltSlotDateTime(slotEpochMs);
+    const url = `${GDELT_FEED_BASE_URL}/${slotTimestamp}${collection.fileInfix}gkg.csv.zip`;
+    try {
+      const buffer = await getBinary(url, 60000);
+      const member = unzipFirstMember(buffer);
+      slots.push({ slotTimestamp, slotEpochMs, url, text: member.data.toString('utf8') });
+      meta.requestUrls.push(url);
+    } catch (error) {
+      lastError = error;
+      meta.failedSlotDownloadCount += 1;
+    }
+  }
+  if (slots.length === 0) throw new Error(`${collection.key}: no fifteen-minute GKG slot downloadable after ${GDELT_MAX_SLOT_ATTEMPTS} walkback attempts${lastError ? ` (last error: ${lastError.message})` : ''}`);
+  return slots;
+}
+
+function parseGdeltConflictThemeOffsets(field) {
+  const offsets = [];
+  if (!field) return offsets;
+  for (const entry of field.split(';')) {
+    if (!entry) continue;
+    const comma = entry.lastIndexOf(',');
+    if (comma <= 0) continue;
+    const theme = entry.slice(0, comma);
+    const offset = Number(entry.slice(comma + 1));
+    if (GDELT_CONFLICT_THEME_SET.has(theme) && Number.isInteger(offset) && offset >= 0) offsets.push({ theme, offset });
+  }
+  return offsets;
+}
+
+function parseGdeltEnhancedLocations(field) {
+  const locations = [];
+  if (!field) return locations;
+  for (const entry of field.split(';')) {
+    if (!entry) continue;
+    const parts = entry.split('#');
+    if (parts.length < 9) continue;
+    const type = Number(parts[0]);
+    const lat = Number(parts[5]);
+    const lng = Number(parts[6]);
+    const offset = Number(parts[8]);
+    locations.push({
+      type,
+      fullName: parts[1] || '',
+      countryCode: parts[2] || null,
+      adm1Code: parts[3] || null,
+      lat,
+      lng,
+      featureId: parts[7] || null,
+      offset: Number.isInteger(offset) && offset >= 0 ? offset : null,
+    });
+  }
+  return locations;
+}
+
+function parseGdeltTone(field) {
+  if (!field) return null;
+  const parts = field.split(',').map(Number);
+  if (parts.length < 7 || parts.some((value) => !Number.isFinite(value))) return null;
+  return {
+    tone: parts[0],
+    positiveScore: parts[1],
+    negativeScore: parts[2],
+    wordCount: Number.isInteger(parts[6]) && parts[6] >= 0 ? parts[6] : null,
+  };
+}
+
+function normalizeGdeltArticleUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    const path = parsed.pathname.replace(/\/+$/, '');
+    return `${host}${path}${parsed.search}`;
+  } catch {
+    return String(url).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+  }
+}
+
+function parseGdeltDocSeenDate(value) {
+  const match = typeof value === 'string' ? value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/) : null;
+  if (!match) return null;
+  const [year, month, day, hour, minute, second] = match.slice(1).map(Number);
+  const epochMs = Date.UTC(year, month - 1, day, hour, minute, second);
+  const roundTrip = new Date(epochMs);
+  if (roundTrip.getUTCFullYear() !== year || roundTrip.getUTCMonth() !== month - 1 || roundTrip.getUTCDate() !== day) return null;
+  return new Date(epochMs).toISOString();
+}
+
+async function collectGdeltDocEnrichment(meta) {
+  const enrichment = meta.titleEnrichment;
+  const url = new URL(GDELT_DOC_API_URL);
+  url.searchParams.set('query', enrichment.query);
+  url.searchParams.set('mode', 'artlist');
+  url.searchParams.set('maxrecords', String(GDELT_DOC_ENRICHMENT_MAX_RECORDS));
+  url.searchParams.set('format', 'json');
+  url.searchParams.set('timespan', GDELT_DOC_ENRICHMENT_TIMESPAN);
+  url.searchParams.set('sort', 'datedesc');
+  enrichment.requestUrl = url.toString();
+  try {
+    let payload = null;
+    let lastError = null;
+    // The DOC API enforces a shared rate limit and frequently answers 429 even for polite
+    // clients; one spaced retry materially improves headline coverage without abusing the API.
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        await throttleGdeltDocApi();
+        payload = await getJson(url, 24000);
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt === 1) await new Promise((resolve) => setTimeout(resolve, 8000));
+      }
+    }
+    if (!payload) throw lastError ?? new Error('DOC API unavailable');
+    const articles = Array.isArray(payload?.articles) ? payload.articles : null;
+    if (!articles) throw new Error('unexpected DOC API response contract');
+    const byNormalizedUrl = new Map();
+    for (const article of articles) {
+      if (!article || typeof article.url !== 'string' || !article.url) continue;
+      byNormalizedUrl.set(normalizeGdeltArticleUrl(article.url), {
+        title: textOrNull(article.title),
+        seenAt: parseGdeltDocSeenDate(article.seendate),
+      });
+    }
+    enrichment.status = 'ok';
+    enrichment.fetchedArticleCount = byNormalizedUrl.size;
+    enrichment.detail = null;
+    return byNormalizedUrl;
+  } catch (error) {
+    enrichment.status = 'unavailable';
+    enrichment.detail = error instanceof Error ? error.message : String(error);
+    return new Map();
+  }
+}
+
+function gdeltMentionSortScore(mention) {
+  const precisionRank = GDELT_LOCATION_PRECISION_BY_TYPE[mention.locationType]?.rank ?? 0;
+  const proximityScore = (1 - mention.proximityChars / (GDELT_PROXIMITY_CHARS + 1)) * 15;
+  return mention.themes.length * 100 + precisionRank * 25 + proximityScore;
+}
+
+async function collectGdeltGeoNews() {
+  const meta = createGdeltGeoMeta('unavailable');
+  const enrichmentMap = await collectGdeltDocEnrichment(meta);
+  const mentionByKey = new Map();
+
+  for (const collection of GDELT_GKG_COLLECTIONS) {
+    const slots = await collectGdeltGkgSlots(collection, meta);
+    // Process oldest slots first so first-seen captures win cross-slot deduplication.
+    for (const slot of [...slots].reverse()) {
+      let slotRowCount = 0;
+      for (const line of slot.text.split('\n')) {
+        if (!line.trim()) continue;
+        slotRowCount += 1;
+        meta.rowsScanned += 1;
+        const cols = line.split('\t');
+        const url = textOrNull(cols[4]);
+        const domain = textOrNull(cols[3]);
+        if (cols.length < 19 || !url || !/^https?:\/\//i.test(url) || !domain) {
+          meta.invalidRowCount += 1;
+          continue;
+        }
+        const themeOffsets = parseGdeltConflictThemeOffsets(cols[8]);
+        if (themeOffsets.length === 0) continue;
+        meta.conflictThemeRowCount += 1;
+        const tone = parseGdeltTone(cols[15]);
+        const sharingImage = /^https?:\/\//i.test(cols[18] || '') ? cols[18] : null;
+
+        // Within one article, keep the nearest mention per location identity.
+        const nearestByLocation = new Map();
+        const countryLevelKeys = new Set();
+        for (const location of parseGdeltEnhancedLocations(cols[10])) {
+          if (location.type === 1) {
+            countryLevelKeys.add(`${location.featureId ?? 'unknown'}:${location.lat.toFixed(2)}:${location.lng.toFixed(2)}`);
+            continue;
+          }
+          if (!GDELT_LOCATION_PRECISION_BY_TYPE[location.type]) continue;
+          if (!validCoordinatePair(location.lat, location.lng) || location.offset === null) {
+            meta.omittedByReason.invalidCoordinates += 1;
+            continue;
+          }
+          const proximity = Math.min(...themeOffsets.map((entry) => Math.abs(entry.offset - location.offset)));
+          const locationKey = `${location.type}:${location.featureId ?? 'unknown'}:${location.lat.toFixed(3)}:${location.lng.toFixed(3)}`;
+          const existing = nearestByLocation.get(locationKey);
+          if (!existing || proximity < existing.proximity) nearestByLocation.set(locationKey, { location, locationKey, proximity });
+        }
+        meta.countryLevelMentionCount += countryLevelKeys.size;
+
+        for (const { location, locationKey, proximity } of nearestByLocation.values()) {
+          meta.subnationalMentionCount += 1;
+          if (proximity > GDELT_PROXIMITY_CHARS) {
+            meta.omittedByReason.notProximalToConflictTheme += 1;
+            continue;
+          }
+          meta.proximalMentionCount += 1;
+          const dedupeKey = `${normalizeGdeltArticleUrl(url)}|${locationKey}`;
+          if (mentionByKey.has(dedupeKey)) {
+            meta.omittedByReason.duplicateMention += 1;
+            continue;
+          }
+          const enrichment = enrichmentMap.get(normalizeGdeltArticleUrl(url)) ?? null;
+          const precisionInfo = GDELT_LOCATION_PRECISION_BY_TYPE[location.type];
+          // Per-mention themes are limited to the tags actually inside this location's
+          // proximity window, never the article-wide union, so the point cannot overclaim.
+          const proximateThemes = [...new Set(
+            themeOffsets
+              .filter((entry) => Math.abs(entry.offset - location.offset) <= GDELT_PROXIMITY_CHARS)
+              .map((entry) => entry.theme)
+          )].sort();
+          if (proximateThemes.length === 0) continue;
+          mentionByKey.set(dedupeKey, {
+            id: `gdeltgeo:${createHash('sha256').update(dedupeKey).digest('hex').slice(0, 20)}`,
+            url,
+            title: enrichment?.title ?? null,
+            domain,
+            collection: collection.key,
+            locationName: location.fullName,
+            locationType: location.type,
+            coordinatePrecision: precisionInfo.precision,
+            countryCode: location.countryCode,
+            adm1Code: location.adm1Code,
+            featureId: location.featureId,
+            lat: location.lat,
+            lng: location.lng,
+            proximityChars: proximity,
+            themes: proximateThemes,
+            tone: tone?.tone ?? null,
+            positiveScore: tone?.positiveScore ?? null,
+            negativeScore: tone?.negativeScore ?? null,
+            wordCount: tone?.wordCount ?? null,
+            sharingImage,
+            slotTime: new Date(slot.slotEpochMs).toISOString(),
+            seenAt: enrichment?.seenAt ?? null,
+            slotEpochMs: slot.slotEpochMs,
+          });
+        }
+      }
+      meta.slotsIngested.push({ collection: collection.key, slotTimestamp: slot.slotTimestamp, url: slot.url, rowCount: slotRowCount });
+    }
+  }
+
+  meta.uniqueMentionCount = mentionByKey.size;
+  const ranked = [...mentionByKey.values()]
+    .map((mention) => ({ mention, score: gdeltMentionSortScore(mention) }))
+    .sort((a, b) => b.score - a.score || b.mention.slotEpochMs - a.mention.slotEpochMs || a.mention.id.localeCompare(b.mention.id));
+  const selected = ranked.slice(0, GDELT_MAX_MENTIONS).map((entry) => entry.mention);
+  meta.omittedByReason.selectionCap = Math.max(0, ranked.length - selected.length);
+  meta.ingestedMentionCount = selected.length;
+  meta.uniqueArticleCount = new Set(selected.map((mention) => normalizeGdeltArticleUrl(mention.url))).size;
+  meta.uniqueLocationCount = new Set(selected.map((mention) => `${mention.lat.toFixed(3)}:${mention.lng.toFixed(3)}:${mention.locationName}`)).size;
+  meta.titleEnrichedArticleCount = new Set(selected.filter((mention) => mention.title !== null).map((mention) => normalizeGdeltArticleUrl(mention.url))).size;
+  meta.titleEnrichment.matchedArticleCount = meta.titleEnrichedArticleCount;
+  meta.omittedMentionCount = Object.values(meta.omittedByReason).reduce((sum, value) => sum + value, 0);
+  meta.status = 'ok';
+  for (const mention of selected) delete mention.slotEpochMs;
+  return { mentions: selected, meta };
 }
 
 const IODA_EVENTS_API_URL = 'https://api.ioda.inetintel.cc.gatech.edu/v2/outages/events';
@@ -649,7 +1084,7 @@ let previousSnapshot = {};
 try { if (existsSync(outFile)) previousSnapshot = JSON.parse(readFileSync(outFile, 'utf8')); } catch {}
 
 const iodaQueryWindow = createIodaQueryWindow();
-const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], aircraft: [], vessels: [], satellites: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], cyberVulnerabilities: [], internetOutages: [], internetOutageMeta: createIodaUnavailableMeta(iodaQueryWindow), ucdpMeta: createUcdpMeta('unconfigured'), errors: [] };
+const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], aircraft: [], vessels: [], satellites: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], cyberVulnerabilities: [], internetOutages: [], internetOutageMeta: createIodaUnavailableMeta(iodaQueryWindow), ucdpMeta: createUcdpMeta('unconfigured'), gdeltGeoNews: [], gdeltGeoMeta: createGdeltGeoMeta('unavailable'), errors: [] };
 
 try {
   const ioda = await collectIodaOutages(iodaQueryWindow);
@@ -883,12 +1318,37 @@ try {
 } catch (error) { result.errors.push(`CelesTrak: ${error.message}`); }
 
 try {
+  const gdeltGeo = await collectGdeltGeoNews();
+  result.gdeltGeoNews = gdeltGeo.mentions;
+  result.gdeltGeoMeta = gdeltGeo.meta;
+  result.sources.gdeltGeoNews = `GDELT GKG 2.1 fifteen-minute feeds (${gdeltGeo.meta.slotsIngested.length} slots) — geolocated conflict-news media mentions, not verified incidents`;
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  result.errors.push(`GDELT geo news: ${message}`);
+  if (previousSnapshot.gdeltGeoMeta && Array.isArray(previousSnapshot.gdeltGeoNews) && previousSnapshot.gdeltGeoNews.length > 0) {
+    result.gdeltGeoNews = previousSnapshot.gdeltGeoNews;
+    result.gdeltGeoMeta = {
+      ...previousSnapshot.gdeltGeoMeta,
+      status: 'preserved',
+      preservedAt: result.fetchedAt,
+      statusDetail: `Transient GDELT ingestion failure; prior snapshot retained. ${message}`,
+    };
+    result.sources.gdeltGeoNews = 'GDELT GKG 2.1 feeds (prior build-time snapshot preserved after transient ingestion failure)';
+    result.errors.push('gdeltGeoNews: transient failure; preserved previous snapshot');
+  } else {
+    result.gdeltGeoMeta = { ...createGdeltGeoMeta('unavailable'), statusDetail: message };
+    result.sources.gdeltGeoNews = 'GDELT GKG 2.1 geolocated news unavailable during build';
+  }
+}
+
+try {
   const url = new URL('https://api.gdeltproject.org/api/v2/doc/doc');
   url.searchParams.set('query', '(war OR conflict OR airstrike OR missile OR military)');
   url.searchParams.set('mode', 'artlist');
   url.searchParams.set('maxrecords', '30');
   url.searchParams.set('format', 'json');
   url.searchParams.set('sort', 'hybridrel');
+  await throttleGdeltDocApi();
   const payload = await getJson(url);
   result.news = (payload.articles ?? []).filter((a) => a.title && a.url).map((a) => ({
     title: a.title,
@@ -1330,9 +1790,90 @@ function validateUcdpMeta(snapshot, errors) {
   if (configuredUcdpToken && JSON.stringify(snapshot).includes(configuredUcdpToken)) errors.push('UCDP token leaked into snapshot');
 }
 
+function validateGdeltGeoMentionRecord(item, label, errors) {
+  if (typeof item.id !== 'string' || !/^gdeltgeo:[0-9a-f]{20}$/.test(item.id)) errors.push(`${label} invalid canonical id`);
+  if (typeof item.url !== 'string' || !/^https?:\/\//i.test(item.url)) errors.push(`${label} invalid article url`);
+  if (item.title !== null && typeof item.title !== 'string') errors.push(`${label} invalid title nullability`);
+  if (typeof item.domain !== 'string' || item.domain.length === 0) errors.push(`${label} missing source domain`);
+  if (!['english-web', 'machine-translated'].includes(item.collection)) errors.push(`${label} invalid collection`);
+  if (typeof item.locationName !== 'string' || item.locationName.length === 0) errors.push(`${label} missing location name`);
+  if (!Number.isInteger(item.locationType) || !GDELT_LOCATION_PRECISION_BY_TYPE[item.locationType]) errors.push(`${label} invalid location type`);
+  else if (GDELT_LOCATION_PRECISION_BY_TYPE[item.locationType].precision !== item.coordinatePrecision) errors.push(`${label} coordinate precision/type mismatch`);
+  if (!validCoordinatePair(item.lat, item.lng)) errors.push(`${label} invalid coordinate`);
+  if (item.countryCode !== null && typeof item.countryCode !== 'string') errors.push(`${label} invalid country code nullability`);
+  if (item.adm1Code !== null && typeof item.adm1Code !== 'string') errors.push(`${label} invalid adm1 code nullability`);
+  if (item.featureId !== null && typeof item.featureId !== 'string' && typeof item.featureId !== 'number') errors.push(`${label} invalid gazetteer feature id`);
+  if (!Number.isInteger(item.proximityChars) || item.proximityChars < 0 || item.proximityChars > GDELT_PROXIMITY_CHARS) errors.push(`${label} invalid proximity window`);
+  if (!Array.isArray(item.themes) || item.themes.length === 0 || !item.themes.every((theme) => GDELT_CONFLICT_THEME_SET.has(theme))) errors.push(`${label} invalid conflict theme contract`);
+  if (item.tone !== null && (typeof item.tone !== 'number' || !Number.isFinite(item.tone) || item.tone < -100 || item.tone > 100)) errors.push(`${label} invalid tone`);
+  for (const key of ['positiveScore', 'negativeScore']) {
+    if (item[key] !== null && (typeof item[key] !== 'number' || !Number.isFinite(item[key]) || item[key] < 0 || item[key] > 100)) errors.push(`${label} invalid ${key}`);
+  }
+  if (item.wordCount !== null && (!Number.isInteger(item.wordCount) || item.wordCount < 0)) errors.push(`${label} invalid word count`);
+  if (item.sharingImage !== null && (typeof item.sharingImage !== 'string' || !/^https?:\/\//i.test(item.sharingImage))) errors.push(`${label} invalid sharing image`);
+  if (typeof item.slotTime !== 'string' || Number.isNaN(Date.parse(item.slotTime))) errors.push(`${label} invalid slot time`);
+  if (item.seenAt !== null && (typeof item.seenAt !== 'string' || Number.isNaN(Date.parse(item.seenAt)))) errors.push(`${label} invalid seen-at timestamp`);
+}
+
+function validateGdeltGeoMeta(snapshot, errors) {
+  const meta = snapshot.gdeltGeoMeta;
+  if (!meta || typeof meta !== 'object') {
+    errors.push('gdeltGeoMeta missing or not an object');
+    return;
+  }
+  if (!['ok', 'preserved', 'unavailable'].includes(meta.status)) errors.push('gdeltGeoMeta invalid status');
+  if (!String(meta.attribution || '').includes('gdeltproject.org')) errors.push('gdeltGeoMeta missing required GDELT citation');
+  if (!String(meta.geoApiNote || '').includes('404')) errors.push('gdeltGeoMeta missing honest GEO API retirement note');
+  if (!Array.isArray(meta.conflictThemes) || meta.conflictThemes.join(',') !== GDELT_CONFLICT_THEMES.join(',')) errors.push('gdeltGeoMeta conflict theme list mismatch');
+  if (![meta.proximityChars, meta.slotsPerCollection, meta.maxSlotAttempts, meta.maxMentions].every(validateNonNegativeInteger)) errors.push('gdeltGeoMeta invalid numeric configuration');
+  if (meta.proximityChars !== GDELT_PROXIMITY_CHARS) errors.push('gdeltGeoMeta proximity mismatch with implementation');
+  const countKeys = ['failedSlotDownloadCount', 'rowsScanned', 'invalidRowCount', 'conflictThemeRowCount', 'countryLevelMentionCount', 'subnationalMentionCount', 'proximalMentionCount', 'uniqueMentionCount', 'ingestedMentionCount', 'uniqueArticleCount', 'uniqueLocationCount', 'titleEnrichedArticleCount', 'omittedMentionCount'];
+  for (const key of countKeys) {
+    if (!validateNonNegativeInteger(meta[key])) errors.push(`gdeltGeoMeta invalid ${key}`);
+  }
+  const reasons = meta.omittedByReason;
+  if (!reasons || typeof reasons !== 'object') {
+    errors.push('gdeltGeoMeta omission reasons missing');
+  } else {
+    for (const key of ['invalidCoordinates', 'notProximalToConflictTheme', 'duplicateMention', 'selectionCap']) {
+      if (!validateNonNegativeInteger(reasons[key])) errors.push(`gdeltGeoMeta invalid omission reason ${key}`);
+    }
+    if (Object.values(reasons).every(validateNonNegativeInteger) && meta.omittedMentionCount !== Object.values(reasons).reduce((sum, value) => sum + value, 0)) errors.push('gdeltGeoMeta omittedMentionCount does not equal omission reasons');
+  }
+  if (!Array.isArray(meta.slotsIngested)) {
+    errors.push('gdeltGeoMeta slotsIngested missing or not an array');
+  } else {
+    for (const slot of meta.slotsIngested) {
+      if (!['english-web', 'machine-translated'].includes(slot?.collection) || typeof slot?.url !== 'string' || !/^\d{14}$/.test(slot?.slotTimestamp ?? '') || !validateNonNegativeInteger(slot?.rowCount)) errors.push('gdeltGeoMeta invalid ingested-slot provenance');
+    }
+  }
+  if (!Array.isArray(meta.requestUrls)) errors.push('gdeltGeoMeta requestUrls missing or not an array');
+  if (typeof meta.caveat !== 'string' || !meta.caveat.includes('not verified incident locations')) errors.push('gdeltGeoMeta missing media-attention caveat');
+  if (typeof meta.selection !== 'string' || !meta.selection.includes('deduplicates')) errors.push('gdeltGeoMeta missing selection description');
+  const enrichment = meta.titleEnrichment;
+  if (!enrichment || typeof enrichment !== 'object') {
+    errors.push('gdeltGeoMeta titleEnrichment missing');
+  } else {
+    if (!['ok', 'unavailable'].includes(enrichment.status)) errors.push('gdeltGeoMeta titleEnrichment invalid status');
+    for (const key of ['fetchedArticleCount', 'matchedArticleCount']) {
+      if (!validateNonNegativeInteger(enrichment[key])) errors.push(`gdeltGeoMeta titleEnrichment invalid ${key}`);
+    }
+  }
+  if (meta.status === 'ok' && Object.values(reasons ?? {}).every(validateNonNegativeInteger) && countKeys.every((key) => validateNonNegativeInteger(meta[key]))) {
+    if (meta.ingestedMentionCount !== (snapshot.gdeltGeoNews ?? []).length) errors.push('gdeltGeoMeta ingestedMentionCount does not match snapshot records');
+    if (meta.subnationalMentionCount !== meta.proximalMentionCount + reasons.notProximalToConflictTheme) errors.push('gdeltGeoMeta proximity accounting mismatch');
+    if (meta.proximalMentionCount !== meta.uniqueMentionCount + reasons.duplicateMention) errors.push('gdeltGeoMeta dedupe accounting mismatch');
+    if (meta.uniqueMentionCount !== meta.ingestedMentionCount + reasons.selectionCap) errors.push('gdeltGeoMeta selection-cap accounting mismatch');
+    if (meta.uniqueArticleCount > meta.ingestedMentionCount) errors.push('gdeltGeoMeta uniqueArticleCount exceeds ingested mentions');
+    if (meta.titleEnrichedArticleCount > meta.uniqueArticleCount) errors.push('gdeltGeoMeta title-enriched count exceeds unique articles');
+    if (meta.slotsIngested.length === 0 && meta.rowsScanned > 0) errors.push('gdeltGeoMeta rows scanned without slot provenance');
+    if (meta.rowsScanned > 0 && meta.slotsIngested.reduce((sum, slot) => sum + slot.rowCount, 0) !== meta.rowsScanned) errors.push('gdeltGeoMeta row accounting does not match slot provenance');
+  }
+}
+
 function validateSnapshot(snapshot) {
   const errors = [];
-  for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'cyberVulnerabilities', 'internetOutages']) {
+  for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'cyberVulnerabilities', 'internetOutages', 'gdeltGeoNews']) {
     if (!Array.isArray(snapshot[key])) errors.push(`${key} missing or not an array`);
   }
   for (const item of snapshot.militaryAircraft ?? []) validateCoordinate(item, 'militaryAircraft', errors);
@@ -1358,6 +1899,22 @@ function validateSnapshot(snapshot) {
     if (item.ucdp !== undefined) validateUcdpOfficialRecord(item, label, errors);
   }
   validateUcdpMeta(snapshot, errors);
+  const gdeltMentionKeys = new Set();
+  const gdeltArticleLocationKeys = new Set();
+  for (const item of snapshot.gdeltGeoNews ?? []) {
+    const label = `gdeltGeoNews:${item.id || 'unknown'}`;
+    validateGdeltGeoMentionRecord(item, label, errors);
+    if (typeof item.id === 'string') {
+      if (gdeltMentionKeys.has(item.id)) errors.push(`${label} duplicate mention id`);
+      gdeltMentionKeys.add(item.id);
+    }
+    if (typeof item.url === 'string' && typeof item.locationName === 'string') {
+      const articleLocationKey = `${normalizeGdeltArticleUrl(item.url)}|${item.locationType}:${item.featureId ?? 'unknown'}:${item.lat.toFixed(3)}:${item.lng.toFixed(3)}`;
+      if (gdeltArticleLocationKeys.has(articleLocationKey)) errors.push(`${label} duplicate article-location mention`);
+      gdeltArticleLocationKeys.add(articleLocationKey);
+    }
+  }
+  validateGdeltGeoMeta(snapshot, errors);
   for (const item of snapshot.internetOutages ?? []) {
     const label = `internetOutages:${item.entityType || 'unknown'}:${item.entityCode || 'unknown'}`;
     if (!['country', 'region'].includes(item.entityType)) errors.push(`${label} invalid entityType`);
@@ -1420,4 +1977,4 @@ for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'new
 validateSnapshot(result);
 writeFileSync(outFile, JSON.stringify(result));
 const ucdpConsoleSuffix = result.ucdpMeta.preservedPriorEventCount > 0 ? `, ${result.ucdpMeta.preservedPriorEventCount} preserved` : '';
-console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.ucdpMeta.mergedEventCount} UCDP official records (${result.ucdpMeta.status}${ucdpConsoleSuffix}), ${result.webcams.length} webcams, ${result.internetOutages.length} IODA outage detections (${result.internetOutageMeta.status})`);
+console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.ucdpMeta.mergedEventCount} UCDP official records (${result.ucdpMeta.status}${ucdpConsoleSuffix}), ${result.webcams.length} webcams, ${result.internetOutages.length} IODA outage detections (${result.internetOutageMeta.status}), ${result.gdeltGeoNews.length} GDELT geo-news mentions (${result.gdeltGeoMeta.status}, ${result.gdeltGeoMeta.titleEnrichedArticleCount} title-enriched)`);

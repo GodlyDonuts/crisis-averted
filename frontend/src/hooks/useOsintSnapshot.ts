@@ -21,6 +21,8 @@ const EMPTY_SNAPSHOT: OsintSnapshot = {
   internetOutages: [],
   internetOutageMeta: null,
   ucdpMeta: null,
+  gdeltGeoNews: [],
+  gdeltGeoMeta: null,
   errors: [],
 };
 

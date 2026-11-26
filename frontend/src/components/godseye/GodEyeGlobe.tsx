@@ -27,7 +27,7 @@ import {
 } from "three";
 import { assetPath } from "@/lib/assets";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import type { ConflictEvent, ConflictTheater, IodaInternetOutage, MilitaryAircraft, OsintAircraft, OsintLaunch, OsintNaturalEvent, OsintSatellite, OsintVessel, GpsInterferenceCell, SeverityKey } from "@/types/conflict";
+import type { ConflictEvent, ConflictTheater, GdeltGeoNewsMention, IodaInternetOutage, MilitaryAircraft, OsintAircraft, OsintLaunch, OsintNaturalEvent, OsintSatellite, OsintVessel, GpsInterferenceCell, SeverityKey } from "@/types/conflict";
 import { degreesLat, degreesLong, eciToGeodetic, gstime, propagate, twoline2satrec } from "satellite.js";
 import { classifyAircraftRole, escapeHtml, formatRelativeTime, naturalEventColor, normalizeCategory, normalizeTheaterName, SEVERITY_META } from "@/lib/conflictData";
 
@@ -47,6 +47,7 @@ export interface GodEyeLayerToggles {
   environmental: boolean;
   gpsInterference: boolean;
   internetOutages: boolean;
+  gdeltGeoNews: boolean;
 }
 
 export interface GodEyeFocusTarget {
@@ -67,6 +68,7 @@ interface GodEyeGlobeProps {
   naturalEvents: OsintNaturalEvent[];
   gpsInterference: GpsInterferenceCell[];
   internetOutages: IodaInternetOutage[];
+  gdeltGeoNews: GdeltGeoNewsMention[];
   selectedEvent: ConflictEvent | null;
   selectedTheater: ConflictTheater | null;
   focusTarget: GodEyeFocusTarget | null;
@@ -107,6 +109,19 @@ interface InternetOutageMarker {
   datasourceMethods: string[];
 }
 
+interface GdeltNewsLocationMarker {
+  key: string;
+  lat: number;
+  lng: number;
+  locationName: string;
+  coordinatePrecision: GdeltGeoNewsMention["coordinatePrecision"];
+  locationType: number;
+  mentions: GdeltGeoNewsMention[];
+  articles: GdeltGeoNewsMention[];
+  themes: string[];
+  latestSlotTime: string;
+}
+
 type GlobePointObject =
   | (ConflictEvent & { objectKind: "event" })
   | (MilitaryAircraft & { objectKind: "aircraft" })
@@ -115,7 +130,8 @@ type GlobePointObject =
   | (OsintSatellite & { objectKind: "satellite"; altitudeKm: number })
   | (OsintLaunch & { objectKind: "launch" })
   | (OsintNaturalEvent & { objectKind: "natural" })
-  | (InternetOutageMarker & { objectKind: "internetOutage" });
+  | (InternetOutageMarker & { objectKind: "internetOutage" })
+  | (GdeltNewsLocationMarker & { objectKind: "gdeltNews" });
 
 interface SignalArc {
   id: string;
@@ -412,6 +428,81 @@ function internetOutageReticlePaths(markers: InternetOutageMarker[]): BorderPath
   });
 }
 
+const GDELT_NEWS_PRECISION_RANK: Record<GdeltGeoNewsMention["coordinatePrecision"], number> = {
+  "us-city-or-landmark": 2,
+  "world-city-or-landmark": 2,
+  "us-state-centroid": 1,
+  "world-admin1-centroid": 1,
+};
+
+const GDELT_NEWS_PRECISION_LANGUAGE: Record<GdeltGeoNewsMention["coordinatePrecision"], string> = {
+  "us-city-or-landmark": "US city/landmark-level gazetteer coordinate supplied by GDELT for a place mentioned in the article text — not an incident site",
+  "world-city-or-landmark": "city/landmark-level gazetteer coordinate supplied by GDELT for a place mentioned in the article text — not an incident site",
+  "us-state-centroid": "US-state-level mention plotted at the centroid of that entire state — coarse symbolic placement supplied by GDELT, never an incident site",
+  "world-admin1-centroid": "admin-1-level mention plotted at the centroid of that entire division — coarse symbolic placement supplied by GDELT, never an incident site",
+};
+
+function buildGdeltNewsMarkers(mentions: GdeltGeoNewsMention[]): GdeltNewsLocationMarker[] {
+  const groups = new Map<string, GdeltNewsLocationMarker>();
+  for (const mention of mentions) {
+    const key = `${mention.lat.toFixed(3)}:${mention.lng.toFixed(3)}:${mention.locationName}`;
+    let marker = groups.get(key);
+    if (!marker) {
+      marker = {
+        key,
+        lat: mention.lat,
+        lng: mention.lng,
+        locationName: mention.locationName,
+        coordinatePrecision: mention.coordinatePrecision,
+        locationType: mention.locationType,
+        mentions: [],
+        articles: [],
+        themes: [],
+        latestSlotTime: mention.slotTime,
+      };
+      groups.set(key, marker);
+    }
+    marker.mentions.push(mention);
+    if (!marker.articles.some((article) => article.url === mention.url)) marker.articles.push(mention);
+    for (const theme of mention.themes) {
+      if (!marker.themes.includes(theme)) marker.themes.push(theme);
+    }
+    if (mention.slotTime > marker.latestSlotTime) marker.latestSlotTime = mention.slotTime;
+    if (GDELT_NEWS_PRECISION_RANK[mention.coordinatePrecision] > GDELT_NEWS_PRECISION_RANK[marker.coordinatePrecision]) {
+      marker.coordinatePrecision = mention.coordinatePrecision;
+      marker.locationType = mention.locationType;
+    }
+  }
+  for (const marker of groups.values()) {
+    marker.themes.sort();
+    marker.articles.sort((a, b) =>
+      (b.themes.length - a.themes.length) ||
+      (a.proximityChars - b.proximityChars) ||
+      b.slotTime.localeCompare(a.slotTime) ||
+      a.url.localeCompare(b.url)
+    );
+  }
+  return [...groups.values()];
+}
+
+function gdeltNewsTooltip(marker: GdeltNewsLocationMarker): string {
+  const articleCount = marker.articles.length;
+  const articleLines = marker.articles.slice(0, 3).map((mention) => {
+    const headline = mention.title ? escapeHtml(mention.title) : `${escapeHtml(mention.domain)} (headline not supplied by feed)`;
+    const timing = mention.seenAt
+      ? `first seen ${formatRelativeTime(Date.parse(mention.seenAt))}`
+      : `captured ${formatRelativeTime(Date.parse(mention.slotTime))} · per-article publication time not supplied`;
+    const tone = mention.tone !== null ? ` · automated tone ${mention.tone.toFixed(1)}` : "";
+    const translated = mention.collection === "machine-translated" ? " · machine-translated" : "";
+    return `<div class="godseye-tooltip__meta">• ${headline} — ${escapeHtml(mention.domain)} · ${timing}${tone}${translated}</div>`;
+  }).join("");
+  const additional = articleCount > 3
+    ? `<div class="godseye-tooltip__meta">+${articleCount - 3} further article${articleCount - 3 === 1 ? "" : "s"} at this location</div>`
+    : "";
+  const themeList = marker.themes.map((theme) => theme.toLowerCase().replace(/_/g, " ")).join(", ");
+  return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#9fb0c9">CONFLICT-NEWS MEDIA MENTION · NOT A VERIFIED INCIDENT</div><div class="godseye-tooltip__title">${escapeHtml(marker.locationName)}</div><div class="godseye-tooltip__meta">${articleCount} article${articleCount === 1 ? "" : "s"} mention${articleCount === 1 ? "s" : ""} this location within a sentence or two of automated conflict-theme tags (${escapeHtml(themeList)})</div>${articleLines}${additional}<div class="godseye-tooltip__meta">${escapeHtml(GDELT_NEWS_PRECISION_LANGUAGE[marker.coordinatePrecision])}</div><div class="godseye-tooltip__meta">Media-attention geography only: no event is confirmed at this point. GDELT geocoding, translation, and theme tagging are automated and error-prone. Source: GDELT GKG 2.1 feeds · The GDELT Project.</div></div>`;
+}
+
 function severityPointRadius(event: ConflictEvent, selected: boolean): number {
   if (selected) return 0.23;
   const base = event.severity === "critical" ? 0.12 : event.severity === "high" ? 0.094 : event.severity === "medium" ? 0.066 : event.severity === "low" ? 0.05 : 0.05;
@@ -467,6 +558,7 @@ export default function GodEyeGlobe({
   naturalEvents,
   gpsInterference,
   internetOutages,
+  gdeltGeoNews,
   selectedEvent,
   selectedTheater,
   focusTarget,
@@ -622,6 +714,7 @@ export default function GodEyeGlobe({
   }, [gpsInterference]);
   const internetOutageMarkers = useMemo(() => buildInternetOutageMarkers(internetOutages), [internetOutages]);
   const internetOutagePaths = useMemo(() => internetOutageReticlePaths(internetOutageMarkers), [internetOutageMarkers]);
+  const gdeltNewsMarkers = useMemo(() => buildGdeltNewsMarkers(gdeltGeoNews), [gdeltGeoNews]);
   const signalArcs = useMemo(() => buildSignalArcs(events, theaters, selectedTheater), [events, theaters, selectedTheater]);
 
   // Load country boundaries locally once.
@@ -1102,12 +1195,13 @@ export default function GodEyeGlobe({
         ...(layers.orbitalAssets ? launches.slice(0, 24).map((launch) => ({ ...launch, objectKind: "launch" as const })) : []),
         ...(layers.environmental ? naturalEvents.slice(0, 70).map((event) => ({ ...event, objectKind: "natural" as const })) : []),
         ...(layers.internetOutages ? internetOutageMarkers.map((marker) => ({ ...marker, objectKind: "internetOutage" as const })) : []),
+        ...(layers.gdeltGeoNews ? gdeltNewsMarkers.map((marker) => ({ ...marker, objectKind: "gdeltNews" as const })) : []),
       ] as GlobePointObject[])
       .pointLat("lat")
       .pointLng("lng")
-      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.016 : (point as GlobePointObject).objectKind === "vessel" ? 0.007 : (point as GlobePointObject).objectKind === "satellite" ? Math.min(0.22, 0.035 + ((point as OsintSatellite & { altitudeKm: number }).altitudeKm / 22000)) : (point as GlobePointObject).objectKind === "launch" ? 0.015 : (point as GlobePointObject).objectKind === "internetOutage" ? 0.017 : (point as GlobePointObject).objectKind === "natural" ? 0.014 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
-      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? classifyAircraftRole((point as MilitaryAircraft).aircraftType).color : (point as GlobePointObject).objectKind === "civilAircraft" ? ((point as OsintAircraft).operatorClass.includes("cargo") ? "#f0a84f" : "#9fb7a8") : (point as GlobePointObject).objectKind === "satellite" ? "#d8c77f" : (point as GlobePointObject).objectKind === "vessel" ? ((point as OsintVessel).vesselClass === "Tanker" ? "#d59b6a" : (point as OsintVessel).vesselClass === "Cargo" ? "#7da6a1" : "#8f9b7d") : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? "#75bdd1" : "#548498") : (point as GlobePointObject).objectKind === "natural" ? naturalEventColor(point as OsintNaturalEvent) : pointColor(point as ConflictEvent))
-      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.035 : (point as GlobePointObject).objectKind === "vessel" ? 0.038 : (point as GlobePointObject).objectKind === "satellite" ? 0.046 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? 0.066 : 0.047) : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
+      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.016 : (point as GlobePointObject).objectKind === "vessel" ? 0.007 : (point as GlobePointObject).objectKind === "satellite" ? Math.min(0.22, 0.035 + ((point as OsintSatellite & { altitudeKm: number }).altitudeKm / 22000)) : (point as GlobePointObject).objectKind === "launch" ? 0.015 : (point as GlobePointObject).objectKind === "internetOutage" ? 0.017 : (point as GlobePointObject).objectKind === "gdeltNews" ? 0.013 : (point as GlobePointObject).objectKind === "natural" ? 0.014 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
+      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? classifyAircraftRole((point as MilitaryAircraft).aircraftType).color : (point as GlobePointObject).objectKind === "civilAircraft" ? ((point as OsintAircraft).operatorClass.includes("cargo") ? "#f0a84f" : "#9fb7a8") : (point as GlobePointObject).objectKind === "satellite" ? "#d8c77f" : (point as GlobePointObject).objectKind === "vessel" ? ((point as OsintVessel).vesselClass === "Tanker" ? "#d59b6a" : (point as OsintVessel).vesselClass === "Cargo" ? "#7da6a1" : "#8f9b7d") : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? "#75bdd1" : "#548498") : (point as GlobePointObject).objectKind === "gdeltNews" ? (GDELT_NEWS_PRECISION_RANK[(point as GdeltNewsLocationMarker).coordinatePrecision] === 2 ? "#9fb0c9" : "#6d7a91") : (point as GlobePointObject).objectKind === "natural" ? naturalEventColor(point as OsintNaturalEvent) : pointColor(point as ConflictEvent))
+      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.035 : (point as GlobePointObject).objectKind === "vessel" ? 0.038 : (point as GlobePointObject).objectKind === "satellite" ? 0.046 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? 0.066 : 0.047) : (point as GlobePointObject).objectKind === "gdeltNews" ? Math.min(0.074, 0.032 + Math.log1p((point as GdeltNewsLocationMarker).articles.length) * 0.014) : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
       .pointResolution(9)
       .pointsMerge(false)
       .pointsTransitionDuration(320)
@@ -1141,6 +1235,9 @@ export default function GodEyeGlobe({
         }
         if ((point as GlobePointObject).objectKind === "internetOutage") {
           return internetOutageTooltip(point as InternetOutageMarker);
+        }
+        if ((point as GlobePointObject).objectKind === "gdeltNews") {
+          return gdeltNewsTooltip(point as GdeltNewsLocationMarker);
         }
         const conflictEvent = point as ConflictEvent;
         const severity = SEVERITY_META[conflictEvent.severity];
@@ -1199,6 +1296,7 @@ export default function GodEyeGlobe({
     gpsInterferencePaths,
     internetOutageMarkers,
     internetOutagePaths,
+    gdeltNewsMarkers,
     launches,
     naturalEvents,
     alertEvents,

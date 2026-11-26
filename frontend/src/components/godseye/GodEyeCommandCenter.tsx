@@ -56,6 +56,7 @@ const DEFAULT_LAYERS: GodEyeLayerToggles = {
   environmental: false,
   gpsInterference: true,
   internetOutages: true,
+  gdeltGeoNews: true,
 };
 
 export default function GodEyeCommandCenter() {
@@ -304,6 +305,7 @@ export default function GodEyeCommandCenter() {
           naturalEvents={osintSnapshot.naturalEvents}
           gpsInterference={osintSnapshot.gpsInterference}
           internetOutages={osintSnapshot.internetOutages}
+          gdeltGeoNews={osintSnapshot.gdeltGeoNews}
           selectedEvent={selectedEvent}
           selectedTheater={selectedTheater}
           focusTarget={focusTarget}

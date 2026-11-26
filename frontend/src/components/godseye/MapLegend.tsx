@@ -1,4 +1,4 @@
-import { Plane, Radar, Ship, Signal, Leaf, Circle } from "lucide-react";
+import { Plane, Radar, Ship, Signal, Leaf, Newspaper, Circle } from "lucide-react";
 import { SEVERITY_META } from "@/lib/conflictData";
 
 export function MapLegend() {
@@ -31,6 +31,10 @@ export function MapLegend() {
         <div className="flex items-center gap-2 text-emerald-200/72">
           <Leaf className="h-3 w-3" />
           <span>Environmental</span>
+        </div>
+        <div className="flex items-center gap-2 text-[#9fb0c9]" title="Places mentioned in news text near automated conflict-theme tags — media attention, never verified incidents">
+          <Newspaper className="h-3 w-3" />
+          <span>Geo news mentions</span>
         </div>
       </div>
     </aside>

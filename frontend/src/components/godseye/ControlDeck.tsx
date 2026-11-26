@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Cloud, Compass, Download, Hexagon, Orbit, Pause, Plane, Play, Ship, Leaf, Radio, ScanLine, Signal, Radar, SlidersHorizontal, Tags, Waypoints, WifiOff } from "lucide-react";
+import { Cloud, Compass, Download, Hexagon, Newspaper, Orbit, Pause, Plane, Play, Ship, Leaf, Radio, ScanLine, Signal, Radar, SlidersHorizontal, Tags, Waypoints, WifiOff } from "lucide-react";
 import type { CategoryGroup, ConflictEvent, SeverityKey, TimelineBucket, TimeWindowKey } from "@/types/conflict";
 import type { GodEyeLayerToggles } from "./GodEyeGlobe";
 import { CATEGORY_GROUP_META, SEVERITY_META } from "@/lib/conflictData";
@@ -43,6 +43,7 @@ const LAYER_CONTROLS: { key: keyof GodEyeLayerToggles; label: string; icon: type
   { key: "environmental", label: "Env", icon: Leaf },
   { key: "gpsInterference", label: "GPS", icon: Signal },
   { key: "internetOutages", label: "Outages", icon: WifiOff },
+  { key: "gdeltGeoNews", label: "Geo news", icon: Newspaper },
 ];
 
 function downloadFile(filename: string, content: string, type: string) {

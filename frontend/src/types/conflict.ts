@@ -355,6 +355,110 @@ export interface UcdpIngestionMeta {
   preservedAt?: string;
 }
 
+export type GdeltGeoCollection = "english-web" | "machine-translated";
+
+export type GdeltGeoCoordinatePrecision =
+  | "us-state-centroid"
+  | "us-city-or-landmark"
+  | "world-city-or-landmark"
+  | "world-admin1-centroid";
+
+export type GdeltGeoSnapshotStatus = "ok" | "preserved" | "unavailable";
+
+/**
+ * One geolocated conflict-news media mention from the GDELT GKG 2.1 fifteen-minute feeds.
+ * Every field is either supplied verbatim by GDELT or explicitly derived and documented in
+ * gdeltGeoMeta; nothing is inferred. A mention is a place named inside news text near an
+ * automated conflict-theme tag — it is never a verified incident location.
+ */
+export interface GdeltGeoNewsMention {
+  id: string;
+  url: string;
+  /** Article headline. The GKG feed does not carry titles; present only where a DOC API cross-reference matched the exact article URL. */
+  title: string | null;
+  domain: string;
+  collection: GdeltGeoCollection;
+  locationName: string;
+  /** GDELT location type code: 2=US state, 3=US city/landmark, 4=world city/landmark, 5=world admin-1. Type 1 (country) is out of scope by design. */
+  locationType: number;
+  coordinatePrecision: GdeltGeoCoordinatePrecision;
+  countryCode: string | null;
+  adm1Code: string | null;
+  /** GDELT gazetteer feature id (numeric GNS/GNIS id or textual country/ADM1 code) as supplied. */
+  featureId: string | number | null;
+  lat: number;
+  lng: number;
+  /** Character distance between this location mention and the nearest conflict-theme mention in the document text, from GDELT-supplied offsets. */
+  proximityChars: number;
+  themes: string[];
+  /** GDELT automated tone of the article (-100..100); not a measure of event severity. */
+  tone: number | null;
+  positiveScore: number | null;
+  negativeScore: number | null;
+  wordCount: number | null;
+  /** Social sharing image URL supplied in the GKG SharingImage field, when present. */
+  sharingImage: string | null;
+  /** ISO timestamp of the fifteen-minute GDELT monitoring slot that captured this mention. Not a per-article publication time. */
+  slotTime: string;
+  /** Per-article first-seen time, present only where the DOC API cross-reference matched. */
+  seenAt: string | null;
+}
+
+export interface GdeltGeoIngestionMeta {
+  status: GdeltGeoSnapshotStatus;
+  provider: string;
+  attribution: string;
+  geoApiNote: string;
+  feedBaseUrl: string;
+  conflictThemes: string[];
+  proximityChars: number;
+  slotsPerCollection: number;
+  maxSlotAttempts: number;
+  maxMentions: number;
+  slotsIngested: {
+    collection: GdeltGeoCollection;
+    slotTimestamp: string;
+    url: string;
+    rowCount: number;
+  }[];
+  failedSlotDownloadCount: number;
+  rowsScanned: number;
+  invalidRowCount: number;
+  conflictThemeRowCount: number;
+  countryLevelMentionCount: number;
+  subnationalMentionCount: number;
+  proximalMentionCount: number;
+  uniqueMentionCount: number;
+  ingestedMentionCount: number;
+  uniqueArticleCount: number;
+  uniqueLocationCount: number;
+  titleEnrichedArticleCount: number;
+  omittedMentionCount: number;
+  omittedByReason: {
+    invalidCoordinates: number;
+    notProximalToConflictTheme: number;
+    duplicateMention: number;
+    selectionCap: number;
+  };
+  titleEnrichment: {
+    status: "ok" | "unavailable";
+    apiEndpoint: string;
+    query: string;
+    maxRecords: number;
+    timespan: string;
+    sort: string;
+    fetchedArticleCount: number;
+    matchedArticleCount: number;
+    requestUrl: string | null;
+    detail: string | null;
+  };
+  requestUrls: string[];
+  selection: string;
+  caveat: string;
+  statusDetail?: string;
+  preservedAt?: string;
+}
+
 export interface OsintSnapshot {
   fetchedAt: string;
   sources: Record<string, string>;
@@ -372,6 +476,8 @@ export interface OsintSnapshot {
   internetOutages: IodaInternetOutage[];
   internetOutageMeta: IodaInternetOutageMeta | null;
   ucdpMeta: UcdpIngestionMeta | null;
+  gdeltGeoNews: GdeltGeoNewsMention[];
+  gdeltGeoMeta: GdeltGeoIngestionMeta | null;
   errors: string[];
 }
 

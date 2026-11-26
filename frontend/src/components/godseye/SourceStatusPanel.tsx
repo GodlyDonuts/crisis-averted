@@ -45,6 +45,14 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
         ? `${ucdpMeta.preservedPriorEventCount} preserved · ${ucdpMeta.status}`
         : ucdpMeta.status
     : "metadata unavailable";
+  const gdeltGeoMeta = snapshot.gdeltGeoMeta;
+  const gdeltGeoValue = gdeltGeoMeta
+    ? gdeltGeoMeta.status === "ok"
+      ? `${gdeltGeoMeta.ingestedMentionCount} mapped/${gdeltGeoMeta.conflictThemeRowCount} conflict rows · ok`
+      : gdeltGeoMeta.status === "preserved"
+        ? `${snapshot.gdeltGeoNews.length} preserved · ${gdeltGeoMeta.status}`
+        : gdeltGeoMeta.status
+    : `${snapshot.gdeltGeoNews.length} mapped · metadata unavailable`;
   return (
     <aside className="godseye-panel godseye-scrollbar pointer-events-auto absolute right-4 top-[4.5rem] z-50 hidden max-h-[calc(100vh-5.5rem)] w-[360px] overflow-y-auto xl:block">
       <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
@@ -74,6 +82,8 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
         <Row label="IODA outage detections" value={outageValue} warn={outageMeta?.status !== "ok"} />
         <Row label="IODA query window" value={`${outageMeta ? `${Math.round(outageMeta.queryWindow.lookbackSeconds / 3600)}h ending ${outageWindowEnd}` : "not loaded"}`} />
         <Row label="Map of Wars records" value={String(snapshot.mapOfWarsEvents.length)} />
+        <Row label="GDELT geo news" value={gdeltGeoValue} warn={gdeltGeoMeta?.status !== "ok"} />
+        <Row label="GDELT geo omissions" value={gdeltGeoMeta ? `${gdeltGeoMeta.omittedMentionCount} accounted · ${gdeltGeoMeta.uniqueArticleCount} articles/${gdeltGeoMeta.uniqueLocationCount} locations` : "not loaded"} />
         <Row label="UCDP official events" value={ucdpValue} warn={ucdpMeta?.status !== "ok"} />
         <Row label="UCDP release" value={ucdpMeta ? `${ucdpMeta.version} · ${ucdpMeta.datasetRelease}` : "not loaded"} />
         <Row label="Known exploited CVEs" value={String(snapshot.cyberVulnerabilities.length)} />
@@ -102,6 +112,18 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
           <p className="mt-2 text-[11px] leading-relaxed text-white/54">
             Unix window {outageMeta.queryWindow.from}–{outageMeta.queryWindow.until}; {outageMeta.countryEventCount} country and {outageMeta.regionEventCount} region records fetched, {outageMeta.omittedEventCount} omitted when not defensibly geolocatable. Coordinates are coarse Natural Earth reference placements, not outage origins or footprints.
             {outageMeta.status === "preserved" ? " Current ingest degraded; prior build-time snapshot retained." : ""}
+          </p>
+        </div>
+      ) : null}
+
+      {gdeltGeoMeta ? (
+        <div className="border-t border-white/8 px-4 py-3">
+          <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/34">
+            <Activity className="h-3.5 w-3.5" /> GDELT geolocated conflict news
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-white/54">
+            {gdeltGeoMeta.slotsIngested.length} fifteen-minute GKG slots ingested ({gdeltGeoMeta.rowsScanned.toLocaleString()} rows scanned), {gdeltGeoMeta.ingestedMentionCount} mentions mapped across {gdeltGeoMeta.uniqueLocationCount} locations and {gdeltGeoMeta.uniqueArticleCount} articles. Omissions accounted: {gdeltGeoMeta.omittedByReason.notProximalToConflictTheme} beyond the {gdeltGeoMeta.proximityChars}-character theme-proximity window, {gdeltGeoMeta.omittedByReason.duplicateMention} duplicates, {gdeltGeoMeta.omittedByReason.invalidCoordinates} invalid coordinates, {gdeltGeoMeta.omittedByReason.selectionCap} over the selection cap; {gdeltGeoMeta.countryLevelMentionCount} country-level mentions out of scope by design. Points are places mentioned in news text near automated conflict-theme tags — media attention, never verified incidents. Headlines attached for {gdeltGeoMeta.titleEnrichedArticleCount} articles{gdeltGeoMeta.titleEnrichment.status === "ok" ? " via DOC API cross-reference" : "; DOC API title enrichment unavailable"}.
+            {gdeltGeoMeta.status === "preserved" ? " Current ingest degraded; prior build-time snapshot retained." : ""}
           </p>
         </div>
       ) : null}
@@ -135,7 +157,9 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
 
       <div className="border-t border-white/8 px-4 py-3">
         <p className="font-mono text-[9px] uppercase leading-relaxed tracking-[0.12em] text-white/30">
-          Attribution and licensing: WarHeatMap is CC BY 4.0; UCDP/Map of Wars, GDELT, NASA, USGS, ADSB.lol, gpsjam.org, Launch Library, CISA, and other public feeds retain their own terms. Reports are unverified operational leads, not confirmed facts.
+          Attribution and licensing: WarHeatMap is CC BY 4.0; UCDP/Map of Wars, NASA, USGS, ADSB.lol, gpsjam.org, Launch Library, CISA, and other public feeds retain their own terms. Geolocated news mentions are courtesy of{" "}
+          <a href="https://www.gdeltproject.org/" target="_blank" rel="noreferrer" className="text-white/46 underline decoration-white/20 underline-offset-2 hover:text-white/70">The GDELT Project</a>{" "}
+          (citation required by GDELT terms of use). Reports are unverified operational leads, not confirmed facts.
         </p>
       </div>
 
