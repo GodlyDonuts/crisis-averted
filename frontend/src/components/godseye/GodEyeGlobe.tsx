@@ -605,7 +605,7 @@ export default function GodEyeGlobe({
       if (cancelled || !globeRef.current) return;
       cloudTexture.colorSpace = SRGBColorSpace;
       const clouds = new Mesh(
-        new SphereGeometry(globe.getGlobeRadius() * 1.0065, 96, 96),
+        new SphereGeometry(globe.getGlobeRadius() * 1.0065, 56, 56),
         new MeshPhongMaterial({
           map: cloudTexture,
           transparent: true,
@@ -855,7 +855,7 @@ export default function GodEyeGlobe({
         })
         .ringPropagationSpeed((event) => 0.7 + (event as ConflictEvent).intensity * 1.15)
         .ringRepeatPeriod((event) => selectedEvent?.id === (event as ConflictEvent).id ? 950 : 1750 + (1 - (event as ConflictEvent).intensity) * 1200)
-        .ringResolution(64);
+        .ringResolution(32);
     } else {
       globe.ringsData([]);
     }
@@ -874,7 +874,7 @@ export default function GodEyeGlobe({
         })
         .arcAltitude((arc) => (arc as SignalArc).altitude)
         .arcStroke(0.24)
-        .arcCurveResolution(48)
+        .arcCurveResolution(28)
         .arcCircularResolution(8)
         .arcDashLength(0.36)
         .arcDashGap(0.72)
@@ -935,7 +935,7 @@ export default function GodEyeGlobe({
       .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "launch" ? 0.015 : (point as GlobePointObject).objectKind === "natural" ? 0.014 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
       .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? "#b8c29a" : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "natural" ? "#30d158" : pointColor(point as ConflictEvent))
       .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
-      .pointResolution(12)
+      .pointResolution(9)
       .pointsMerge(false)
       .pointsTransitionDuration(320)
       .pointLabel((point) => {

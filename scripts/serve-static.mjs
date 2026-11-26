@@ -30,6 +30,11 @@ createServer((request, response) => {
   if (!existsSync(file) && !extname(file)) file = join(file, 'index.html');
   if (existsSync(file) && statSync(file).isDirectory()) file = join(file, 'index.html');
   if (!existsSync(file)) file = join(root, 'index.html');
-  response.writeHead(200, { 'content-type': types.get(extname(file)) || 'application/octet-stream', 'cache-control': 'no-cache' });
+  const extension = extname(file);
+  const immutable = pathname.startsWith('/_next/static/') || ['.png', '.jpg', '.jpeg', '.wasm', '.woff2'].includes(extension);
+  response.writeHead(200, {
+    'content-type': types.get(extension) || 'application/octet-stream',
+    'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+  });
   createReadStream(file).pipe(response);
 }).listen(port, () => console.log(`God's Eye static export: http://localhost:${port}/`));

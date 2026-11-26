@@ -488,6 +488,13 @@ async fn main() {
         .cloned()
         .collect();
     let priority_event_meshes = build_event_meshes(&priority_incidents);
+    let mut aircraft_by_speed: Vec<&Aircraft> = osint.aircraft.iter().collect();
+    aircraft_by_speed.sort_by(|a, b| {
+        b.speed
+            .unwrap_or(0.0)
+            .partial_cmp(&a.speed.unwrap_or(0.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let border_meshes = build_border_meshes();
     let gps_meshes = build_gps_meshes(&osint.gps_interference);
 
@@ -715,13 +722,7 @@ async fn main() {
             15.0,
             Color::new(0.77, 0.64, 0.36, 0.85),
         );
-        let mut recent: Vec<&Incident> = incidents.iter().collect();
-        recent.sort_by(|a, b| {
-            b.occurred_at
-                .partial_cmp(&a.occurred_at)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        for (index, event) in recent.iter().take(18).enumerate() {
+        for (index, event) in incidents.iter().take(18).enumerate() {
             let y = 132.0 + index as f32 * 30.0;
             if y > height - 105.0 {
                 break;
@@ -850,14 +851,7 @@ async fn main() {
                 14.0,
                 Color::new(0.72, 0.6, 0.34, 0.85),
             );
-            let mut aircraft: Vec<&Aircraft> = osint.aircraft.iter().collect();
-            aircraft.sort_by(|a, b| {
-                b.speed
-                    .unwrap_or(0.0)
-                    .partial_cmp(&a.speed.unwrap_or(0.0))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            for (index, item) in aircraft.iter().take(5).enumerate() {
+            for (index, item) in aircraft_by_speed.iter().take(5).enumerate() {
                 let y = 130.0 + index as f32 * 22.0;
                 let identity = item
                     .callsign

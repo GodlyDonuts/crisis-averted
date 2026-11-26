@@ -65,14 +65,16 @@ def _build_indexes() -> None:
     )
 
 
-def get_crises(year: int, month: int) -> list[dict]:
-    """Return crisis_summary rows for a given year and month."""
+def get_crises(year: int, month: int | None = None) -> list[dict]:
+    """Return crisis_summary rows for a year, optionally narrowed to one month."""
+    if month is None:
+        return _crisis_by_year.get(year, [])
     return _crisis_by_year_month.get((year, month), [])
 
 
-def get_projects(iso3: str, year: int, month: int) -> list[dict]:
-    """Return project_embeddings rows for a country-year and month."""
-    return _projects_by_iso3_year.get((iso3.upper(), year, month), [])
+def get_projects(iso3: str, year: int) -> list[dict]:
+    """Return project_embeddings rows for a country-year."""
+    return _projects_by_iso3_year.get((iso3.upper(), year), [])
 
 
 def _safe_int(v) -> int | None:

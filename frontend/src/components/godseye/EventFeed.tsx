@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { BadgeCheck, RadioTower } from "lucide-react";
 import type { ConflictEvent } from "@/types/conflict";
 import { formatRelativeTime, normalizeCategory, SEVERITY_META } from "@/lib/conflictData";
@@ -19,7 +19,7 @@ export default function EventFeed({ events, selectedEventId, onEventSelect }: Ev
     const interval = window.setInterval(update, 60000);
     return () => window.clearInterval(interval);
   }, []);
-  const feedEvents = [...events]
+  const feedEvents = useMemo(() => [...events]
     .sort((a, b) => {
       const aFuture = a.occurredAt > now + 15 * 60 * 1000 ? 1 : 0;
       const bFuture = b.occurredAt > now + 15 * 60 * 1000 ? 1 : 0;
@@ -28,7 +28,7 @@ export default function EventFeed({ events, selectedEventId, onEventSelect }: Ev
       if (severityDelta !== 0) return severityDelta;
       return b.occurredAt - a.occurredAt;
     })
-    .slice(0, 90);
+    .slice(0, 90), [events, now]);
 
   return (
     <aside className="godseye-panel pointer-events-auto absolute bottom-[172px] right-4 top-20 z-30 hidden w-[372px] flex-col overflow-hidden xl:flex">
