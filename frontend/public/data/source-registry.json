@@ -1,6 +1,6 @@
 {
   "schemaVersion": "source-registry/v1",
-  "registryVersion": "2026.11.26.1",
+  "registryVersion": "2026.11.26.2",
   "updatedAt": "2026-11-26",
   "documentation": "docs/SOURCE_GOVERNANCE.md",
   "formatNote": "Canonical JSON is used instead of YAML because the repository does not pin a YAML parser and adding one solely for configuration parsing would expand the supply-chain surface. The custom validator treats this file as the machine-readable registry contract. Values are provenance audit statements, not legal advice or compliance certification.",
@@ -1616,6 +1616,94 @@
       },
       "collections": ["webcams"],
       "connectorVersion": "godseye-windy-webcams/2026.11.26.1"
+    },
+    {
+      "id": "reliefweb-api",
+      "displayName": "ReliefWeb API v2 humanitarian reports and disasters",
+      "owner": "United Nations Office for the Coordination of Humanitarian Affairs (OCHA), with content owned by original publishing organizations",
+      "endpoint": {
+        "urls": [
+          "https://api.reliefweb.int/v2/disasters",
+          "https://api.reliefweb.int/v2/reports",
+          "https://api.reliefweb.int/v2/countries"
+        ],
+        "protocol": "https-json-post",
+        "documentationUrl": "https://apidoc.reliefweb.int/"
+      },
+      "license": {
+        "status": "terms-identified",
+        "name": "ReliefWeb Terms & Conditions; original-source rights retained",
+        "termsUrl": "https://reliefweb.int/terms-conditions",
+        "evidenceUrl": "https://reliefweb.int/terms-conditions",
+        "note": "The terms permit downloading/copying for personal, non-commercial use but restrict resale, redistribution, compilation, and derivative works unless more specific permission applies. ReliefWeb also instructs users to respect original-source intellectual property. This registry therefore records a restrictive review posture rather than treating public API access as an open redistribution license."
+      },
+      "attribution": {
+        "requirement": "required",
+        "text": "Source: ReliefWeb (https://reliefweb.int), UN OCHA, and the original publishing organization named on each record. Records link to canonical ReliefWeb/source URLs; narrative, attachments, and images are not redistributed.",
+        "evidenceUrl": "https://reliefweb.int/terms-conditions",
+        "note": "ReliefWeb republishes partner material with source attribution. OCHA map permission language applies only to OCHA materials and is not generalized to other sources."
+      },
+      "cadence": {
+        "publisherCadence": "continuous humanitarian report publication and disaster lifecycle updates",
+        "expectedUpdateSeconds": 1800,
+        "retrievalCadence": "twice-hourly static build; exactly three serial POST requests to disasters, reports, and countries",
+        "retention": {
+          "mode": "latest-plus-previous-build-fallback",
+          "maxCacheAgeSeconds": null,
+          "note": "A failed or unconfigured ingest may preserve the prior build-time metadata snapshot with an explicit preserved status; original retrieval and publisher timestamps are not rewritten."
+        },
+        "freshness": {
+          "warnAfterSeconds": 7200,
+          "staleAfterSeconds": 43200,
+          "timestampBasis": "api-response-date-fields-and-build-retrieval-time",
+          "note": "Records carry ReliefWeb created/changed/original dates. The connector retrieval timestamp is separate; preserved rows retain original timestamps."
+        }
+      },
+      "access": {
+        "authentication": {
+          "mode": "api-key-query",
+          "required": true,
+          "envVars": [
+            "RELIEFWEB_APPNAME"
+          ]
+        },
+        "browser": {
+          "mode": "keyed-build-time-only",
+          "cors": "unknown",
+          "runtimeFetchAllowed": false,
+          "note": "ReliefWeb requires a pre-approved appname query parameter on every API request. The appname is supplied only during static ingestion and is never serialized into public chunks or fetched from the browser."
+        }
+      },
+      "redistribution": {
+        "status": "restricted-review",
+        "publicStaticRisk": "high",
+        "bulkPublicExport": "license-or-permission-required",
+        "constraints": [
+          "ReliefWeb terms restrict redistribution and derivative compilation",
+          "original publishing organizations retain rights in their materials",
+          "only factual metadata, identifiers, links, dates, taxonomy, organizations, status, and country-centroid georeferences are emitted",
+          "report bodies, body-html, headline summaries, disaster descriptions, attachments, images, and excerpts are intentionally omitted",
+          "legal/reuse review required before relying on bulk redistribution"
+        ],
+        "note": "High risk means unresolved permission, not a determination of infringement or compliance. The connector is deliberately metadata-and-links-only to minimize reuse beyond fair factual reference."
+      },
+      "confidence": {
+        "authority": "authoritative humanitarian information index and disaster taxonomy operated by OCHA; underlying report content remains attributable to original sources",
+        "verification": "publisher/index metadata, not incident verification; disaster entries group reporting and report entries are documents rather than confirmed incidents",
+        "coverage": "alert/current disasters plus latest published reports within bounded build-time API queries; absence is not absence of humanitarian need or incidents",
+        "automation": "ReliefWeb editorial/indexing workflow plus deterministic connector normalization",
+        "caveats": [
+          "coordinates are ReliefWeb country centroids joined through primary-country references, never incident points",
+          "ReliefWeb supplies disaster workflow status but no numeric humanitarian severity scale in the fields used",
+          "situational reports, appeals, disasters, and conflict incidents are distinct categories",
+          "narrative fields and attachments are intentionally not redistributed",
+          "the API requires a pre-approved appname and is limited to 1000 entries/call and 10000 calls/day"
+        ]
+      },
+      "collections": [
+        "reliefwebRecords"
+      ],
+      "connectorVersion": "godseye-reliefweb-humanitarian/2026.11.26.1"
     }
   ]
 }

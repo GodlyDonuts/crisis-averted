@@ -66,6 +66,19 @@ export const OSINT_CHUNK_LAYOUT = Object.freeze([
     collections: [collection('naturalEvents', 'records')],
   }),
   chunk({
+    id: 'humanitarian',
+    title: 'ReliefWeb humanitarian intelligence',
+    priority: 25,
+    critical: false,
+    // Semantic contextual dependency only: humanitarian records are never merged into
+    // the conflict incident lattice and the chunk remains independently self-contained.
+    dependencies: ['conflict'],
+    collections: [
+      collection('reliefwebRecords', 'records'),
+      collection('reliefwebMeta', 'metadata'),
+    ],
+  }),
+  chunk({
     id: 'orbital',
     title: 'Orbital objects and launches',
     priority: 30,
@@ -131,6 +144,7 @@ export const OSINT_CHUNK_LAYOUT = Object.freeze([
       'conflict',
       'connectivity',
       'environmental',
+      'humanitarian',
       'orbital',
       'transport-aviation',
       'maritime',
@@ -168,6 +182,8 @@ export const OSINT_SNAPSHOT_FIELD_ORDER = Object.freeze([
   'ucdpMeta',
   'gdeltGeoNews',
   'gdeltGeoMeta',
+  'reliefwebRecords',
+  'reliefwebMeta',
   'errors',
   'provenanceLedger',
 ]);

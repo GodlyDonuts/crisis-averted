@@ -822,6 +822,160 @@ export interface GdeltGeoIngestionMeta {
   preservedAt?: string;
 }
 
+export type ReliefWebRecordKind = "disaster" | "situation-report" | "appeal" | "map-infographic" | "other-report";
+export type ReliefWebSnapshotStatus = "ok" | "preserved" | "unavailable" | "not-configured";
+export type ReliefWebCoordinatePrecision = "country-centroid";
+
+export interface ReliefWebNamedReference {
+  id: number | null;
+  name: string | null;
+}
+
+export interface ReliefWebCountryReference extends ReliefWebNamedReference {
+  shortname: string | null;
+  iso3: string;
+  primary: boolean | null;
+}
+
+export interface ReliefWebDisasterTypeReference extends ReliefWebNamedReference {
+  code: string | null;
+  primary: boolean | null;
+}
+
+export interface ReliefWebOrganizationReference extends ReliefWebNamedReference {
+  shortname: string | null;
+  longname: string | null;
+  homepage: string | null;
+  typeName: string | null;
+}
+
+export interface ReliefWebLinkedDisaster {
+  id: number;
+  name: string;
+  glide: string | null;
+  types: ReliefWebDisasterTypeReference[];
+}
+
+/**
+ * Factual humanitarian metadata deliberately normalized from ReliefWeb API v2. It is not
+ * a conflict incident, not a verified incident location, and contains no redistributed
+ * narrative, excerpt, attachment, image, casualty, displacement, or people-in-need value.
+ */
+export interface ReliefWebRecord {
+  id: string;
+  apiResource: "disasters" | "reports";
+  recordKind: ReliefWebRecordKind;
+  reliefwebId: number;
+  uuid: string | null;
+  title: string;
+  url: string;
+  urlAlias: string | null;
+  originUrl: string | null;
+  status: string | null;
+  dates: { created: string | null; changed: string | null; original: string | null };
+  publisherTimestamp: string;
+  glide: string | null;
+  relatedGlide: string[];
+  primaryCountry: ReliefWebCountryReference | null;
+  countries: ReliefWebCountryReference[];
+  disasterTypes: ReliefWebDisasterTypeReference[];
+  primaryType: ReliefWebDisasterTypeReference | null;
+  organizations: ReliefWebOrganizationReference[];
+  linkedDisasters: ReliefWebLinkedDisaster[];
+  format: ReliefWebNamedReference | null;
+  themes: ReliefWebNamedReference[];
+  languages: (ReliefWebNamedReference & { code: string | null })[];
+  location: {
+    lat: number;
+    lng: number;
+    precision: ReliefWebCoordinatePrecision;
+    countryIso3: string;
+    countryName: string;
+    basis: string;
+    note: string;
+  } | null;
+  coordinatePrecision: ReliefWebCoordinatePrecision | null;
+  coordinateNote: string;
+  alertMetadata: {
+    status: string;
+    basis: string;
+    severityScale: null;
+  } | null;
+  severityMetadata: null;
+  rights: {
+    narrativeIncluded: false;
+    excerptIncluded: false;
+    attachmentsIncluded: false;
+    redistributionNote: string;
+  };
+  methodologyNote: string;
+}
+
+export interface ReliefWebIngestionMeta {
+  status: ReliefWebSnapshotStatus;
+  provider: string;
+  connectorVersion: string;
+  apiBaseUrl: string;
+  apiVersion: "v2";
+  documentationUrl: string;
+  termsUrl: string;
+  appnameConfigured: boolean;
+  authentication: string;
+  plannedCallCount: number;
+  rateLimits: {
+    maxEntriesPerCall: number;
+    maxCallsPerDay: number;
+    minRequestIntervalMs: number;
+    requestsAreSerial: boolean;
+  };
+  disasterLimit: number;
+  reportLimit: number;
+  countryLimit: number;
+  maxRecords: number;
+  retrievedAt: string | null;
+  requests: {
+    resource: string;
+    method: "POST";
+    endpoint: string;
+    redactedUrl: string;
+    body: Record<string, unknown>;
+    bodySha256: string;
+    responseCount: number | null;
+    totalCount: number | null;
+  }[];
+  fetchedDisasterCount: number;
+  fetchedReportCount: number;
+  fetchedCountryReferenceCount: number;
+  validDisasterCount: number;
+  validReportCount: number;
+  coordinateAttachedCount: number;
+  recordsWithoutCoordinates: number;
+  ingestedRecordCount: number;
+  omittedRecordCount: number;
+  omittedByReason: {
+    invalidApiItem: number;
+    missingRequiredIdentity: number;
+    invalidTimestamps: number;
+    duplicateCanonicalId: number;
+    selectionCap: number;
+  };
+  fieldOmissions: {
+    reportBodiesNotRedistributed: number;
+    reportHeadlineSummariesNotRedistributed: number;
+    reportAttachmentsNotIngested: number;
+    reportImagesNotIngested: number;
+    disasterDescriptionsNotRedistributed: number;
+    coordinateLookupMisses: number;
+    invalidCountryCentroidsExcluded: number;
+  };
+  recordKindCounts: Record<ReliefWebRecordKind, number>;
+  redistribution: string;
+  selection: string;
+  caveat: string;
+  statusDetail: string | null;
+  preservedAt: string | null;
+}
+
 export interface SourceRegistryLicense {
   status: "open-license" | "public-domain" | "terms-identified" | "unknown";
   name: string | null;
@@ -939,6 +1093,8 @@ export interface OsintSnapshot {
   ucdpMeta: UcdpIngestionMeta | null;
   gdeltGeoNews: GdeltGeoNewsMention[];
   gdeltGeoMeta: GdeltGeoIngestionMeta | null;
+  reliefwebRecords: ReliefWebRecord[];
+  reliefwebMeta: ReliefWebIngestionMeta | null;
   errors: string[];
 }
 
@@ -1016,7 +1172,8 @@ export type ConvergenceDomain =
   | "space-launch"
   | "environmental-event"
   | "connectivity-outage"
-  | "media-attention";
+  | "media-attention"
+  | "humanitarian-context";
 
 /**
  * Measurement family an evidence domain belongs to. Corroboration counting uses families,
@@ -1031,7 +1188,8 @@ export type ConvergenceEvidenceFamily =
   | "spaceflight-schedule"
   | "environmental-sensors"
   | "network-measurement"
-  | "media-attention";
+  | "media-attention"
+  | "humanitarian-context";
 
 /**
  * Card-level convergence classification. These labels describe evidence geometry only —

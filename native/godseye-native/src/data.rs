@@ -153,6 +153,12 @@ pub struct OsintSnapshot {
     pub gdelt_geo_news: Vec<GdeltGeoNewsMention>,
     #[serde(rename = "gdeltGeoMeta")]
     pub gdelt_geo_meta: Option<GdeltGeoIngestionMeta>,
+    /// ReliefWeb humanitarian metadata is retained as opaque values for counts/provenance only.
+    /// It is never projected as conflict incidents in the native vertical slice.
+    #[serde(rename = "reliefwebRecords")]
+    pub reliefweb_records: Vec<serde_json::Value>,
+    #[serde(rename = "reliefwebMeta")]
+    pub reliefweb_meta: Option<serde_json::Value>,
     pub errors: Vec<String>,
 }
 
@@ -1415,7 +1421,7 @@ pub fn rebuild_incidents(fallback_incidents: &[Incident], osint: &OsintSnapshot)
 
 pub fn snapshot_revision(snapshot: &OsintSnapshot) -> String {
     format!(
-        "{}|{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+        "{}|{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
         snapshot.fetched_at.as_deref().unwrap_or("no-fetched-at"),
         snapshot.military_aircraft.len(),
         snapshot.aircraft.len(),
@@ -1426,7 +1432,8 @@ pub fn snapshot_revision(snapshot: &OsintSnapshot) -> String {
         snapshot.gps_interference.len(),
         snapshot.map_events.len(),
         snapshot.internet_outages.len(),
-        snapshot.gdelt_geo_news.len()
+        snapshot.gdelt_geo_news.len(),
+        snapshot.reliefweb_records.len()
     )
 }
 

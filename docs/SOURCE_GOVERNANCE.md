@@ -75,6 +75,10 @@ This is not a perfect entropy scanner. It deliberately avoids flagging hashes, T
 
 The keyed-source scan looks for non-public `process.env` use in client source and for keyed upstream hostnames near network/credential contexts in source and compiled chunks. It cannot prove absence of every indirect or dynamically constructed endpoint. Registry browser modes and build-time ingestion are the primary controls; the scan is a deterministic regression check.
 
+## ReliefWeb humanitarian metadata posture (catalog batch 20)
+
+ReliefWeb API v2 access requires a pre-approved `appname` URL parameter. The console treats `RELIEFWEB_APPNAME` as build-time-only connector configuration, never serializes its value, never fetches ReliefWeb from the browser, and records only redacted request URLs plus POST-body hashes in ingestion provenance. Because ReliefWeb Terms restrict redistribution/compilation and original publishing organizations retain rights, `reliefwebRecords` is deliberately limited to factual metadata: identifiers, titles, dates, taxonomy, organizations, status/GLIDE references, canonical/original links, and country-centroid georeferences. Narrative bodies, HTML, summaries, disaster descriptions, attachments, images, excerpts, casualty/displacement/people-in-need values, and invented severity scores are structurally excluded. ReliefWeb rows remain humanitarian metadata/context and are never conflict incidents or independent corroboration.
+
 ## Updating a source
 
 1. Update the connector implementation and bump its `connectorVersion`.

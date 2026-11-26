@@ -28,7 +28,7 @@ import {
 } from "three";
 import { assetPath } from "@/lib/assets";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import type { ConflictEvent, ConflictTheater, GdeltGeoNewsMention, IodaInternetOutage, MilitaryAircraft, OsintAircraft, OsintLaunch, OsintNaturalEvent, OsintSatellite, OsintVessel, GpsInterferenceCell, SeverityKey } from "@/types/conflict";
+import type { ConflictEvent, ConflictTheater, GdeltGeoNewsMention, IodaInternetOutage, MilitaryAircraft, OsintAircraft, OsintLaunch, OsintNaturalEvent, OsintSatellite, OsintVessel, GpsInterferenceCell, ReliefWebRecord, SeverityKey } from "@/types/conflict";
 import { degreesLat, degreesLong, eciToGeodetic, gstime, propagate, twoline2satrec } from "satellite.js";
 import { classifyAircraftRole, escapeHtml, formatRelativeTime, naturalEventColor, normalizeCategory, normalizeTheaterName, SEVERITY_META } from "@/lib/conflictData";
 import { formatUtcExact, resolveIncidentOccurrenceWindow, type PlaybackMode } from "@/lib/incidentTime";
@@ -78,6 +78,7 @@ export interface GodEyeLayerToggles {
   gpsInterference: boolean;
   internetOutages: boolean;
   gdeltGeoNews: boolean;
+  reliefwebHumanitarian: boolean;
 }
 
 export interface GodEyeCameraState {
@@ -108,6 +109,7 @@ interface GodEyeGlobeProps {
   gpsInterference: GpsInterferenceCell[];
   internetOutages: IodaInternetOutage[];
   gdeltGeoNews: GdeltGeoNewsMention[];
+  reliefwebRecords: ReliefWebRecord[];
   selectedEvent: ConflictEvent | null;
   selectedTheater: ConflictTheater | null;
   focusTarget: GodEyeFocusTarget | null;
@@ -128,6 +130,7 @@ interface GodEyeGlobeProps {
   onAircraftSelect: (aircraft: MilitaryAircraft) => void;
   onCivilAircraftSelect: (aircraft: OsintAircraft) => void;
   onVesselSelect: (vessel: OsintVessel) => void;
+  onReliefWebSelect: (record: ReliefWebRecord) => void;
   onTheaterSelect: (theater: ConflictTheater) => void;
   /** Raw globe center notifications. Consumers must throttle/persist outside React if they use this for URL state. */
   onCameraChange?: (camera: GodEyeCameraState) => void;
@@ -173,6 +176,17 @@ interface GdeltNewsLocationMarker {
   latestSlotTime: string;
 }
 
+interface ReliefWebLocationMarker {
+  key: string;
+  lat: number;
+  lng: number;
+  countryIso3: string;
+  countryName: string;
+  records: ReliefWebRecord[];
+  latestTimestamp: string;
+  dominantKind: ReliefWebRecord["recordKind"];
+}
+
 type GlobePointObject =
   | (ConflictEvent & { objectKind: "event" })
   | (MilitaryAircraft & { objectKind: "aircraft" })
@@ -182,7 +196,8 @@ type GlobePointObject =
   | (OsintLaunch & { objectKind: "launch" })
   | (OsintNaturalEvent & { objectKind: "natural" })
   | (InternetOutageMarker & { objectKind: "internetOutage" })
-  | (GdeltNewsLocationMarker & { objectKind: "gdeltNews" });
+  | (GdeltNewsLocationMarker & { objectKind: "gdeltNews" })
+  | (ReliefWebLocationMarker & { objectKind: "reliefweb" });
 
 interface SignalArc {
   id: string;
@@ -525,6 +540,47 @@ function gdeltNewsTooltip(marker: GdeltNewsLocationMarker): string {
   return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#9fb0c9">CONFLICT-NEWS MEDIA MENTION · NOT A VERIFIED INCIDENT</div><div class="godseye-tooltip__title">${escapeHtml(marker.locationName)}</div><div class="godseye-tooltip__meta">${articleCount} article${articleCount === 1 ? "" : "s"} mention${articleCount === 1 ? "s" : ""} this location within a sentence or two of automated conflict-theme tags (${escapeHtml(themeList)})</div>${articleLines}${additional}<div class="godseye-tooltip__meta">${escapeHtml(GDELT_NEWS_PRECISION_LANGUAGE[marker.coordinatePrecision])}</div><div class="godseye-tooltip__meta">Media-attention geography only: no event is confirmed at this point. GDELT geocoding, translation, and theme tagging are automated and error-prone. Source: GDELT GKG 2.1 feeds · The GDELT Project.</div></div>`;
 }
 
+
+const RELIEFWEB_KIND_LABEL: Record<ReliefWebRecord["recordKind"], string> = {
+  disaster: "ReliefWeb disaster index entry",
+  "situation-report": "situation report",
+  appeal: "appeal / response plan",
+  "map-infographic": "map / infographic",
+  "other-report": "humanitarian report/analysis",
+};
+const RELIEFWEB_KIND_RANK: Record<ReliefWebRecord["recordKind"], number> = { disaster: 3, "situation-report": 2, appeal: 2, "map-infographic": 1, "other-report": 1 };
+const RELIEFWEB_KIND_COLOR: Record<ReliefWebRecord["recordKind"], string> = { disaster: "#ff9a62", "situation-report": "#7dd8d0", appeal: "#f0c36d", "map-infographic": "#93b8e8", "other-report": "#a8a3d8" };
+
+function buildReliefWebMarkers(records: ReliefWebRecord[]): ReliefWebLocationMarker[] {
+  const groups = new Map<string, ReliefWebLocationMarker>();
+  for (const record of records) {
+    if (!record.location) continue;
+    const key = `${record.location.countryIso3}:${record.location.lat.toFixed(3)}:${record.location.lng.toFixed(3)}`;
+    let marker = groups.get(key);
+    if (!marker) {
+      marker = { key, lat: record.location.lat, lng: record.location.lng, countryIso3: record.location.countryIso3, countryName: record.location.countryName, records: [], latestTimestamp: record.publisherTimestamp, dominantKind: record.recordKind };
+      groups.set(key, marker);
+    }
+    marker.records.push(record);
+    if (Date.parse(record.publisherTimestamp) > Date.parse(marker.latestTimestamp)) marker.latestTimestamp = record.publisherTimestamp;
+    if (RELIEFWEB_KIND_RANK[record.recordKind] > RELIEFWEB_KIND_RANK[marker.dominantKind]) marker.dominantKind = record.recordKind;
+  }
+  for (const marker of groups.values()) {
+    marker.records.sort((a, b) => Date.parse(b.publisherTimestamp) - Date.parse(a.publisherTimestamp) || RELIEFWEB_KIND_RANK[b.recordKind] - RELIEFWEB_KIND_RANK[a.recordKind] || a.id.localeCompare(b.id));
+  }
+  return [...groups.values()].sort((a, b) => b.records.length - a.records.length || Date.parse(b.latestTimestamp) - Date.parse(a.latestTimestamp) || a.key.localeCompare(b.key));
+}
+
+function reliefwebTooltip(marker: ReliefWebLocationMarker): string {
+  const lines = marker.records.slice(0, 3).map((record) => {
+    const source = record.organizations[0]?.shortname ?? record.organizations[0]?.name ?? "original source linked";
+    const status = record.status ? ` · ${escapeHtml(record.status)}` : "";
+    return `<div class="godseye-tooltip__meta">• ${escapeHtml(record.title)} — ${escapeHtml(RELIEFWEB_KIND_LABEL[record.recordKind])}${status} · ${escapeHtml(source)} · ${formatRelativeTime(Date.parse(record.publisherTimestamp))}</div>`;
+  }).join("");
+  const additional = marker.records.length > 3 ? `<div class="godseye-tooltip__meta">+${marker.records.length - 3} additional ReliefWeb metadata record${marker.records.length - 3 === 1 ? "" : "s"} at this national centroid</div>` : "";
+  return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#7dd8d0">HUMANITARIAN INTELLIGENCE · NOT A VERIFIED INCIDENT</div><div class="godseye-tooltip__title">${escapeHtml(marker.countryName)}</div><div class="godseye-tooltip__meta">${marker.records.length} ReliefWeb disaster/report metadata record${marker.records.length === 1 ? "" : "s"} grouped only because they share a country centroid</div>${lines}${additional}<div class="godseye-tooltip__meta">Symbolic ReliefWeb country-centroid placement only — not a report location, incident point, disaster footprint, or verification of impact. Narrative, attachments, and images are deliberately not redistributed; open ReliefWeb for source material.</div></div>`;
+}
+
 function severityPointRadius(event: ConflictEvent, selected: boolean): number {
   if (selected) return 0.23;
   const base = event.severity === "critical" ? 0.12 : event.severity === "high" ? 0.094 : event.severity === "medium" ? 0.066 : event.severity === "low" ? 0.05 : 0.05;
@@ -591,6 +647,7 @@ function globeObjectAltitude(point: GlobePointObject): number {
   if (point.objectKind === "launch") return 0.015;
   if (point.objectKind === "internetOutage") return 0.017;
   if (point.objectKind === "gdeltNews") return 0.013;
+  if (point.objectKind === "reliefweb") return 0.015;
   if (point.objectKind === "natural") return 0.014;
   return GLOBE_RADIUS_ALTITUDE + (point.intensity * 0.006);
 }
@@ -659,6 +716,7 @@ export default function GodEyeGlobe({
   gpsInterference,
   internetOutages,
   gdeltGeoNews,
+  reliefwebRecords,
   selectedEvent,
   selectedTheater,
   focusTarget,
@@ -677,6 +735,7 @@ export default function GodEyeGlobe({
   onAircraftSelect,
   onCivilAircraftSelect,
   onVesselSelect,
+  onReliefWebSelect,
   onTheaterSelect,
   onCameraChange,
   onRenderFailure,
@@ -975,6 +1034,13 @@ export default function GodEyeGlobe({
     detailLevel,
     cap: renderProfile.caps.gdeltGeoNews,
   }), [gdeltNewsMarkers, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.gdeltGeoNews]);
+  const reliefwebMarkers = useMemo(() => buildReliefWebMarkers(reliefwebRecords), [reliefwebRecords]);
+  const reliefwebSelection = useMemo(() => selectViewportAdaptiveItems(reliefwebMarkers, {
+    focusLat: viewFocus.lat,
+    focusLng: viewFocus.lng,
+    detailLevel,
+    cap: renderProfile.caps.reliefwebHumanitarian,
+  }), [reliefwebMarkers, viewFocus.lat, viewFocus.lng, detailLevel, renderProfile.caps.reliefwebHumanitarian]);
   const naturalSelection = useMemo(() => selectViewportAdaptiveItems(naturalEvents, {
     focusLat: viewFocus.lat,
     focusLng: viewFocus.lng,
@@ -1373,6 +1439,9 @@ export default function GodEyeGlobe({
         if ((point as GlobePointObject).objectKind === "gdeltNews") {
           return gdeltNewsTooltip(point as GdeltNewsLocationMarker);
         }
+        if ((point as GlobePointObject).objectKind === "reliefweb") {
+          return reliefwebTooltip(point as ReliefWebLocationMarker);
+        }
         const conflictEvent = point as ConflictEvent;
         const severity = SEVERITY_META[conflictEvent.severity];
         const corroboration = conflictEvent.incident && conflictEvent.incident.memberCount > 1
@@ -1403,7 +1472,8 @@ export default function GodEyeGlobe({
         if (kind === "aircraft") onAircraftSelect(source as MilitaryAircraft);
         if (kind === "civilAircraft") onCivilAircraftSelect(source as OsintAircraft);
         if (kind === "vessel") onVesselSelect(source as OsintVessel);
-      }, [onAircraftSelect, onCivilAircraftSelect, onEventSelect, onVesselSelect]);
+        if (kind === "reliefweb") onReliefWebSelect((source as ReliefWebLocationMarker).records[0]);
+      }, [onAircraftSelect, onCivilAircraftSelect, onEventSelect, onReliefWebSelect, onVesselSelect]);
 
   // Density heatmap updates independently of markers, paths, and transport layers.
   useEffect(() => {
@@ -1652,19 +1722,20 @@ export default function GodEyeGlobe({
         ...(layers.environmental ? naturalSelection.selected.map((event) => tagGlobeObject(event, "natural")) : []),
         ...(layers.internetOutages ? internetOutageSelection.selected.map((marker) => tagGlobeObject(marker, "internetOutage")) : []),
         ...(layers.gdeltGeoNews ? gdeltNewsSelection.selected.map((marker) => tagGlobeObject(marker, "gdeltNews")) : []),
+        ...(layers.reliefwebHumanitarian ? reliefwebSelection.selected.map((marker) => tagGlobeObject(marker, "reliefweb")) : []),
       ] as GlobePointObject[])
       .pointLat("lat")
       .pointLng("lng")
       .pointAltitude((point) => globeObjectAltitude(point as GlobePointObject))
-      .pointColor((point: object) => (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? "#75bdd1" : "#548498") : (point as GlobePointObject).objectKind === "gdeltNews" ? (GDELT_NEWS_PRECISION_RANK[(point as GdeltNewsLocationMarker).coordinatePrecision] === 2 ? "#9fb0c9" : "#6d7a91") : (point as GlobePointObject).objectKind === "natural" ? naturalEventColor(point as OsintNaturalEvent) : pointColor(point as ConflictEvent))
-      .pointRadius((point) => (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? 0.066 : 0.047) : (point as GlobePointObject).objectKind === "gdeltNews" ? Math.min(0.074, 0.032 + Math.log1p((point as GdeltNewsLocationMarker).articles.length) * 0.014) : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id) * (unresolvedWindowIntersectsPlaybackFrame(point as ConflictEvent, playbackFrame) ? 0.84 : 1))
+      .pointColor((point: object) => (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? "#75bdd1" : "#548498") : (point as GlobePointObject).objectKind === "gdeltNews" ? (GDELT_NEWS_PRECISION_RANK[(point as GdeltNewsLocationMarker).coordinatePrecision] === 2 ? "#9fb0c9" : "#6d7a91") : (point as GlobePointObject).objectKind === "reliefweb" ? RELIEFWEB_KIND_COLOR[(point as ReliefWebLocationMarker).dominantKind] : (point as GlobePointObject).objectKind === "natural" ? naturalEventColor(point as OsintNaturalEvent) : pointColor(point as ConflictEvent))
+      .pointRadius((point) => (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "internetOutage" ? ((point as InternetOutageMarker).entityType === "country" ? 0.066 : 0.047) : (point as GlobePointObject).objectKind === "gdeltNews" ? Math.min(0.074, 0.032 + Math.log1p((point as GdeltNewsLocationMarker).articles.length) * 0.014) : (point as GlobePointObject).objectKind === "reliefweb" ? Math.min(0.082, 0.038 + Math.log1p((point as ReliefWebLocationMarker).records.length) * 0.016 + ((point as ReliefWebLocationMarker).dominantKind === "disaster" ? 0.01 : 0)) : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id) * (unresolvedWindowIntersectsPlaybackFrame(point as ConflictEvent, playbackFrame) ? 0.84 : 1))
       .pointResolution(renderProfile.pointResolution)
       .pointsMerge(false)
       .pointsTransitionDuration(transitionMs(320))
       .pointLabel((point) => globeObjectTooltip(point as GlobePointObject))
       .onPointClick(handlePointObjectClick);
 
-  }, [interactiveEvents, layers.orbitalAssets, layers.environmental, layers.internetOutages, layers.gdeltGeoNews, launchSelection, naturalSelection, internetOutageSelection, gdeltNewsSelection, selectedEvent, playbackFrame, detailLevel, renderProfile.pointResolution, transitionMs, pointColor, globeObjectTooltip, handlePointObjectClick, visualMode]);
+  }, [interactiveEvents, layers.orbitalAssets, layers.environmental, layers.internetOutages, layers.gdeltGeoNews, layers.reliefwebHumanitarian, launchSelection, naturalSelection, internetOutageSelection, gdeltNewsSelection, reliefwebSelection, selectedEvent, playbackFrame, detailLevel, renderProfile.pointResolution, transitionMs, pointColor, globeObjectTooltip, handlePointObjectClick, visualMode]);
 
   // Particle groups are memoized per source selection: globe.gl digests the particles layer by
   // group-object identity, so the transport groups below survive every orbital propagation tick
@@ -1797,6 +1868,7 @@ export default function GodEyeGlobe({
       gpsInterference: accountWithLayerEnabled(accountFromSelection(gpsSelection), layers.gpsInterference),
       internetOutages: accountWithLayerEnabled(accountFromSelection(internetOutageSelection), layers.internetOutages),
       gdeltGeoNews: accountWithLayerEnabled(accountFromSelection(gdeltNewsSelection), layers.gdeltGeoNews),
+      reliefwebHumanitarian: accountWithLayerEnabled(accountFromSelection(reliefwebSelection), layers.reliefwebHumanitarian),
       ringBeacons: accountWithLayerEnabled(accountForCappedLayer(ringBeaconCandidates.length, ringBeaconEvents.length, renderProfile.caps.ringBeacons), layers.beacons),
       htmlAlertMarkers: accountWithLayerEnabled(accountForCappedLayer(alertCandidates.length, htmlAlertEvents.length, renderProfile.caps.htmlAlertMarkers), layers.beacons),
       theaterLabels: accountWithLayerEnabled(accountForCappedLayer(theaterLabelSelection.total, theaterLabelSelection.labelTheaters.length, renderProfile.caps.theaterLabels), layers.theaterLabels),
@@ -1818,7 +1890,7 @@ export default function GodEyeGlobe({
       accounts,
       ...totals,
     });
-  }, [onRenderStatus, incidentSelection, militarySelection, civilAircraftSelection, vesselSelection, satelliteSelection, launchSelection, naturalSelection, gpsSelection, internetOutageSelection, gdeltNewsSelection, ringBeaconCandidates.length, ringBeaconEvents.length, renderProfile.caps.ringBeacons, renderProfile.caps.htmlAlertMarkers, renderProfile.caps.theaterLabels, renderProfile.caps.signalArcs, alertCandidates.length, htmlAlertEvents.length, theaterLabelSelection, signalArcSelection.candidateCount, signalArcs.length, layers.aircraft, layers.civilAviation, layers.maritime, layers.orbitalAssets, layers.environmental, layers.gpsInterference, layers.internetOutages, layers.gdeltGeoNews, layers.beacons, layers.theaterLabels, layers.signals, qualityTier, runtimeQualityTier, detailLevel, reducedEffects, viewFocus.altitude, deviceQualityTier, frameWindowsCompleted]);
+  }, [onRenderStatus, incidentSelection, militarySelection, civilAircraftSelection, vesselSelection, satelliteSelection, launchSelection, naturalSelection, gpsSelection, internetOutageSelection, gdeltNewsSelection, reliefwebSelection, ringBeaconCandidates.length, ringBeaconEvents.length, renderProfile.caps.ringBeacons, renderProfile.caps.htmlAlertMarkers, renderProfile.caps.theaterLabels, renderProfile.caps.signalArcs, alertCandidates.length, htmlAlertEvents.length, theaterLabelSelection, signalArcSelection.candidateCount, signalArcs.length, layers.aircraft, layers.civilAviation, layers.maritime, layers.orbitalAssets, layers.environmental, layers.gpsInterference, layers.internetOutages, layers.gdeltGeoNews, layers.reliefwebHumanitarian, layers.beacons, layers.theaterLabels, layers.signals, qualityTier, runtimeQualityTier, detailLevel, reducedEffects, viewFocus.altitude, deviceQualityTier, frameWindowsCompleted]);
 
   // Deterministic quality application: high-DPI budget, bloom, texture filtering, and satellite tile ceilings.
   useEffect(() => {

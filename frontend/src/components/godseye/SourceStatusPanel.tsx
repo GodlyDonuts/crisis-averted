@@ -131,6 +131,10 @@ export function SourceStatusPanel({ snapshot, snapshotRuntime, conflictSource, c
         ? `${snapshot.gdeltGeoNews.length} preserved · ${gdeltGeoMeta.status}`
         : gdeltGeoMeta.status
     : `${snapshot.gdeltGeoNews.length} mapped · metadata unavailable`;
+  const reliefwebMeta = snapshot.reliefwebMeta;
+  const reliefwebValue = reliefwebMeta
+    ? `${snapshot.reliefwebRecords.length} records · ${reliefwebMeta.coordinateAttachedCount} centroid · ${reliefwebMeta.status}${reliefwebMeta.appnameConfigured ? "" : " · appname absent"}`
+    : `${snapshot.reliefwebRecords.length} records · metadata unavailable`;
   const cyberMeta = snapshot.cyberVulnerabilityMeta;
   const cyberValue = cyberMeta
     ? `${snapshot.cyberVulnerabilities.length} KEV · NVD ${cyberMeta.nvd.enrichedCveCount}/${cyberMeta.nvd.requestedCveCount} · ${cyberMeta.status}`
@@ -193,6 +197,8 @@ export function SourceStatusPanel({ snapshot, snapshotRuntime, conflictSource, c
         ) : null}
         <Row label="GDELT geo news" value={chunkValue("media-context", gdeltGeoValue).value} warn={gdeltGeoMeta?.status !== "ok" || chunkValue("media-context", "").warn} />
         <Row label="GDELT geo omissions" value={gdeltGeoMeta ? `${gdeltGeoMeta.omittedMentionCount} accounted · ${gdeltGeoMeta.uniqueArticleCount} articles/${gdeltGeoMeta.uniqueLocationCount} locations` : "not loaded"} />
+        <Row label="ReliefWeb humanitarian" value={chunkValue("humanitarian", reliefwebValue).value} warn={reliefwebMeta?.status !== "ok" || chunkValue("humanitarian", "").warn} />
+        <Row label="ReliefWeb provenance" value={reliefwebMeta ? `${reliefwebMeta.omittedRecordCount} record omissions · ${reliefwebMeta.recordsWithoutCoordinates} no-centroid · narrative excluded` : "not loaded"} warn={Boolean(reliefwebMeta && reliefwebMeta.recordsWithoutCoordinates > 0)} />
         <Row label="UCDP official events" value={chunkValue("conflict", ucdpValue).value} warn={ucdpMeta?.status !== "ok" || chunkValue("conflict", "").warn} />
         <Row label="UCDP release" value={ucdpMeta ? `${ucdpMeta.version} · ${ucdpMeta.datasetRelease}` : "not loaded"} />
         <Row label="Known exploited CVEs" value={chunkValue("cyber", cyberValue).value} warn={cyberMeta?.status !== "ok" || chunkValue("cyber", "").warn} />

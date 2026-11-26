@@ -59,7 +59,7 @@ export const ANALYST_EXPORT_NO_AUTHORITY_CAVEAT =
   "NO OPERATIONAL AUTHORITY: this export is an analytical review aid only. It is not intelligence tasking, not a warning order, not a prediction, and not authority to act. Nothing in it may be used as the sole basis for any operational, targeting, or safety-critical decision.";
 
 export const ANALYST_EXPORT_ATTRIBUTION_CAVEAT =
-  "Attribution and licensing: WarHeatMap is CC BY 4.0; UCDP/Map of Wars, NASA, USGS, ADSB.lol, gpsjam.org, Launch Library, CISA, NIST NVD, FIRST EPSS, and other public feeds retain their own terms. Geolocated news mentions are courtesy of The GDELT Project (https://www.gdeltproject.org/) — citation is required by GDELT terms of use. Redistribution of this export must preserve these attributions.";
+  "Attribution and licensing: WarHeatMap is CC BY 4.0; UCDP/Map of Wars, NASA, USGS, ADSB.lol, gpsjam.org, Launch Library, CISA, NIST NVD, FIRST EPSS, ReliefWeb/OCHA/original publishing organizations, and other public feeds retain their own terms. ReliefWeb Terms restrict redistribution/compilation; this export carries factual metadata/provenance only and no ReliefWeb narrative, attachments, or images. Geolocated news mentions are courtesy of The GDELT Project (https://www.gdeltproject.org/) — citation is required by GDELT terms of use. Redistribution of this export must preserve these attributions.";
 
 /** Safety-valve caps. They are sized so honest corpora essentially never hit them; when they
  *  are hit the truncation is counted and disclosed rather than silent. */
@@ -483,6 +483,7 @@ export interface AnalystExportBundle {
       gdeltGeoMeta: unknown;
       internetOutageMeta: unknown;
       cyberVulnerabilityMeta: unknown;
+      reliefwebMeta: unknown;
       droppedSections: string[];
     };
     retrievalTimestampsUtc: Record<string, string | null>;
@@ -830,6 +831,7 @@ export function buildAnalystExportBundle(input: AnalystExportInput): AnalystExpo
     ["cyberVulnerabilities", snapshot?.cyberVulnerabilities],
     ["internetOutages", snapshot?.internetOutages],
     ["gdeltGeoNewsMentions", snapshot?.gdeltGeoNews],
+    ["reliefwebHumanitarianRecords", snapshot?.reliefwebRecords],
   ];
   for (const [key, value] of countDomains) {
     domainCounts[key] = Array.isArray(value) ? value.length : 0;
@@ -839,6 +841,8 @@ export function buildAnalystExportBundle(input: AnalystExportInput): AnalystExpo
     snapshotFetched: typeof snapshot?.fetchedAt === "string" && snapshot.fetchedAt ? snapshot.fetchedAt : null,
     ucdpPreserved: typeof snapshot?.ucdpMeta?.preservedAt === "string" ? snapshot.ucdpMeta.preservedAt : null,
     gdeltGeoPreserved: typeof snapshot?.gdeltGeoMeta?.preservedAt === "string" ? snapshot.gdeltGeoMeta.preservedAt : null,
+    reliefwebRetrieved: typeof snapshot?.reliefwebMeta?.retrievedAt === "string" ? snapshot.reliefwebMeta.retrievedAt : null,
+    reliefwebPreserved: typeof snapshot?.reliefwebMeta?.preservedAt === "string" ? snapshot.reliefwebMeta.preservedAt : null,
     internetOutagePreserved: typeof snapshot?.internetOutageMeta?.preservedAt === "string" ? snapshot.internetOutageMeta.preservedAt : null,
     cyberKevRetrieved: typeof snapshot?.cyberVulnerabilityMeta?.kev?.retrievedAt === "string" ? snapshot.cyberVulnerabilityMeta.kev.retrievedAt : null,
     cyberNvdRetrieved: typeof snapshot?.cyberVulnerabilityMeta?.nvd?.retrievedAt === "string" ? snapshot.cyberVulnerabilityMeta.nvd.retrievedAt : null,
@@ -892,7 +896,7 @@ export function buildAnalystExportBundle(input: AnalystExportInput): AnalystExpo
 
   const exclusions = [
     "transient transport positions (military/civil aviation, AIS vessels, satellites) are snapshot-instant observations and are not exported as rows; where they aligned with an exported incident their provenance, distances, and factor rationale survive inside convergence card findings",
-    "raw news articles, launch schedules, natural-event rows, webcam indexes, GPS-interference cells, outage records, and cyber vulnerability records are not exported as rows; their ingestion provenance, counts, retrieval timestamps, and caveats are included and aligned observations survive inside convergence findings",
+    "raw news articles, launch schedules, natural-event rows, webcam indexes, GPS-interference cells, outage records, cyber vulnerability records, and ReliefWeb humanitarian metadata records are not exported as rows; their ingestion provenance, counts, retrieval timestamps, and caveats are included and aligned observations survive inside convergence findings",
     "browser-local watch alert lifecycle state (dismiss/snooze timestamps) is excluded: it is personal workflow state that never alters evidence, and non-triggered watch rule definitions remain local to the originating browser profile",
     "evidence members are embedded exactly one level deep; nested evidence clusters cannot exist by correlation design and any adversarially nested structure is structurally stripped rather than serialized",
     "playback is a temporal display lens only; it never narrows the exported incident scope (the lens parameters are recorded for reproduction)",
@@ -904,7 +908,7 @@ export function buildAnalystExportBundle(input: AnalystExportInput): AnalystExpo
     "filtered canonical incidents with occurrence windows (epoch ms + UTC ISO), severity/category/casualty fields, verification state, and full citation URL lists",
     "full evidence-cluster memberships for correlated incidents: per-member source family, pairwise correlation score, ordered rationale lines, embedded member report rows, and contradiction records with member ids",
     "active filter scope (time window, category groups, severities, theater, disclosed search text), operator scope (visual mode, layers, panels, refresh state, camera when fixed), and playback lens state",
-    "source and provenance metadata: feed origin and fetch time, correlation pass statistics, snapshot retrieval timestamps, per-domain record counts, ingestion meta for UCDP/GDELT/IODA/cyber sources, and degraded-source errors",
+    "source and provenance metadata: feed origin and fetch time, correlation pass statistics, snapshot retrieval timestamps, per-domain record counts, ingestion meta for UCDP/GDELT/IODA/ReliefWeb/cyber sources, and degraded-source errors",
     "convergence cards anchored on exported incidents with classification reasoning, per-domain findings, factor scores, evidence gaps, and provenance URLs",
     "surge/watch output: indicator-bearing escalation signals and triggered watch alerts with evidence references, explanations, uncertainty notes, windows, and disclaimers",
     "shareable permalink restoring the exact operator workspace, schema/version metadata for every algorithm, attribution/licensing caveats, and itemized exclusions",
@@ -993,6 +997,7 @@ export function buildAnalystExportBundle(input: AnalystExportInput): AnalystExpo
         gdeltGeoMeta: cloneMeta(snapshot?.gdeltGeoMeta ?? null, "gdeltGeoMeta"),
         internetOutageMeta: cloneMeta(snapshot?.internetOutageMeta ?? null, "internetOutageMeta"),
         cyberVulnerabilityMeta: cloneMeta(snapshot?.cyberVulnerabilityMeta ?? null, "cyberVulnerabilityMeta"),
+        reliefwebMeta: cloneMeta(snapshot?.reliefwebMeta ?? null, "reliefwebMeta"),
         droppedSections: droppedSnapshotSections.sort(compareStrings),
       },
       retrievalTimestampsUtc: sortedRetrieval,

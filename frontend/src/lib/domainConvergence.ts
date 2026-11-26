@@ -19,6 +19,7 @@ import type {
   OsintLaunch,
   OsintNaturalEvent,
   OsintVessel,
+  ReliefWebRecord,
 } from "@/types/conflict";
 import { resolveIncidentOccurrenceWindow } from "@/lib/incidentTime";
 
@@ -187,6 +188,7 @@ export interface ConvergenceEvidenceInput {
   gpsInterference: GpsInterferenceCell[];
   internetOutages: IodaInternetOutage[];
   gdeltGeoNews: GdeltGeoNewsMention[];
+  reliefwebRecords: ReliefWebRecord[];
 }
 
 export interface EvidenceLayers {
@@ -206,6 +208,7 @@ const DOMAIN_FAMILY: Record<ConvergenceDomain, ConvergenceEvidenceFamily> = {
   "environmental-event": "environmental-sensors",
   "connectivity-outage": "network-measurement",
   "media-attention": "media-attention",
+  "humanitarian-context": "humanitarian-context",
 };
 
 /** Domains allowed to count toward independent corroboration. Media attention is derivative
@@ -219,6 +222,7 @@ export const DOMAIN_INDEPENDENCE: Record<ConvergenceDomain, boolean> = {
   "environmental-event": true,
   "connectivity-outage": true,
   "media-attention": false,
+  "humanitarian-context": false,
 };
 
 function instantWindow(ms: number): { start: number; endExclusive: number } {
@@ -544,6 +548,41 @@ function buildMediaObservations(mentions: GdeltGeoNewsMention[]): ConvergenceObs
   return sortObservations(observations);
 }
 
+
+function buildReliefWebObservations(records: ReliefWebRecord[]): ConvergenceObservation[] {
+  const observations: ConvergenceObservation[] = [];
+  for (const record of records) {
+    if (!record.location) continue;
+    const ms = parseIsoMs(record.publisherTimestamp);
+    if (ms === null) continue;
+    const window = instantWindow(ms);
+    observations.push({
+      id: `humanitarian:${record.id}`,
+      domain: "humanitarian-context",
+      family: DOMAIN_FAMILY["humanitarian-context"],
+      lat: record.location.lat,
+      lng: record.location.lng,
+      windowStart: window.start,
+      windowEndExclusive: window.endExclusive,
+      temporalKind: "instant",
+      mobility: "fixed",
+      spatialConfidence: 0.16,
+      spatialNote: "ReliefWeb country centroid joined through primary-country reference — symbolic national placement, heavily discounted and never same-place evidence",
+      areaRadiusKm: 0,
+      countryKey: canonicalizeCountryKey(record.primaryCountry?.name ?? record.location.countryName),
+      label: record.title,
+      detail: `${record.recordKind} · ${record.primaryCountry?.name ?? record.location.countryName}`,
+      url: record.url,
+      provenanceSource: "ReliefWeb API v2 humanitarian metadata",
+      provenanceObservedAt: record.publisherTimestamp,
+      provenanceNote: "humanitarian metadata/document indexing is contextual only; it is not incident confirmation and never counts as independent corroboration",
+      neverEvidence: true,
+      neverEvidenceNote: "qualification refused: ReliefWeb rows plot at a country centroid and are metadata/document index entries, not incident points or independent incident confirmation",
+    });
+  }
+  return sortObservations(observations);
+}
+
 /** Build every evidence layer once. Exported so validation harnesses can inspect normalization. */
 export function buildEvidenceLayers(input: ConvergenceEvidenceInput): EvidenceLayers {
   const notes: string[] = [];
@@ -558,6 +597,7 @@ export function buildEvidenceLayers(input: ConvergenceEvidenceInput): EvidenceLa
   const environmental = buildEnvironmentalObservations(input.naturalEvents ?? []);
   const connectivity = buildConnectivityObservations(input.internetOutages ?? []);
   const media = buildMediaObservations(input.gdeltGeoNews ?? []);
+  const humanitarian = buildReliefWebObservations(input.reliefwebRecords ?? []);
 
   const byDomain: Record<ConvergenceDomain, ConvergenceObservation[]> = {
     "gnss-interference": gnss,
@@ -568,6 +608,7 @@ export function buildEvidenceLayers(input: ConvergenceEvidenceInput): EvidenceLa
     "environmental-event": environmental,
     "connectivity-outage": connectivity,
     "media-attention": media,
+    "humanitarian-context": humanitarian,
   };
 
   const gapReasons: Partial<Record<ConvergenceDomain, string>> = {
@@ -579,6 +620,7 @@ export function buildEvidenceLayers(input: ConvergenceEvidenceInput): EvidenceLa
     "environmental-event": "no environmental event records loaded",
     "connectivity-outage": "no IODA connectivity detections loaded; connectivity convergence cannot be evaluated",
     "media-attention": "no GDELT media mentions loaded; media-attention alignment cannot be evaluated",
+    "humanitarian-context": "no ReliefWeb humanitarian metadata loaded (often because the approved appname is absent); humanitarian contextual alignment cannot be evaluated",
   };
   for (const domain of Object.keys(byDomain) as ConvergenceDomain[]) {
     const rawCount = domain === "military-aviation" ? (input.militaryAircraft ?? []).length
@@ -588,6 +630,7 @@ export function buildEvidenceLayers(input: ConvergenceEvidenceInput): EvidenceLa
       : domain === "environmental-event" ? (input.naturalEvents ?? []).length
       : domain === "connectivity-outage" ? (input.internetOutages ?? []).length
       : domain === "media-attention" ? (input.gdeltGeoNews ?? []).length
+      : domain === "humanitarian-context" ? (input.reliefwebRecords ?? []).length
       : (input.gpsInterference ?? []).length;
     if (rawCount === 0) {
       gaps.push({ domain, reason: gapReasons[domain] ?? "domain source empty" });
@@ -750,6 +793,15 @@ const PAIR_PARAMS: Record<ConvergenceDomain, PairTypeParams> = {
     weights: { spatial: 0.5, temporal: 0.5 },
     qualifyScore: 0.5,
     independenceNote: "connectivity measurement is independent of conflict reporting, but outages have many causes — alignment never implies why connectivity was lost",
+  },
+  "humanitarian-context": {
+    spatialFullKm: 8,
+    spatialZeroKm: 45,
+    spatialGateKm: 90,
+    timeGateHours: 96,
+    weights: { spatial: 0.6, temporal: 0.4 },
+    qualifyScore: 0.5,
+    independenceNote: "ReliefWeb humanitarian metadata is derivative contextual indexing and never counts as independent evidence",
   },
   "media-attention": {
     spatialFullKm: 18,
@@ -1083,6 +1135,7 @@ const DOMAIN_ORDER: ConvergenceDomain[] = [
   "ais-vessel",
   "space-launch",
   "media-attention",
+  "humanitarian-context",
 ];
 
 export const DOMAIN_DISPLAY: Record<ConvergenceDomain, { label: string; shortLabel: string }> = {
@@ -1094,6 +1147,7 @@ export const DOMAIN_DISPLAY: Record<ConvergenceDomain, { label: string; shortLab
   "environmental-event": { label: "Environmental events", shortLabel: "ENV" },
   "connectivity-outage": { label: "Connectivity outages", shortLabel: "IODA" },
   "media-attention": { label: "Media attention", shortLabel: "MEDIA" },
+  "humanitarian-context": { label: "ReliefWeb humanitarian metadata", shortLabel: "RELIEF" },
 };
 
 const FAMILY_DISPLAY: Record<ConvergenceEvidenceFamily, string> = {
@@ -1103,6 +1157,7 @@ const FAMILY_DISPLAY: Record<ConvergenceEvidenceFamily, string> = {
   "environmental-sensors": "environmental sensors",
   "network-measurement": "network connectivity measurement",
   "media-attention": "media attention",
+  "humanitarian-context": "humanitarian metadata context",
 };
 
 const MAX_FINDINGS_PER_DOMAIN = 3;

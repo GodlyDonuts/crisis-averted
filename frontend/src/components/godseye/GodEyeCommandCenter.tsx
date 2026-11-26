@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
-import type { CategoryGroup, ConflictEvent, ConflictFilters, ConflictTheater, EscalationSignal, MilitaryAircraft, OsintAircraft, OsintVessel, SeverityKey } from "@/types/conflict";
+import type { CategoryGroup, ConflictEvent, ConflictFilters, ConflictTheater, EscalationSignal, MilitaryAircraft, OsintAircraft, OsintVessel, ReliefWebRecord, SeverityKey } from "@/types/conflict";
 import {
   aggregateTheaters,
   buildTimeline,
@@ -39,6 +39,7 @@ import { MapLegend } from "./MapLegend";
 import { TargetLockOverlay } from "./TargetLockOverlay";
 import { AircraftDetailPanel } from "./AircraftDetailPanel";
 import { TransportDetailPanel } from "./TransportDetailPanel";
+import { ReliefWebDetailPanel } from "./ReliefWebDetailPanel";
 import { SourceStatusPanel } from "./SourceStatusPanel";
 import { GlobeFallback } from "./GlobeFallback";
 import { ConvergenceInspector } from "./ConvergenceInspector";
@@ -112,6 +113,7 @@ export default function GodEyeCommandCenter() {
   const [selectedAircraft, setSelectedAircraft] = useState<MilitaryAircraft | null>(null);
   const [selectedCivilAircraft, setSelectedCivilAircraft] = useState<OsintAircraft | null>(null);
   const [selectedVessel, setSelectedVessel] = useState<OsintVessel | null>(null);
+  const [selectedReliefWebRecord, setSelectedReliefWebRecord] = useState<ReliefWebRecord | null>(null);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
   const [globeUnavailable, setGlobeUnavailable] = useState(false);
   const [reducedEffects, setReducedEffects] = useState(false);
@@ -257,6 +259,7 @@ export default function GodEyeCommandCenter() {
     setSelectedAircraft(null);
     setSelectedCivilAircraft(null);
     setSelectedVessel(null);
+    setSelectedReliefWebRecord(null);
     setSourcePanelOpen(nextState.panels.source);
     setTheaterPanelOpen(nextState.panels.theater);
     setIncidentPanelOpen(nextState.panels.incident);
@@ -519,6 +522,7 @@ export default function GodEyeCommandCenter() {
     setSelectedAircraft(null);
     setSelectedCivilAircraft(null);
     setSelectedVessel(null);
+    setSelectedReliefWebRecord(null);
     setSelectedEventId(event.id);
     focusCamera(event.lat, event.lng, 0.82, `event-${event.id}`);
   }, [focusCamera, pausePlayback]);
@@ -528,6 +532,7 @@ export default function GodEyeCommandCenter() {
     setSelectedEventId(null);
     setSelectedCivilAircraft(null);
     setSelectedVessel(null);
+    setSelectedReliefWebRecord(null);
     setSelectedAircraft(aircraft);
     focusCamera(aircraft.lat, aircraft.lng, 1.05, `aircraft-${aircraft.id}`);
   }, [focusCamera]);
@@ -537,6 +542,7 @@ export default function GodEyeCommandCenter() {
     setSelectedEventId(null);
     setSelectedAircraft(null);
     setSelectedVessel(null);
+    setSelectedReliefWebRecord(null);
     setSelectedCivilAircraft(aircraft);
     focusCamera(aircraft.lat, aircraft.lng, 1.0, `civil-${aircraft.id}`);
   }, [focusCamera]);
@@ -546,8 +552,20 @@ export default function GodEyeCommandCenter() {
     setSelectedEventId(null);
     setSelectedAircraft(null);
     setSelectedCivilAircraft(null);
+    setSelectedReliefWebRecord(null);
     setSelectedVessel(vessel);
     focusCamera(vessel.lat, vessel.lng, 0.72, `vessel-${vessel.id}`);
+  }, [focusCamera]);
+
+
+  const handleReliefWebSelect = useCallback((record: ReliefWebRecord) => {
+    setAutoRotate(false);
+    setSelectedEventId(null);
+    setSelectedAircraft(null);
+    setSelectedCivilAircraft(null);
+    setSelectedVessel(null);
+    setSelectedReliefWebRecord(record);
+    if (record.location) focusCamera(record.location.lat, record.location.lng, 1.0, `reliefweb-${record.id}`);
   }, [focusCamera]);
 
   const handleTheaterSelect = useCallback((theater: ConflictTheater) => {
@@ -701,6 +719,7 @@ export default function GodEyeCommandCenter() {
           gpsInterference={osintSnapshot.gpsInterference}
           internetOutages={osintSnapshot.internetOutages}
           gdeltGeoNews={osintSnapshot.gdeltGeoNews}
+          reliefwebRecords={osintSnapshot.reliefwebRecords}
           selectedEvent={selectedEvent}
           selectedTheater={selectedTheater}
           focusTarget={focusTarget}
@@ -719,6 +738,7 @@ export default function GodEyeCommandCenter() {
           onAircraftSelect={handleAircraftSelect}
           onCivilAircraftSelect={handleCivilAircraftSelect}
           onVesselSelect={handleVesselSelect}
+          onReliefWebSelect={handleReliefWebSelect}
           onTheaterSelect={handleTheaterSelect}
           onCameraChange={handleCameraChange}
           onRenderFailure={handleGlobeRenderFailure}
@@ -788,6 +808,10 @@ export default function GodEyeCommandCenter() {
 
         {selectedAircraft && !selectedEvent ? (
           <AircraftDetailPanel aircraft={selectedAircraft} onClose={() => setSelectedAircraft(null)} />
+        ) : null}
+
+        {selectedReliefWebRecord && !selectedEvent && !selectedAircraft && !selectedCivilAircraft && !selectedVessel ? (
+          <ReliefWebDetailPanel record={selectedReliefWebRecord} meta={osintSnapshot.reliefwebMeta} onClose={() => setSelectedReliefWebRecord(null)} />
         ) : null}
 
         {(selectedCivilAircraft || selectedVessel) && !selectedEvent ? (

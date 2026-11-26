@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Binoculars, Clock3, Cloud, Compass, Download, FileJson, FileText, Hexagon, Network, Newspaper, Orbit, Pause, Plane, Play, Sheet, Ship, Leaf, Radio, ScanLine, Signal, Radar, SlidersHorizontal, Tags, Waypoints, WifiOff, X } from "lucide-react";
+import { Binoculars, Clock3, Cloud, Compass, Download, FileJson, FileText, HandHeart, Hexagon, Network, Newspaper, Orbit, Pause, Plane, Play, Sheet, Ship, Leaf, Radio, ScanLine, Signal, Radar, SlidersHorizontal, Tags, Waypoints, WifiOff, X } from "lucide-react";
 import type { CategoryGroup, ConflictEvent, SeverityKey, TimelineBucket, TimeWindowKey } from "@/types/conflict";
 import type { IncidentTemporalCoverage } from "@/lib/incidentTime";
 import type { IncidentPlaybackController } from "@/hooks/useIncidentPlayback";
@@ -65,6 +65,7 @@ const LAYER_CONTROLS: { key: keyof GodEyeLayerToggles; label: string; icon: type
   { key: "gpsInterference", label: "GPS", icon: Signal },
   { key: "internetOutages", label: "Outages", icon: WifiOff },
   { key: "gdeltGeoNews", label: "Geo news", icon: Newspaper },
+  { key: "reliefwebHumanitarian", label: "Relief", icon: HandHeart },
 ];
 
 function downloadFile(filename: string, content: string, type: string) {

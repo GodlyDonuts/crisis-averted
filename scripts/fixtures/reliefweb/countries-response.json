@@ -1,0 +1,35 @@
+{
+  "href": "https://api.reliefweb.int/v2/countries?appname=REDACTED",
+  "time": 1,
+  "links": {},
+  "totalCount": 2,
+  "count": 2,
+  "data": [
+    {
+      "id": 1001,
+      "href": "https://api.reliefweb.int/v2/countries/1001",
+      "fields": {
+        "name": "Fixtureland",
+        "shortname": "Fixtureland",
+        "iso3": "FFX",
+        "location": {
+          "lat": 12.34,
+          "lon": 45.67
+        }
+      }
+    },
+    {
+      "id": 1002,
+      "href": "https://api.reliefweb.int/v2/countries/1002",
+      "fields": {
+        "name": "Example Republic",
+        "shortname": "Example Republic",
+        "iso3": "EXR",
+        "location": {
+          "lat": -3.21,
+          "lon": 120.45
+        }
+      }
+    }
+  ]
+}

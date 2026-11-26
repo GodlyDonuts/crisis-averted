@@ -1,0 +1,254 @@
+{
+  "href": "https://api.reliefweb.int/v2/reports?appname=REDACTED",
+  "time": 1,
+  "links": {},
+  "totalCount": 3,
+  "count": 3,
+  "data": [
+    {
+      "id": 8001,
+      "href": "https://api.reliefweb.int/v2/reports/8001",
+      "fields": {
+        "title": "Fixtureland Synthetic Flood Situation Report #1",
+        "url": "https://reliefweb.int/report/fixtureland/sitrep-1",
+        "url_alias": "https://reliefweb.int/report/fixtureland/sitrep-1",
+        "uuid": "22222222-2222-4222-8222-222222222222",
+        "origin": "https://partner.example/original-sitrep",
+        "status": "published",
+        "date": {
+          "created": "2026-11-25T12:00:00+00:00",
+          "changed": "2026-11-25T13:00:00+00:00",
+          "original": "2026-11-25T11:00:00+00:00"
+        },
+        "primary_country": {
+          "id": 1001,
+          "name": "Fixtureland",
+          "shortname": "Fixtureland",
+          "iso3": "FFX",
+          "primary": true
+        },
+        "country": [
+          {
+            "id": 1001,
+            "name": "Fixtureland",
+            "shortname": "Fixtureland",
+            "iso3": "FFX",
+            "primary": true
+          }
+        ],
+        "source": [
+          {
+            "id": 501,
+            "name": "Fixture Relief Agency",
+            "shortname": "FRA",
+            "longname": "Fixture Relief Agency",
+            "homepage": "https://partner.example",
+            "type": {
+              "id": 4,
+              "name": "NGO"
+            }
+          }
+        ],
+        "disaster": [
+          {
+            "id": 9001,
+            "name": "Fixtureland: Synthetic Flood Fixture - Nov 2026",
+            "glide": "FL-2026-000001-FFX",
+            "type": [
+              {
+                "id": 12,
+                "name": "Flood",
+                "code": "FL",
+                "primary": true
+              }
+            ]
+          }
+        ],
+        "format": [
+          {
+            "id": 10,
+            "name": "Situation Report"
+          }
+        ],
+        "theme": [
+          {
+            "id": 7,
+            "name": "Water Sanitation Hygiene"
+          }
+        ],
+        "disaster_type": [
+          {
+            "id": 12,
+            "name": "Flood",
+            "code": "FL",
+            "primary": true
+          }
+        ],
+        "language": [
+          {
+            "id": 267,
+            "name": "English",
+            "code": "en"
+          }
+        ],
+        "body": "Fixture narrative body that must never be redistributed.",
+        "body-html": "<p>Fixture body</p>",
+        "headline": {
+          "summary": "Fixture summary"
+        },
+        "file": [
+          {
+            "url": "https://example.invalid/a.pdf"
+          }
+        ]
+      }
+    },
+    {
+      "id": 8002,
+      "href": "https://api.reliefweb.int/v2/reports/8002",
+      "fields": {
+        "title": "Fixtureland Synthetic Flood Appeal 2026",
+        "url": "https://reliefweb.int/report/fixtureland/appeal-2026",
+        "url_alias": "https://reliefweb.int/report/fixtureland/appeal-2026",
+        "uuid": "33333333-3333-4333-8333-333333333333",
+        "origin": "https://partner.example/appeal",
+        "status": "published",
+        "date": {
+          "created": "2026-11-24T09:00:00+00:00",
+          "changed": "2026-11-24T10:00:00+00:00",
+          "original": "2026-11-24T08:30:00+00:00"
+        },
+        "primary_country": {
+          "id": 1001,
+          "name": "Fixtureland",
+          "shortname": "Fixtureland",
+          "iso3": "FFX",
+          "primary": true
+        },
+        "country": [
+          {
+            "id": 1001,
+            "name": "Fixtureland",
+            "shortname": "Fixtureland",
+            "iso3": "FFX",
+            "primary": true
+          }
+        ],
+        "source": [
+          {
+            "id": 502,
+            "name": "Fixture Humanitarian Office",
+            "shortname": "FHO",
+            "longname": "Fixture Humanitarian Office",
+            "homepage": "https://office.example",
+            "type": {
+              "id": 3,
+              "name": "United Nations"
+            }
+          }
+        ],
+        "disaster": [
+          {
+            "id": 9001,
+            "name": "Fixtureland: Synthetic Flood Fixture - Nov 2026",
+            "glide": "FL-2026-000001-FFX"
+          }
+        ],
+        "format": [
+          {
+            "id": 11,
+            "name": "Appeal"
+          }
+        ],
+        "theme": [
+          {
+            "id": 8,
+            "name": "Coordination"
+          }
+        ],
+        "disaster_type": [
+          {
+            "id": 12,
+            "name": "Flood",
+            "code": "FL",
+            "primary": true
+          }
+        ],
+        "language": [
+          {
+            "id": 267,
+            "name": "English",
+            "code": "en"
+          }
+        ],
+        "headline": {
+          "summary": "Fixture summary"
+        }
+      }
+    },
+    {
+      "id": 8003,
+      "href": "https://api.reliefweb.int/v2/reports/8003",
+      "fields": {
+        "title": "Example Republic Synthetic Reference Map",
+        "url": "https://reliefweb.int/map/example-republic/reference-map",
+        "url_alias": "https://reliefweb.int/map/example-republic/reference-map",
+        "uuid": "44444444-4444-4444-8444-444444444444",
+        "origin": "https://cartographer.example/map",
+        "status": "published",
+        "date": {
+          "created": "2026-11-23T07:00:00+00:00",
+          "changed": "2026-11-23T07:30:00+00:00",
+          "original": "2026-11-23T06:00:00+00:00"
+        },
+        "primary_country": {
+          "id": 1002,
+          "name": "Example Republic",
+          "shortname": "Example Republic",
+          "iso3": "EXR",
+          "primary": true
+        },
+        "country": [
+          {
+            "id": 1002,
+            "name": "Example Republic",
+            "shortname": "Example Republic",
+            "iso3": "EXR",
+            "primary": true
+          }
+        ],
+        "source": [
+          {
+            "id": 503,
+            "name": "Fixture Mapping Centre",
+            "shortname": "FMC",
+            "longname": "Fixture Mapping Centre",
+            "homepage": "https://cartographer.example",
+            "type": {
+              "id": 5,
+              "name": "Other"
+            }
+          }
+        ],
+        "format": [
+          {
+            "id": 12,
+            "name": "Map"
+          }
+        ],
+        "theme": [],
+        "disaster_type": [],
+        "language": [
+          {
+            "id": 267,
+            "name": "English",
+            "code": "en"
+          }
+        ],
+        "image": {
+          "url": "https://example.invalid/map.png"
+        }
+      }
+    }
+  ]
+}

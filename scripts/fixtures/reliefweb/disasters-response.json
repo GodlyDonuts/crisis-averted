@@ -1,0 +1,57 @@
+{
+  "href": "https://api.reliefweb.int/v2/disasters?appname=REDACTED",
+  "time": 1,
+  "links": {},
+  "totalCount": 1,
+  "count": 1,
+  "data": [
+    {
+      "id": 9001,
+      "href": "https://api.reliefweb.int/v2/disasters/9001",
+      "fields": {
+        "name": "Fixtureland: Synthetic Flood Fixture - Nov 2026",
+        "url": "https://reliefweb.int/disaster/fl-2026-fixture",
+        "url_alias": "https://reliefweb.int/disaster/fl-2026-fixture",
+        "uuid": "11111111-1111-4111-8111-111111111111",
+        "status": "current",
+        "glide": "FL-2026-000001-FFX",
+        "related_glide": [],
+        "date": {
+          "created": "2026-11-20T08:00:00+00:00",
+          "changed": "2026-11-25T10:30:00+00:00"
+        },
+        "primary_country": {
+          "id": 1001,
+          "name": "Fixtureland",
+          "shortname": "Fixtureland",
+          "iso3": "FFX",
+          "primary": true
+        },
+        "country": [
+          {
+            "id": 1001,
+            "name": "Fixtureland",
+            "shortname": "Fixtureland",
+            "iso3": "FFX",
+            "primary": true
+          }
+        ],
+        "primary_type": {
+          "id": 12,
+          "name": "Flood",
+          "code": "FL",
+          "primary": true
+        },
+        "type": [
+          {
+            "id": 12,
+            "name": "Flood",
+            "code": "FL",
+            "primary": true
+          }
+        ],
+        "description": "Fixture narrative that must never be redistributed."
+      }
+    }
+  ]
+}

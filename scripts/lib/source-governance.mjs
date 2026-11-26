@@ -22,6 +22,7 @@ export const SNAPSHOT_COLLECTIONS = Object.freeze([
   'cyberVulnerabilities',
   'internetOutages',
   'gdeltGeoNews',
+  'reliefwebRecords',
 ]);
 
 export const STATIC_ARTIFACT_COLLECTIONS = Object.freeze({
@@ -328,6 +329,7 @@ function recordTimestamp(collection, record) {
     case 'cyberVulnerabilities': return first([record.nvd?.retrievedAt, record.epss?.retrievedAt, record.dateAdded]);
     case 'internetOutages': return first([record.until, record.from]);
     case 'gdeltGeoNews': return first([record.seenAt, record.slotTime]);
+    case 'reliefwebRecords': return first([record.publisherTimestamp, record.dates?.changed, record.dates?.created, record.dates?.original]);
     default: return null;
   }
 }

@@ -13,6 +13,13 @@ import {
 } from './lib/source-governance.mjs';
 import { buildChunkedPublication, writeChunkedPublication } from './lib/osint-chunked-publication.mjs';
 import { OSINT_CHUNK_LAYOUT } from './lib/osint-chunk-layout.mjs';
+import {
+  collectReliefWebHumanitarianIntelligence,
+  createPreservedReliefWebMeta,
+  createReliefWebMeta,
+  validateReliefWebMeta,
+  validateReliefWebRecord,
+} from './lib/reliefweb-ingestion.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const dataOutDir = join(root, 'frontend/public/data');
@@ -39,6 +46,25 @@ async function getJson(url, timeout = 14000, extraHeaders = {}) {
     const response = await fetch(url, {
       signal: controller.signal,
       headers: { 'User-Agent': 'GodseyeOSINT/1.0 (+https://github.com/GodlyDonuts/crisis-averted)', ...extraHeaders },
+    });
+    if (!response.ok) throw new Error(`${response.status}`);
+    return await response.json();
+  } finally { clearTimeout(timer); }
+}
+
+async function postJson(url, body, timeout = 24000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'GodseyeOSINT/1.0 (+https://github.com/GodlyDonuts/crisis-averted)',
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error(`${response.status}`);
     return await response.json();
@@ -2128,7 +2154,7 @@ let previousSnapshot = {};
 try { if (existsSync(outFile)) previousSnapshot = JSON.parse(readFileSync(outFile, 'utf8')); } catch {}
 
 const iodaQueryWindow = createIodaQueryWindow();
-const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], aircraft: [], vessels: [], satellites: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], cyberVulnerabilities: [], cyberVulnerabilityMeta: createCyberVulnerabilityMeta('unavailable'), internetOutages: [], internetOutageMeta: createIodaUnavailableMeta(iodaQueryWindow), ucdpMeta: createUcdpMeta('unconfigured'), gdeltGeoNews: [], gdeltGeoMeta: createGdeltGeoMeta('unavailable'), errors: [] };
+const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], aircraft: [], vessels: [], satellites: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], cyberVulnerabilities: [], cyberVulnerabilityMeta: createCyberVulnerabilityMeta('unavailable'), internetOutages: [], internetOutageMeta: createIodaUnavailableMeta(iodaQueryWindow), ucdpMeta: createUcdpMeta('unconfigured'), gdeltGeoNews: [], gdeltGeoMeta: createGdeltGeoMeta('unavailable'), reliefwebRecords: [], reliefwebMeta: createReliefWebMeta('not-configured'), errors: [] };
 
 markSource('natural-earth-vector', 'bundled', 'Pinned Natural Earth v5.1.2 reference points are bundled for coarse IODA placement');
 try {
@@ -2710,6 +2736,30 @@ result.cyberVulnerabilityMeta = cyberIntelligence.meta;
 result.sources.cyberVulnerabilities = cyberIntelligence.sourceDescription;
 for (const error of cyberIntelligence.errors) result.errors.push(error);
 
+const reliefweb = await collectReliefWebHumanitarianIntelligence({ appname: process.env.RELIEFWEB_APPNAME ?? '', postJson });
+if (reliefweb.meta.status === 'ok') {
+  result.reliefwebRecords = reliefweb.records;
+  result.reliefwebMeta = reliefweb.meta;
+  result.sources.reliefwebRecords = 'ReliefWeb API v2 humanitarian disaster/report metadata (approved build-time appname; narrative deliberately not redistributed)';
+  markSource('reliefweb-api', 'fetched', null, { recordCount: result.reliefwebRecords.length, retrievedAt: reliefweb.meta.retrievedAt });
+} else {
+  const detail = reliefweb.meta.statusDetail ?? 'ReliefWeb approved-appname ingestion unavailable';
+  for (const error of reliefweb.errors) result.errors.push(error);
+  if (Array.isArray(previousSnapshot.reliefwebRecords) && previousSnapshot.reliefwebRecords.length > 0 && previousSnapshot.reliefwebMeta) {
+    result.reliefwebRecords = previousSnapshot.reliefwebRecords;
+    result.reliefwebMeta = createPreservedReliefWebMeta(previousSnapshot.reliefwebMeta, `Transient ReliefWeb ingestion/configuration failure; prior snapshot retained with original publisher/retrieval timestamps. ${detail}`, result.fetchedAt);
+    result.sources.reliefwebRecords = 'ReliefWeb API v2 humanitarian metadata (prior build-time snapshot preserved after transient ingestion failure)';
+    result.errors.push('reliefwebRecords: transient failure; preserved previous snapshot');
+    markSource('reliefweb-api', 'preserved', `Transient ingestion/configuration failure; prior snapshot retained. ${detail}`, { recordCount: result.reliefwebRecords.length, retrievedAt: previousSnapshot.reliefwebMeta.retrievedAt ?? previousSnapshot.fetchedAt ?? result.fetchedAt });
+  } else {
+    result.reliefwebMeta = reliefweb.meta;
+    result.sources.reliefwebRecords = reliefweb.meta.status === 'not-configured'
+      ? 'ReliefWeb API v2 unavailable: RELIEFWEB_APPNAME not configured; no unapproved appname was used'
+      : 'ReliefWeb API v2 humanitarian metadata unavailable during build';
+    markSource('reliefweb-api', reliefweb.meta.status === 'not-configured' ? 'not-configured' : 'failed', detail, { recordCount: 0 });
+  }
+}
+
 if (process.env.WINDY_WEBCAMS_KEY) {
   try {
     const regions = [
@@ -3166,7 +3216,7 @@ function validateGdeltGeoMeta(snapshot, errors) {
 
 function validateSnapshot(snapshot) {
   const errors = [];
-  for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'webcams', 'cyberVulnerabilities', 'internetOutages', 'gdeltGeoNews']) {
+  for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'webcams', 'cyberVulnerabilities', 'internetOutages', 'gdeltGeoNews', 'reliefwebRecords']) {
     if (!Array.isArray(snapshot[key])) errors.push(`${key} missing or not an array`);
   }
   for (const item of snapshot.militaryAircraft ?? []) validateCoordinate(item, 'militaryAircraft', errors);
@@ -3210,6 +3260,14 @@ function validateSnapshot(snapshot) {
     }
   }
   validateGdeltGeoMeta(snapshot, errors);
+  const reliefwebIds = new Set();
+  for (const item of snapshot.reliefwebRecords ?? []) {
+    const label = `reliefwebRecords:${item.id || 'unknown'}`;
+    validateReliefWebRecord(item, label, errors);
+    if (reliefwebIds.has(item.id)) errors.push(`${label} duplicate canonical id`);
+    reliefwebIds.add(item.id);
+  }
+  validateReliefWebMeta(snapshot.reliefwebMeta, (snapshot.reliefwebRecords ?? []).length, errors);
   for (const item of snapshot.internetOutages ?? []) {
     const label = `internetOutages:${item.entityType || 'unknown'}:${item.entityCode || 'unknown'}`;
     if (!['country', 'region'].includes(item.entityType)) errors.push(`${label} invalid entityType`);
@@ -3322,6 +3380,7 @@ const preservationSources = {
   launches: ['launch-library-2'],
   naturalEvents: ['nasa-eonet', 'usgs-earthquake-feed', 'gdacs-events', 'noaa-nws-alerts', 'nasa-firms'],
   gpsInterference: ['gpsjam-daily-h3'],
+  reliefwebRecords: ['reliefweb-api'],
   mapOfWarsEvents: ['map-of-wars', 'ucdp-ged-candidate', 'acled-political-violence'],
 };
 for (const [collection, sourceIds] of Object.entries(preservationSources)) {
@@ -3351,5 +3410,5 @@ const chunkedPublication = buildChunkedPublication(result);
 const publicationWrites = writeChunkedPublication({ publication: chunkedPublication, dataDir: dataOutDir, writeTextAtomic });
 const chunkBytes = publicationWrites.filter((write) => write.role === 'domain-chunk').reduce((sum, write) => sum + write.bytes, 0);
 const ucdpConsoleSuffix = result.ucdpMeta.preservedPriorEventCount > 0 ? `, ${result.ucdpMeta.preservedPriorEventCount} preserved` : '';
-console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.ucdpMeta.mergedEventCount} UCDP official records (${result.ucdpMeta.status}${ucdpConsoleSuffix}), ${result.webcams.length} webcams, ${result.internetOutages.length} IODA outage detections (${result.internetOutageMeta.status}), ${result.cyberVulnerabilities.length} KEV records (${result.cyberVulnerabilityMeta.nvd.enrichedCveCount}/${result.cyberVulnerabilityMeta.nvd.requestedCveCount} NVD, ${result.cyberVulnerabilityMeta.epss.enrichedCveCount}/${result.cyberVulnerabilityMeta.epss.requestedCveCount} EPSS, ${result.cyberVulnerabilityMeta.status}), ${result.gdeltGeoNews.length} GDELT geo-news mentions (${result.gdeltGeoMeta.status}, ${result.gdeltGeoMeta.titleEnrichedArticleCount} title-enriched)`);
+console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.ucdpMeta.mergedEventCount} UCDP official records (${result.ucdpMeta.status}${ucdpConsoleSuffix}), ${result.webcams.length} webcams, ${result.internetOutages.length} IODA outage detections (${result.internetOutageMeta.status}), ${result.cyberVulnerabilities.length} KEV records (${result.cyberVulnerabilityMeta.nvd.enrichedCveCount}/${result.cyberVulnerabilityMeta.nvd.requestedCveCount} NVD, ${result.cyberVulnerabilityMeta.epss.enrichedCveCount}/${result.cyberVulnerabilityMeta.epss.requestedCveCount} EPSS, ${result.cyberVulnerabilityMeta.status}), ${result.gdeltGeoNews.length} GDELT geo-news mentions (${result.gdeltGeoMeta.status}, ${result.gdeltGeoMeta.titleEnrichedArticleCount} title-enriched), ${result.reliefwebRecords.length} ReliefWeb records (${result.reliefwebMeta.status}, ${result.reliefwebMeta.coordinateAttachedCount} centroid-placed)`);
 console.log(`osint chunks: ${OSINT_CHUNK_LAYOUT.length} domain chunks/${chunkBytes} bytes + manifest cursor; compatibility monolith retained at data/osint-snapshot.json (${chunkedPublication.legacyBytes} bytes)`);

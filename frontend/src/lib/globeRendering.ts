@@ -21,6 +21,7 @@ export interface GlobeRenderCaps {
   gpsInterference: number;
   internetOutages: number;
   gdeltGeoNews: number;
+  reliefwebHumanitarian: number;
   theaterLabels: number;
   ringBeacons: number;
   htmlAlertMarkers: number;
@@ -101,6 +102,7 @@ const BASE_CAPS: Record<RenderDetailLevel, GlobeRenderCaps> = {
     gpsInterference: 240,
     internetOutages: 140,
     gdeltGeoNews: 180,
+    reliefwebHumanitarian: 96,
     theaterLabels: 8,
     ringBeacons: 42,
     htmlAlertMarkers: 8,
@@ -117,6 +119,7 @@ const BASE_CAPS: Record<RenderDetailLevel, GlobeRenderCaps> = {
     gpsInterference: 380,
     internetOutages: 180,
     gdeltGeoNews: 260,
+    reliefwebHumanitarian: 132,
     theaterLabels: 12,
     ringBeacons: 42,
     htmlAlertMarkers: 8,
@@ -133,6 +136,7 @@ const BASE_CAPS: Record<RenderDetailLevel, GlobeRenderCaps> = {
     gpsInterference: 500,
     internetOutages: 240,
     gdeltGeoNews: 360,
+    reliefwebHumanitarian: 132,
     theaterLabels: 16,
     ringBeacons: 42,
     htmlAlertMarkers: 8,
@@ -158,6 +162,7 @@ const MIN_CAPS: GlobeRenderCaps = {
   gpsInterference: 20,
   internetOutages: 12,
   gdeltGeoNews: 20,
+  reliefwebHumanitarian: 12,
   theaterLabels: 4,
   ringBeacons: 6,
   htmlAlertMarkers: 2,
@@ -177,6 +182,7 @@ function scaleCaps(base: GlobeRenderCaps, tier: RenderQualityTier): GlobeRenderC
     gpsInterference: Math.max(MIN_CAPS.gpsInterference, Math.round(base.gpsInterference * scale)),
     internetOutages: Math.max(MIN_CAPS.internetOutages, Math.round(base.internetOutages * scale)),
     gdeltGeoNews: Math.max(MIN_CAPS.gdeltGeoNews, Math.round(base.gdeltGeoNews * scale)),
+    reliefwebHumanitarian: Math.max(MIN_CAPS.reliefwebHumanitarian, Math.round(base.reliefwebHumanitarian * scale)),
     theaterLabels: Math.max(MIN_CAPS.theaterLabels, Math.round(base.theaterLabels * scale)),
     ringBeacons: Math.max(MIN_CAPS.ringBeacons, Math.round(base.ringBeacons * scale)),
     htmlAlertMarkers: Math.max(MIN_CAPS.htmlAlertMarkers, Math.round(base.htmlAlertMarkers * scale)),
@@ -801,6 +807,7 @@ export type RenderAccountKey =
   | "gpsInterference"
   | "internetOutages"
   | "gdeltGeoNews"
+  | "reliefwebHumanitarian"
   | "ringBeacons"
   | "htmlAlertMarkers"
   | "theaterLabels"
@@ -817,6 +824,7 @@ export const RENDER_ACCOUNT_KEYS: RenderAccountKey[] = [
   "gpsInterference",
   "internetOutages",
   "gdeltGeoNews",
+  "reliefwebHumanitarian",
   "ringBeacons",
   "htmlAlertMarkers",
   "theaterLabels",

@@ -7,6 +7,7 @@ export type OsintChunkDomain =
   | "conflict"
   | "connectivity"
   | "environmental"
+  | "humanitarian"
   | "orbital"
   | "transport-aviation"
   | "maritime"
@@ -18,6 +19,7 @@ export const OSINT_CHUNK_DOMAIN_ORDER: OsintChunkDomain[] = [
   "conflict",
   "connectivity",
   "environmental",
+  "humanitarian",
   "orbital",
   "transport-aviation",
   "maritime",
@@ -30,6 +32,7 @@ export const OSINT_CHUNK_DOMAIN_ORDER: OsintChunkDomain[] = [
 export const CONVERGENCE_EVIDENCE_CHUNK_DOMAINS: OsintChunkDomain[] = [
   "connectivity",
   "environmental",
+  "humanitarian",
   "orbital",
   "transport-aviation",
   "maritime",
@@ -40,6 +43,7 @@ const DOMAIN_COLLECTIONS: Record<OsintChunkDomain, (keyof OsintSnapshot)[]> = {
   conflict: ["mapOfWarsEvents", "ucdpMeta"],
   connectivity: ["internetOutages", "internetOutageMeta"],
   environmental: ["naturalEvents"],
+  humanitarian: ["reliefwebRecords", "reliefwebMeta"],
   orbital: ["satellites", "launches"],
   "transport-aviation": ["militaryAircraft", "aircraft"],
   maritime: ["vessels"],
@@ -335,6 +339,8 @@ export function createEmptyOsintSnapshot(): OsintSnapshot {
     ucdpMeta: null,
     gdeltGeoNews: [],
     gdeltGeoMeta: null,
+    reliefwebRecords: [],
+    reliefwebMeta: null,
     errors: [],
   };
 }

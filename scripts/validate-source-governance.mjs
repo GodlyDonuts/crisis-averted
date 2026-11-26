@@ -200,7 +200,7 @@ function runSelfTests(registry, snapshot) {
       // 4. Explicitly unknown licenses are reported, not silently converted into legality or illegality.
       const unknownValidation = validateSnapshotGovernance(snapshot, registry);
       checkSelfTest('unknown licenses are truthful review findings rather than automatic schema failures', unknownValidation.warnings.some((message) => message.includes('license explicitly unknown')) && !unknownValidation.errors.some((message) => message.includes('license explicitly unknown')));
-      checkSelfTest('real snapshot coverage is structurally complete', Object.keys(snapshot.provenanceLedger.collections).length === 13 && Object.values(snapshot.provenanceLedger.collections).every((collection) => Array.isArray(collection.sourceIds) && collection.sourceIds.length > 0 && Array.isArray(collection.sources) && collection.sources.length === collection.sourceIds.length));
+      checkSelfTest('real snapshot coverage is structurally complete', Object.keys(snapshot.provenanceLedger.collections).length === 14 && Object.values(snapshot.provenanceLedger.collections).every((collection) => Array.isArray(collection.sourceIds) && collection.sourceIds.length > 0 && Array.isArray(collection.sources) && collection.sources.length === collection.sourceIds.length));
     }
 
     // 5. An explicit prohibited redistribution marker is a hard failure when rows are emitted.

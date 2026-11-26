@@ -189,6 +189,7 @@ function emptyEvidence(overrides = {}) {
     gpsInterference: [],
     internetOutages: [],
     gdeltGeoNews: [],
+    reliefwebRecords: [],
     ...overrides,
   };
 }
@@ -201,6 +202,51 @@ function gnssCellAt(lat, lng, overrides = {}) {
     aircraftCount: 4,
     affectedShare: 0.75,
     level: 'high',
+    ...overrides,
+  };
+}
+
+
+function reliefwebRecordAt(lat, lng, overrides = {}) {
+  return {
+    id: 'reliefweb:report:9101',
+    apiResource: 'reports',
+    recordKind: 'situation-report',
+    reliefwebId: 9101,
+    uuid: null,
+    title: 'Fixture humanitarian situation report',
+    url: 'https://reliefweb.int/report/fixtureland/fixture-humanitarian-situation-report',
+    urlAlias: null,
+    originUrl: 'https://partner.example/original',
+    status: 'published',
+    dates: { created: '2026-11-25T12:00:00.000Z', changed: '2026-11-25T12:00:00.000Z', original: null },
+    publisherTimestamp: '2026-11-25T12:00:00.000Z',
+    glide: null,
+    relatedGlide: [],
+    primaryCountry: { id: 1, name: 'Testland', shortname: 'Testland', iso3: 'TST', primary: true },
+    countries: [],
+    disasterTypes: [],
+    primaryType: null,
+    organizations: [],
+    linkedDisasters: [],
+    format: { id: 10, name: 'Situation Report' },
+    themes: [],
+    languages: [],
+    location: {
+      lat,
+      lng,
+      precision: 'country-centroid',
+      countryIso3: 'TST',
+      countryName: 'Testland',
+      basis: 'fixture country centroid',
+      note: 'fixture note: not a report location or incident coordinate',
+    },
+    coordinatePrecision: 'country-centroid',
+    coordinateNote: 'fixture note: not a report location or incident coordinate',
+    alertMetadata: null,
+    severityMetadata: null,
+    rights: { narrativeIncluded: false, excerptIncluded: false, attachmentsIncluded: false, redistributionNote: 'fixture' },
+    methodologyNote: 'fixture',
     ...overrides,
   };
 }
@@ -563,7 +609,7 @@ console.log('\nscenario 9: evidence gaps, uncertainty, copyable summary');
 {
   const incident = makeEvent({ id: 'ev-gaps', lat: 51.5, lng: 106.0, occurredAt: NOV25_NOON });
   const result = analyzeDomainConvergence([incident], emptyEvidence());
-  check('empty snapshot produces evidence gaps for every domain', result.gaps.length === 8, `${result.gaps.length}`);
+  check('empty snapshot produces evidence gaps for every domain', result.gaps.length === 9, `${result.gaps.length}`);
   check('gap reasons are explicit about what cannot be evaluated', result.gaps.every((gap) => gap.reason.length > 20));
 
   const populated = analyzeDomainConvergence(

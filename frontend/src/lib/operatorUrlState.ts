@@ -39,6 +39,7 @@ const LAYER_ORDER: readonly (keyof GodEyeLayerToggles)[] = [
   "gpsInterference",
   "internetOutages",
   "gdeltGeoNews",
+  "reliefwebHumanitarian",
 ];
 const PANEL_INSPECTOR_ORDER = ["feed", "convergence", "watch"] as const;
 const PLAYBACK_MODE_ORDER: readonly PlaybackMode[] = ["step", "trailing", "cumulative"];
@@ -111,6 +112,7 @@ export const DEFAULT_OPERATOR_LAYERS: GodEyeLayerToggles = {
   gpsInterference: true,
   internetOutages: true,
   gdeltGeoNews: true,
+  reliefwebHumanitarian: true,
 };
 
 export function createDefaultOperatorUrlState(): OperatorUrlState {

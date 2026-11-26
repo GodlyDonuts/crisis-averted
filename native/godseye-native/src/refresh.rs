@@ -271,9 +271,9 @@ fn parse_chunked_manifest(text: &str) -> Result<ChunkedManifest, String> {
     if manifest.snapshot.fetched_at != manifest.generated_at {
         return Err("manifest snapshot retrieval timestamp drift".to_string());
     }
-    if manifest.chunks.len() != 9 {
+    if manifest.chunks.len() != 10 {
         return Err(format!(
-            "manifest declares {} chunks; canonical layout requires 9",
+            "manifest declares {} chunks; canonical layout requires 10",
             manifest.chunks.len()
         ));
     }
@@ -813,11 +813,17 @@ mod tests {
             "unexpected detail: {}",
             success.detail
         );
-        assert_eq!(success.snapshot.map_events.len(), 1555);
-        assert_eq!(success.snapshot.internet_outages.len(), 191);
-        assert_eq!(success.snapshot.gdelt_geo_news.len(), 600);
         let legacy_text = std::fs::read_to_string(&monolith_path).expect("monolith readable");
         let legacy = parse_osint_snapshot(&legacy_text).expect("compatibility monolith parses");
+        assert_eq!(success.snapshot.map_events.len(), legacy.map_events.len());
+        assert_eq!(
+            success.snapshot.internet_outages.len(),
+            legacy.internet_outages.len()
+        );
+        assert_eq!(
+            success.snapshot.gdelt_geo_news.len(),
+            legacy.gdelt_geo_news.len()
+        );
         assert_eq!(
             snapshot_revision(&success.snapshot),
             snapshot_revision(&legacy)
