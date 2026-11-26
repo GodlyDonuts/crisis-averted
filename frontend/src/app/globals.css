@@ -480,9 +480,24 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .godseye-scanlines {
+    display: none;
+  }
+
   .godseye-alert-marker__pulse,
+  .godseye-alert-marker--selected::before,
   .godseye-reticle {
     animation: none;
+  }
+
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
 

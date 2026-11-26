@@ -2,6 +2,7 @@
 
 import { Plane, X } from "lucide-react";
 import type { MilitaryAircraft } from "@/types/conflict";
+import { classifyAircraftRole } from "@/lib/conflictData";
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
@@ -13,6 +14,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 export function AircraftDetailPanel({ aircraft, onClose }: { aircraft: MilitaryAircraft; onClose: () => void }) {
+  const role = classifyAircraftRole(aircraft.aircraftType);
   return (
     <aside className="godseye-panel pointer-events-auto absolute bottom-3 left-3 right-3 top-auto z-40 flex max-h-[68vh] w-auto flex-col overflow-hidden xl:bottom-[172px] xl:left-auto xl:right-4 xl:top-20 xl:max-h-none xl:w-[344px]">
       <div className="border-b border-white/8 px-4 py-4">
@@ -33,6 +35,7 @@ export function AircraftDetailPanel({ aircraft, onClose }: { aircraft: MilitaryA
       </div>
       <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4">
         <div className="grid grid-cols-2 gap-2">
+          <Metric label="Mission role" value={role.label} />
           <Metric label="Altitude" value={aircraft.altitude ? `${aircraft.altitude.toLocaleString()} ft` : "Unknown"} />
           <Metric label="Ground speed" value={aircraft.speed ? `${Math.round(aircraft.speed)} kt` : "Unknown"} />
           <Metric label="Track" value={aircraft.track !== null ? `${Math.round(aircraft.track)}°` : "Unknown"} />

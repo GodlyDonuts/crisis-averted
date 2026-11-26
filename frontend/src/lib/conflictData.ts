@@ -290,6 +290,31 @@ export async function loadConflictEvents(snapshotEvents: ConflictEvent[] = []): 
   }
 }
 
+export function classifyAircraftRole(aircraftType: string | null | undefined): { label: string; color: string } {
+  const type = (aircraftType || "").toUpperCase();
+  if (/^(KC|K35|K46|K10|A330|A3M|MMRT)/.test(type)) return { label: "Tanker", color: "#e2b75e" };
+  if (/^(E2|E3|E7|E11|RC|R135|U2|P8|RQ|MQ|GLEX|JSTARS)/.test(type)) return { label: "ISR / surveillance", color: "#8fb8d8" };
+  if (/^(B1|B2|B52|TU95|TU160)/.test(type)) return { label: "Strategic bomber", color: "#ff6b6b" };
+  if (/^(F15|F16|F18|FA18|F22|F35|EF|MIG|SU|J10|J20)/.test(type)) return { label: "Combat aircraft", color: "#f2f0df" };
+  if (/^(C5|C17|C130|C30J|A400|AN124|IL76|C2|C12|C32|C37|C40)/.test(type)) return { label: "Transport / logistics", color: "#b8c29a" };
+  if (/^(H60|UH|HH|CH|AH|H64|V22)/.test(type)) return { label: "Rotary / tiltrotor", color: "#9ec78f" };
+  return { label: "Military aviation", color: "#b8c29a" };
+}
+
+export function naturalEventColor(event: { category?: string; kind?: string }): string {
+  const category = (event.category || "").toLowerCase();
+  const kind = (event.kind || "").toLowerCase();
+  if (category.includes("red")) return "#ff5c5c";
+  if (category.includes("orange")) return "#ff9f2e";
+  if (kind.includes("tc") || category.includes("cyclone")) return "#9d7bea";
+  if (kind.includes("fl") || category.includes("flood")) return "#5aa7ff";
+  if (kind.includes("dr") || category.includes("drought")) return "#e2b75e";
+  if (kind.includes("wf") || category.includes("wildfire")) return "#ff6b45";
+  if (kind.includes("vo") || category.includes("volcano")) return "#ff7a59";
+  if (kind.includes("eq") || category.includes("earthquake")) return "#ff9f2e";
+  return "#30d158";
+}
+
 export function getTimeWindowHours(timeWindow: TimeWindowKey): number {
   switch (timeWindow) {
     case "24h": return 24;

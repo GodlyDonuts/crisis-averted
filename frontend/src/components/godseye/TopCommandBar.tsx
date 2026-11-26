@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Activity, Crosshair, Globe2, Pause, Play, Radio, RefreshCw, Satellite, Search } from "lucide-react";
+import { Activity, Crosshair, Globe2, Menu, Pause, Play, Radio, RefreshCw, Satellite, Search } from "lucide-react";
 import type { ConflictSummary } from "@/types/conflict";
 import type { GodEyeVisualMode } from "./GodEyeGlobe";
 import { formatCompact, formatRelativeTime } from "@/lib/conflictData";
@@ -55,7 +55,9 @@ export default function TopCommandBar({
 }: TopCommandBarProps) {
   const utcTime = useUtcClock();
   const searchRef = useRef<HTMLInputElement>(null);
+  const mobileSearchRef = useRef<HTMLInputElement>(null);
   const [draftQuery, setDraftQuery] = useState(query);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     if (draftQuery === query) return undefined;
@@ -67,8 +69,14 @@ export default function TopCommandBar({
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        searchRef.current?.focus();
+        if (window.innerWidth < 1024) {
+          setMobileMenuOpen(true);
+          window.setTimeout(() => mobileSearchRef.current?.focus(), 40);
+        } else {
+          searchRef.current?.focus();
+        }
       }
+      if (event.key === "Escape") setMobileMenuOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -142,6 +150,16 @@ export default function TopCommandBar({
 
           <button
             type="button"
+            onClick={() => setMobileMenuOpen((open) => !open)}
+            aria-expanded={mobileMenuOpen}
+            aria-label="Open mobile command menu"
+            className={`flex h-10 w-10 items-center justify-center rounded-sm border transition lg:hidden ${mobileMenuOpen ? "border-amber-200/30 bg-amber-300/[0.1] text-amber-100" : "border-white/10 bg-white/[0.03] text-white/55 hover:border-amber-200/25 hover:text-amber-100"}`}
+          >
+            <Menu className="h-4 w-4" />
+          </button>
+
+          <button
+            type="button"
             onClick={onTogglePause}
             aria-pressed={paused}
             aria-label={paused ? "Resume automatic intelligence refresh" : "Pause automatic intelligence refresh"}
@@ -169,6 +187,32 @@ export default function TopCommandBar({
           </button>
         </div>
       </div>
+
+      {mobileMenuOpen && (
+        <div className="godseye-panel absolute right-3 top-[4.35rem] z-50 w-[min(20rem,calc(100vw-1.5rem))] p-3 lg:hidden" role="menu" aria-label="Mobile command controls">
+          <label className="relative flex items-center">
+            <Search className="pointer-events-none absolute left-3 h-4 w-4 text-amber-100/35" />
+            <input
+              ref={mobileSearchRef}
+              value={draftQuery}
+              onChange={(event) => setDraftQuery(event.target.value)}
+              placeholder="Search incidents or theaters…"
+              className="h-10 w-full rounded-sm border border-amber-200/12 bg-white/[0.035] pl-9 pr-3 font-mono text-xs text-white outline-none placeholder:text-white/25 focus:border-amber-200/35"
+            />
+          </label>
+          <div className="mt-3 grid grid-cols-2 gap-2" role="group" aria-label="Globe rendering mode">
+            <button type="button" onClick={() => onVisualModeChange("cinematic")} aria-pressed={visualMode === "cinematic"} className={`flex h-9 items-center justify-center gap-2 rounded-sm border font-mono text-[10px] uppercase tracking-[0.14em] ${visualMode === "cinematic" ? "border-amber-200/30 bg-amber-300/[0.12] text-amber-100" : "border-white/10 text-white/46"}`}>
+              <Globe2 className="h-3.5 w-3.5" /> Operational
+            </button>
+            <button type="button" onClick={() => onVisualModeChange("satellite")} aria-pressed={visualMode === "satellite"} className={`flex h-9 items-center justify-center gap-2 rounded-sm border font-mono text-[10px] uppercase tracking-[0.14em] ${visualMode === "satellite" ? "border-amber-200/30 bg-amber-300/[0.12] text-amber-100" : "border-white/10 text-white/46"}`}>
+              <Satellite className="h-3.5 w-3.5" /> Satellite
+            </button>
+          </div>
+          <p className="mt-3 font-mono text-[9px] uppercase leading-relaxed tracking-[0.14em] text-white/30">
+            UTC {utcTime} · {formatCompact(summary.totalEvents)} incidents · {formatCompact(summary.criticalEvents)} critical
+          </p>
+        </div>
+      )}
     </header>
   );
 }

@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { createBrotliCompress, createGzip } from 'node:zlib';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,9 +33,18 @@ createServer((request, response) => {
   if (!existsSync(file)) file = join(root, 'index.html');
   const extension = extname(file);
   const immutable = pathname.startsWith('/_next/static/') || ['.png', '.jpg', '.jpeg', '.wasm', '.woff2'].includes(extension);
+  const contentType = types.get(extension) || 'application/octet-stream';
+  const compressible = ['.html', '.js', '.css', '.json', '.geojson', '.svg', '.wasm', '.txt'].includes(extension);
+  const acceptEncoding = String(request.headers['accept-encoding'] || '');
+  const encoding = compressible && acceptEncoding.includes('br') ? 'br' : compressible && acceptEncoding.includes('gzip') ? 'gzip' : null;
   response.writeHead(200, {
-    'content-type': types.get(extension) || 'application/octet-stream',
+    'content-type': contentType,
     'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+    vary: 'accept-encoding',
+    ...(encoding ? { 'content-encoding': encoding } : {}),
   });
-  createReadStream(file).pipe(response);
+  const stream = createReadStream(file);
+  if (encoding === 'br') stream.pipe(createBrotliCompress()).pipe(response);
+  else if (encoding === 'gzip') stream.pipe(createGzip()).pipe(response);
+  else stream.pipe(response);
 }).listen(port, () => console.log(`God's Eye static export: http://localhost:${port}/`));
