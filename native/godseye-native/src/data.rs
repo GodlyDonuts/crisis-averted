@@ -583,7 +583,8 @@ pub enum IncidentOccurrenceBasis {
 }
 
 /// Source-supported occurrence interval. `start` is inclusive and `end_exclusive` exclusive.
-/// This is correlation input only in the native client; no temporal playback is implemented here.
+/// Correlation and deterministic temporal playback both consume this interval directly; neither
+/// layer interpolates uncertain occurrences into invented exact instants.
 #[derive(Debug, Clone)]
 pub struct IncidentOccurrenceWindow {
     pub start: f64,

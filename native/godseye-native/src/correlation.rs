@@ -13,7 +13,8 @@ use unicode_normalization::UnicodeNormalization;
 /// uses Unix milliseconds while the native normalization layer uses Unix seconds, so all temporal
 /// constants are scaled seconds here. Scoring ratios, thresholds, ordering, negative evidence,
 /// curated-source rules, chain guarding, contradiction precedence, and provenance semantics mirror
-/// the web algorithm. No temporal playback state is built in this module.
+/// the web algorithm. Temporal playback grids are built separately in `playback.rs` from the
+/// emitted canonical incident timeline.
 pub const CORRELATION_ALGORITHM_VERSION: &str = "incident-correlation-v1";
 
 const X_CELLS: i32 = 360;
@@ -1394,9 +1395,7 @@ pub fn correlate_loaded_incidents(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::{
-        create_second_occurrence_window, load_embedded, ConflictSource, IncidentOccurrenceWindow,
-    };
+    use crate::data::{create_second_occurrence_window, load_embedded, ConflictSource};
 
     const NOW: f64 = 1_795_176_000.0; // 2026-11-20T12:00:00Z, fixed for deterministic tests
     const DAY: f64 = 86_400.0;

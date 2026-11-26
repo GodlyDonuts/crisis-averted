@@ -1,14 +1,21 @@
 use macroquad::prelude::*;
 mod correlation;
 mod data;
+mod playback;
 mod refresh;
 mod satellite;
 
 use correlation::{correlate_incidents, IncidentCorrelationStats};
 use data::{
     build_gdelt_location_markers, build_internet_outage_markers, load_embedded, parse_rfc3339_unix,
-    snapshot_revision, unix_time_now, GdeltLocationMarker, GpsInterferenceCell, Incident,
-    IncidentEvidenceCluster, InternetOutageMarker, NativeDataPackage, OsintSnapshot,
+    resolve_incident_occurrence_window, snapshot_revision, unix_time_now, GdeltLocationMarker,
+    GpsInterferenceCell, Incident, IncidentEvidenceCluster, InternetOutageMarker,
+    NativeDataPackage, OsintSnapshot,
+};
+use playback::{
+    detect_reduced_motion, format_duration_seconds, format_utc_exact, summarize_playback_events,
+    unresolved_window_intersects_playback_frame, IncidentPlaybackAnalyses,
+    IncidentPlaybackController, PlaybackEventSummary, PlaybackExtraction, PlaybackMode,
 };
 use refresh::{
     config_from_env_and_args, spawn_refresh_worker, ActiveSnapshot, RefreshCommand, RefreshMessage,
@@ -20,7 +27,7 @@ use satellite::{
 use std::borrow::Cow;
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const EARTH_RADIUS: f32 = 2.0;
 const INCIDENT_CAP: usize = 900;
@@ -642,6 +649,128 @@ fn incident_markers(incidents: &[Incident], cap: usize) -> Vec<RenderMarker> {
         .collect()
 }
 
+fn playback_incident_markers(
+    incidents: &[Incident],
+    indices: &[usize],
+    cap: usize,
+    extraction: &PlaybackExtraction,
+) -> Vec<RenderMarker> {
+    indices
+        .iter()
+        .filter_map(|index| incidents.get(*index))
+        .take(cap)
+        .map(|event| {
+            let unresolved =
+                unresolved_window_intersects_playback_frame(event, Some(&extraction.frame));
+            let mut color = severity_color(&event.severity);
+            if unresolved {
+                color.a *= 0.48;
+            }
+            RenderMarker {
+                center: lat_lng_to_vec3(event.lat, event.lng, EARTH_RADIUS * 1.006),
+                radius: incident_radius(&event.severity),
+                color,
+            }
+        })
+        .collect()
+}
+
+fn build_playback_incident_meshes(
+    incidents: &[Incident],
+    extraction: &PlaybackExtraction,
+) -> (Vec<Mesh>, Vec<Mesh>) {
+    let near = build_marker_meshes(&playback_incident_markers(
+        incidents,
+        &extraction.event_indices,
+        INCIDENT_CAP,
+        extraction,
+    ));
+    let priority_indices: Vec<usize> = extraction
+        .event_indices
+        .iter()
+        .copied()
+        .filter(|index| {
+            incidents.get(*index).is_some_and(|event| {
+                matches!(event.severity.as_str(), "critical" | "high" | "c" | "h")
+            })
+        })
+        .take(420)
+        .collect();
+    let far = build_marker_meshes(&playback_incident_markers(
+        incidents,
+        &priority_indices,
+        420,
+        extraction,
+    ));
+    (near, far)
+}
+
+struct PlaybackVisualCache {
+    extraction_version: u64,
+    near: Vec<Mesh>,
+    far_priority: Vec<Mesh>,
+    visible_mask: Vec<bool>,
+    summary: PlaybackEventSummary,
+    rebuild_ms: f64,
+}
+
+fn playback_index_visible_at_detail(
+    incidents: &[Incident],
+    extraction: &PlaybackExtraction,
+    incident_index: usize,
+    level: usize,
+) -> bool {
+    if level == 0 {
+        extraction
+            .event_indices
+            .iter()
+            .copied()
+            .filter(|index| {
+                incidents.get(*index).is_some_and(|event| {
+                    matches!(event.severity.as_str(), "critical" | "high" | "c" | "h")
+                })
+            })
+            .take(420)
+            .any(|index| index == incident_index)
+    } else {
+        extraction
+            .event_indices
+            .iter()
+            .copied()
+            .take(INCIDENT_CAP)
+            .any(|index| index == incident_index)
+    }
+}
+
+fn build_playback_visual_cache(
+    incidents: &[Incident],
+    extraction: &PlaybackExtraction,
+    extraction_version: u64,
+) -> PlaybackVisualCache {
+    let started = Instant::now();
+    let (near, far_priority) = build_playback_incident_meshes(incidents, extraction);
+    let mut visible_mask = vec![false; incidents.len()];
+    for index in &extraction.event_indices {
+        if let Some(slot) = visible_mask.get_mut(*index) {
+            *slot = true;
+        }
+    }
+    let summary = summarize_playback_events(
+        extraction
+            .event_indices
+            .iter()
+            .filter_map(|index| incidents.get(*index)),
+    );
+    PlaybackVisualCache {
+        extraction_version,
+        near,
+        far_priority,
+        visible_mask,
+        summary,
+        rebuild_ms: started.elapsed().as_secs_f64() * 1000.0,
+    }
+}
+
 fn build_satellite_mesh(positions: &[SatellitePosition]) -> Vec<Mesh> {
     let markers: Vec<RenderMarker> = positions
         .iter()
@@ -1092,6 +1221,126 @@ struct RuntimeStatus {
     config_warnings: Vec<String>,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum PlaybackClickAction {
+    ToggleActive,
+    SeekFraction(f32),
+    JumpStart,
+    StepBack,
+    TogglePlay,
+    StepForward,
+    JumpEnd,
+    Reset,
+    CycleMode,
+    SpeedDown,
+    SpeedUp,
+    CycleResolution,
+    CycleTrail,
+}
+
+fn playback_panel_rect(height: f32) -> (f32, f32, f32, f32) {
+    (18.0, (height - 282.0).max(86.0), 292.0, 192.0)
+}
+
+fn point_in_rect(point: Vec2, x: f32, y: f32, w: f32, h: f32) -> bool {
+    point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h
+}
+
+fn playback_histogram_geometry(height: f32) -> (f32, f32, f32, f32) {
+    let (x, y, w, _) = playback_panel_rect(height);
+    (x + 10.0, y + 52.0, w - 20.0, 32.0)
+}
+
+fn playback_histogram_fraction(mouse_x: f32, height: f32) -> Option<f32> {
+    let (x, _, w, _) = playback_histogram_geometry(height);
+    (w > 0.0).then_some(((mouse_x - x) / w).clamp(0.0, 1.0))
+}
+
+fn playback_point_in_panel(mouse: Vec2, height: f32) -> bool {
+    let (x, y, w, h) = playback_panel_rect(height);
+    point_in_rect(mouse, x, y, w, h)
+}
+
+fn playback_hit_action(mouse: Vec2, height: f32) -> Option<PlaybackClickAction> {
+    let (x, y, w, h) = playback_panel_rect(height);
+    if !point_in_rect(mouse, x, y, w, h) {
+        return None;
+    }
+    if point_in_rect(mouse, x + 10.0, y + 8.0, 58.0, 18.0) {
+        return Some(PlaybackClickAction::ToggleActive);
+    }
+    let (hx, hy, hw, hh) = playback_histogram_geometry(height);
+    if point_in_rect(mouse, hx, hy, hw, hh) {
+        return playback_histogram_fraction(mouse.x, height).map(PlaybackClickAction::SeekFraction);
+    }
+    let row1 = y + 94.0;
+    let button_h = 24.0;
+    let buttons = [
+        (x + 10.0, 28.0, PlaybackClickAction::JumpStart),
+        (x + 40.0, 28.0, PlaybackClickAction::StepBack),
+        (x + 70.0, 32.0, PlaybackClickAction::TogglePlay),
+        (x + 104.0, 28.0, PlaybackClickAction::StepForward),
+        (x + 136.0, 28.0, PlaybackClickAction::JumpEnd),
+        (x + 166.0, 28.0, PlaybackClickAction::Reset),
+        (x + 202.0, 80.0, PlaybackClickAction::CycleMode),
+    ];
+    for (bx, bw, action) in buttons {
+        if point_in_rect(mouse, bx, row1, bw, button_h) {
+            return Some(action);
+        }
+    }
+    let row2 = y + 126.0;
+    if point_in_rect(mouse, x + 10.0, row2, 28.0, button_h) {
+        return Some(PlaybackClickAction::SpeedDown);
+    }
+    if point_in_rect(mouse, x + 40.0, row2, 28.0, button_h) {
+        return Some(PlaybackClickAction::SpeedUp);
+    }
+    if point_in_rect(mouse, x + 120.0, row2, 76.0, button_h) {
+        return Some(PlaybackClickAction::CycleResolution);
+    }
+    if point_in_rect(mouse, x + 204.0, row2, 78.0, button_h) {
+        return Some(PlaybackClickAction::CycleTrail);
+    }
+    None
+}
+
+fn apply_playback_click_action(
+    controller: &mut IncidentPlaybackController,
+    action: PlaybackClickAction,
+) {
+    // Mouse transport is intentionally discoverable rather than hidden-stateful: using transport
+    // while the lens is off first turns the lens on, then performs the requested interaction.
+    let transport = matches!(
+        action,
+        PlaybackClickAction::SeekFraction(_)
+            | PlaybackClickAction::JumpStart
+            | PlaybackClickAction::StepBack
+            | PlaybackClickAction::TogglePlay
+            | PlaybackClickAction::StepForward
+            | PlaybackClickAction::JumpEnd
+            | PlaybackClickAction::Reset
+    );
+    if transport && !controller.active() {
+        controller.toggle_active();
+    }
+    match action {
+        PlaybackClickAction::ToggleActive => controller.toggle_active(),
+        PlaybackClickAction::SeekFraction(fraction) => controller.seek_fraction(fraction as f64),
+        PlaybackClickAction::JumpStart => controller.jump_to_start(),
+        PlaybackClickAction::StepBack => controller.step_frames(-1),
+        PlaybackClickAction::TogglePlay => controller.toggle_playing(),
+        PlaybackClickAction::StepForward => controller.step_frames(1),
+        PlaybackClickAction::JumpEnd => controller.jump_to_end(),
+        PlaybackClickAction::Reset => controller.reset(),
+        PlaybackClickAction::CycleMode => controller.cycle_mode(),
+        PlaybackClickAction::SpeedDown => controller.cycle_speed(-1),
+        PlaybackClickAction::SpeedUp => controller.cycle_speed(1),
+        PlaybackClickAction::CycleResolution => controller.cycle_resolution(),
+        PlaybackClickAction::CycleTrail => controller.cycle_trail(),
+    }
+}
+
 struct SatelliteState {
     propagators: Vec<SatellitePropagator>,
     errors: Vec<String>,
@@ -1196,17 +1445,64 @@ fn pick_entity(
     show_outages: bool,
     show_gdelt: bool,
     show_gps: bool,
+    playback_extraction: Option<&PlaybackExtraction>,
 ) -> Option<Selection> {
     let mut best = None;
     let level = detail_level(distance);
     if level == 0 {
-        for (index, event) in data
-            .incidents
-            .iter()
-            .enumerate()
-            .filter(|(_, event)| matches!(event.severity.as_str(), "critical" | "high"))
-            .take(420)
-        {
+        if let Some(extraction) = playback_extraction {
+            // Far playback picking mirrors exactly the severity-filtered, extraction-ordered
+            // priority mesh rather than scanning invisible incidents in canonical input order.
+            for index in extraction
+                .event_indices
+                .iter()
+                .copied()
+                .filter(|index| {
+                    data.incidents.get(*index).is_some_and(|event| {
+                        matches!(event.severity.as_str(), "critical" | "high" | "c" | "h")
+                    })
+                })
+                .take(420)
+            {
+                let event = &data.incidents[index];
+                consider_entity(
+                    &mut best,
+                    camera,
+                    mouse,
+                    event.lat,
+                    event.lng,
+                    EARTH_RADIUS * 1.006,
+                    Selection::Incident(index),
+                    18.0,
+                );
+            }
+        } else {
+            for (index, event) in data
+                .incidents
+                .iter()
+                .enumerate()
+                .filter(|(_, event)| matches!(event.severity.as_str(), "critical" | "high"))
+                .take(420)
+            {
+                consider_entity(
+                    &mut best,
+                    camera,
+                    mouse,
+                    event.lat,
+                    event.lng,
+                    EARTH_RADIUS * 1.006,
+                    Selection::Incident(index),
+                    18.0,
+                );
+            }
+        }
+    } else if let Some(extraction) = playback_extraction {
+        // Near playback picking mirrors the first capped extraction rows used to construct the
+        // incident mesh. Out-of-frame and beyond-cap incidents are therefore not clickable.
+        for index in extraction.event_indices.iter().copied().take(INCIDENT_CAP) {
+            let Some(event) = data.incidents.get(index) else {
+                continue;
+            };
             consider_entity(
                 &mut best,
                 camera,
@@ -1480,6 +1776,7 @@ fn format_unix_window(from: f64, until: f64) -> String {
 fn draw_inspector_panel(
     selection: Selection,
     data: &AppData,
+    playback_extraction: Option<&PlaybackExtraction>,
     satellite_positions: &[SatellitePosition],
     x: f32,
     y: f32,
@@ -1607,7 +1904,7 @@ fn draw_inspector_panel(
                     ),
                 ));
             }
-            if let Some(occurrence) = &event.occurrence {
+            if let Some(occurrence) = resolve_incident_occurrence_window(event) {
                 rows.push((
                     "OCCURRENCE",
                     format!(
@@ -1617,6 +1914,38 @@ fn draw_inspector_panel(
                         occurrence.precision.as_str()
                     ),
                 ));
+                rows.push((
+                    "TIME WINDOW",
+                    format!(
+                        "[{}, {}) · {}",
+                        format_utc_exact(occurrence.start),
+                        format_utc_exact(occurrence.end_exclusive),
+                        format_duration_seconds(occurrence.end_exclusive - occurrence.start)
+                    ),
+                ));
+            }
+            if let Some(extraction) = playback_extraction {
+                rows.push((
+                    "PLAYBACK",
+                    format!(
+                        "{} frame {} · effective [{}, {}){}",
+                        extraction.mode.label().to_lowercase(),
+                        extraction.frame_index + 1,
+                        format_utc_exact(extraction.effective_start),
+                        format_utc_exact(extraction.effective_end_exclusive),
+                        if extraction.frame_quantized {
+                            " · frame-quantized"
+                        } else {
+                            ""
+                        }
+                    ),
+                ));
+                if unresolved_window_intersects_playback_frame(event, Some(&extraction.frame)) {
+                    rows.push((
+                        "TIME UNCERT",
+                        "unresolved interval intersects this frame; marker is dimmed, not made exact".to_string(),
+                    ));
+                }
             }
             if let Some(membership) = &event.incident {
                 rows.push((
@@ -1758,7 +2087,7 @@ fn draw_inspector_panel(
                 cursor_y += 5.0;
             }
             draw_wrapped_lines(
-                "Normalized conflict evidence. Correlation indicates deterministic evidence linkage only; causality, intent, truth, and casualty certainty are not implied. Optional fields that were absent remain explicitly unavailable.",
+                "Normalized conflict evidence. Correlation indicates deterministic evidence linkage only; causality, intent, truth, and casualty certainty are not implied. Correlation confidence, member counts, and retained reports describe the full loaded evidence cluster; playback is a truthful display-time lens and never truncates or rewrites evidence retrospectively. Optional fields that were absent remain explicitly unavailable.",
                 text_x,
                 &mut cursor_y,
                 48,
@@ -2354,6 +2683,316 @@ fn draw_inspector_panel(
     }
 }
 
+fn draw_playback_button(
+    label: &str,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    enabled: bool,
+    emphasized: bool,
+) {
+    let border = if emphasized {
+        Color::new(0.9, 0.72, 0.32, 0.72)
+    } else if enabled {
+        Color::new(0.62, 0.56, 0.4, 0.42)
+    } else {
+        Color::new(0.42, 0.42, 0.38, 0.22)
+    };
+    let text = if enabled {
+        Color::new(0.86, 0.82, 0.66, 0.92)
+    } else {
+        Color::new(0.48, 0.48, 0.44, 0.45)
+    };
+    draw_rectangle(
+        x,
+        y,
+        w,
+        h,
+        if emphasized {
+            Color::new(0.32, 0.22, 0.07, 0.72)
+        } else {
+            Color::new(0.04, 0.055, 0.045, 0.78)
+        },
+    );
+    draw_rectangle_lines(x, y, w, h, 1.0, border);
+    draw_text_mono(label, x + 6.0, y + h - 7.0, 10.5, text);
+}
+
+fn draw_playback_panel(
+    controller: &IncidentPlaybackController,
+    visual_cache: Option<&PlaybackVisualCache>,
+    height: f32,
+) {
+    let (x, y, w, h) = playback_panel_rect(height);
+    draw_panel(x, y, w, h);
+    let analysis = controller.analysis();
+    let choice = controller.resolution_choice();
+    let active = controller.active();
+    let has_frames = analysis.frame_count > 0;
+
+    draw_playback_button(
+        if active { "P ON" } else { "P OFF" },
+        x + 10.0,
+        y + 8.0,
+        58.0,
+        18.0,
+        true,
+        active,
+    );
+    draw_text_mono(
+        "TEMPORAL PLAYBACK",
+        x + 76.0,
+        y + 21.0,
+        10.5,
+        Color::new(0.77, 0.64, 0.36, 0.9),
+    );
+    if controller.reduced_motion() {
+        draw_text_mono(
+            "reduced motion",
+            x + 186.0,
+            y + 21.0,
+            8.5,
+            Color::new(0.55, 0.75, 0.86, 0.78),
+        );
+    } else if active {
+        if let Some(cache) = visual_cache {
+            draw_text_mono(
+                &format!("mesh {:.1}ms", cache.rebuild_ms),
+                x + 220.0,
+                y + 21.0,
+                8.0,
+                Color::new(0.43, 0.49, 0.43, 0.62),
+            );
+        }
+    }
+
+    if let (Some(frame), true) = (controller.frame(), has_frames) {
+        let line = format!(
+            "frame {}/{} · {} · {}",
+            controller.frame_index() + 1,
+            analysis.frame_count,
+            analysis.resolution.short_label(),
+            format_utc_exact(frame.start)
+        );
+        draw_text_mono(
+            &truncate_chars(&line, 45),
+            x + 10.0,
+            y + 38.0,
+            9.5,
+            Color::new(0.78, 0.76, 0.66, 0.86),
+        );
+        draw_text_mono(
+            &truncate_chars(
+                &format!("→ {} end-exclusive", format_utc_exact(frame.end_exclusive)),
+                45,
+            ),
+            x + 10.0,
+            y + 49.0,
+            7.8,
+            Color::new(0.55, 0.59, 0.54, 0.72),
+        );
+    } else {
+        draw_text_mono(
+            "no source-valid incident times",
+            x + 10.0,
+            y + 40.0,
+            9.5,
+            Color::new(0.58, 0.56, 0.48, 0.78),
+        );
+    }
+
+    let (hx, hy, hw, hh) = playback_histogram_geometry(height);
+    draw_rectangle(hx, hy, hw, hh, Color::new(0.006, 0.01, 0.009, 0.72));
+    if has_frames {
+        let max_start = analysis.max_start_count.max(1) as f32;
+        let bar_w = hw / analysis.frame_count as f32;
+        for frame in &analysis.frames {
+            let scaled = if frame.start_count > 0 {
+                ((frame.start_count as f32 / max_start).sqrt() * 0.88).max(0.12)
+            } else {
+                0.035
+            };
+            let bar_h = hh * scaled;
+            let bx = hx + frame.index as f32 * bar_w;
+            let precise = frame
+                .start_count
+                .saturating_sub(frame.start_imprecise_count);
+            let precise_share = if frame.start_count > 0 {
+                precise as f32 / frame.start_count as f32
+            } else {
+                0.0
+            };
+            let precise_h = bar_h * precise_share;
+            let imprecise_h = bar_h - precise_h;
+            draw_rectangle(
+                bx,
+                hy + hh - precise_h,
+                bar_w.max(1.0) - 0.35,
+                precise_h,
+                Color::new(0.86, 0.66, 0.22, 0.62),
+            );
+            draw_rectangle(
+                bx,
+                hy + hh - bar_h,
+                bar_w.max(1.0) - 0.35,
+                imprecise_h,
+                Color::new(0.34, 0.67, 0.86, 0.52),
+            );
+            if frame.start_critical_count > 0 {
+                draw_rectangle(
+                    bx,
+                    hy + hh - bar_h,
+                    bar_w.max(1.0) - 0.35,
+                    2.0,
+                    Color::new(1.0, 0.18, 0.24, 0.9),
+                );
+            }
+            if frame.index == controller.frame_index() {
+                draw_rectangle_lines(
+                    bx,
+                    hy + hh - bar_h,
+                    bar_w.max(1.0),
+                    bar_h,
+                    1.2,
+                    Color::new(1.0, 0.86, 0.42, 0.92),
+                );
+            }
+        }
+    }
+    draw_rectangle_lines(hx, hy, hw, hh, 1.0, Color::new(0.58, 0.52, 0.34, 0.28));
+
+    let row1 = y + 94.0;
+    let transport_enabled = active || has_frames;
+    draw_playback_button("|<", x + 10.0, row1, 28.0, 24.0, transport_enabled, false);
+    draw_playback_button("<", x + 40.0, row1, 28.0, 24.0, transport_enabled, false);
+    draw_playback_button(
+        if controller.playing() { "||" } else { ">" },
+        x + 70.0,
+        row1,
+        32.0,
+        24.0,
+        transport_enabled,
+        controller.playing(),
+    );
+    draw_playback_button(">", x + 104.0, row1, 28.0, 24.0, transport_enabled, false);
+    draw_playback_button(">|", x + 136.0, row1, 28.0, 24.0, transport_enabled, false);
+    draw_playback_button("0", x + 166.0, row1, 28.0, 24.0, transport_enabled, false);
+    draw_playback_button(
+        &format!("M {}", controller.mode().label()),
+        x + 202.0,
+        row1,
+        80.0,
+        24.0,
+        true,
+        false,
+    );
+
+    let row2 = y + 126.0;
+    draw_playback_button("[", x + 10.0, row2, 28.0, 24.0, true, false);
+    draw_playback_button("]", x + 40.0, row2, 28.0, 24.0, true, false);
+    draw_text_mono(
+        &format!("{}x", controller.speed_multiplier()),
+        x + 72.0,
+        row2 + 16.0,
+        9.5,
+        Color::new(0.76, 0.72, 0.58, 0.86),
+    );
+    draw_playback_button(
+        &format!("R {}", controller.resolution_preference().as_str()),
+        x + 120.0,
+        row2,
+        76.0,
+        24.0,
+        true,
+        false,
+    );
+    draw_playback_button(
+        &format!(
+            "T {}",
+            format_duration_seconds(controller.trailing_frames() as f64 * analysis.step_seconds)
+        ),
+        x + 204.0,
+        row2,
+        78.0,
+        24.0,
+        true,
+        controller.mode() == PlaybackMode::Trailing,
+    );
+
+    let summary_line = if active {
+        if let Some(cache) = visual_cache {
+            format!(
+                "{} inc in {} view · {} uncertain · {} cluster reports · {} corr",
+                cache.summary.count,
+                controller.mode().label().to_lowercase(),
+                cache.summary.uncertain_time_count,
+                cache.summary.retained_report_count,
+                cache.summary.corroborated_count
+            )
+        } else {
+            "preparing deterministic frame extraction".to_string()
+        }
+    } else {
+        "lens off · full loaded incident corpus visible".to_string()
+    };
+    draw_text_mono(
+        &truncate_chars(&summary_line, 52),
+        x + 10.0,
+        y + 160.0,
+        8.8,
+        Color::new(0.62, 0.64, 0.56, 0.82),
+    );
+    let mouse = vec2(mouse_position().0, mouse_position().1);
+    let histogram_detail = if has_frames && point_in_rect(mouse, hx, hy, hw, hh) {
+        let bar_w = hw / analysis.frame_count as f32;
+        let index = (((mouse.x - hx) / bar_w).floor() as isize)
+            .clamp(0, analysis.frame_count as isize - 1) as usize;
+        analysis.frames.get(index).map(|bucket| {
+            format!(
+                "{} start ({} uncertain) · {} active memberships · {} critical",
+                bucket.start_count,
+                bucket.start_imprecise_count,
+                bucket.active_count,
+                bucket.active_critical_count
+            )
+        })
+    } else {
+        None
+    };
+    let showing_histogram_detail = histogram_detail.is_some();
+    let semantics = if let Some(detail) = histogram_detail {
+        detail
+    } else if let Some(notice) = choice.notice.as_deref() {
+        notice.to_string()
+    } else {
+        format!(
+            "{} precise · {} uncertain · {} invalid excluded",
+            analysis.coverage.precise_count,
+            analysis.coverage.imprecise_count,
+            analysis.coverage.invalid_time_count
+        )
+    };
+    draw_text_mono(
+        &truncate_chars(&semantics, 49),
+        x + 10.0,
+        y + 172.0,
+        8.2,
+        if !showing_histogram_detail && choice.notice.is_some() {
+            Color::new(0.9, 0.68, 0.34, 0.82)
+        } else {
+            Color::new(0.48, 0.5, 0.44, 0.76)
+        },
+    );
+    draw_text_mono(
+        "bars count starts once; uncertainty can span frames",
+        x + 10.0,
+        y + 184.0,
+        8.0,
+        Color::new(0.43, 0.47, 0.44, 0.72),
+    );
+}
+
 fn draw_source_status_panel(
     data: &AppData,
     status: &RuntimeStatus,
@@ -2816,9 +3455,15 @@ async fn main() {
     let mut dragging = false;
     let mut drag_distance = 0.0f32;
     let mut selection: Option<Selection> = None;
+    let playback_analyses = IncidentPlaybackAnalyses::build(&data.incidents);
+    let mut playback = IncidentPlaybackController::new(playback_analyses, detect_reduced_motion());
+    let mut playback_visual_cache: Option<PlaybackVisualCache> = None;
+    let mut playback_mouse_action: Option<PlaybackClickAction> = None;
 
     loop {
         let dt = get_frame_time();
+        let width = screen_width();
+        let height = screen_height();
 
         if let Some(receiver) = &refresh_rx {
             let mut newest_report = None;
@@ -2842,9 +3487,10 @@ async fn main() {
                 runtime_status.last_cycle = Some(report.cycle);
                 runtime_status.last_completed_unix = Some(report.completed_unix);
                 runtime_status.attempts = report.attempts;
-                if let Some(active) = report.active {
+                if let Some(mut active) = report.active {
                     let changed = active.revision != data.revision;
                     if changed {
+                        playback.replace_analyses(std::mem::take(&mut active.playback_analyses));
                         data.apply_runtime_snapshot(active);
                         scene = build_scene_meshes(
                             &data.incidents,
@@ -2911,6 +3557,63 @@ async fn main() {
             tour_mode = !tour_mode;
             last_tour_advance = 0.0;
         }
+        let playback_modifier_chord = is_key_down(KeyCode::LeftControl)
+            || is_key_down(KeyCode::RightControl)
+            || is_key_down(KeyCode::LeftAlt)
+            || is_key_down(KeyCode::RightAlt);
+        if !playback_modifier_chord && is_key_pressed(KeyCode::P) {
+            playback.toggle_active();
+        }
+        if playback.active() && !playback_modifier_chord {
+            if is_key_pressed(KeyCode::K) || is_key_pressed(KeyCode::Enter) {
+                playback.toggle_playing();
+            }
+            let frame_delta = if is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift)
+            {
+                10
+            } else {
+                1
+            };
+            if is_key_pressed(KeyCode::Left) {
+                playback.step_frames(-frame_delta);
+            }
+            if is_key_pressed(KeyCode::Right) {
+                playback.step_frames(frame_delta);
+            }
+            if is_key_pressed(KeyCode::Home) {
+                playback.jump_to_start();
+            }
+            if is_key_pressed(KeyCode::End) {
+                playback.jump_to_end();
+            }
+            if is_key_pressed(KeyCode::LeftBracket) {
+                playback.cycle_speed(-1);
+            }
+            if is_key_pressed(KeyCode::RightBracket) {
+                playback.cycle_speed(1);
+            }
+            if is_key_pressed(KeyCode::Key0) {
+                playback.reset();
+            }
+            if is_key_pressed(KeyCode::Key1) {
+                playback.set_mode(PlaybackMode::Step);
+            }
+            if is_key_pressed(KeyCode::Key2) {
+                playback.set_mode(PlaybackMode::Trailing);
+            }
+            if is_key_pressed(KeyCode::Key3) {
+                playback.set_mode(PlaybackMode::Cumulative);
+            }
+            if is_key_pressed(KeyCode::Z) {
+                playback.cycle_mode();
+            }
+        }
+        if is_key_pressed(KeyCode::Y) {
+            playback.cycle_resolution();
+        }
+        if is_key_pressed(KeyCode::U) {
+            playback.cycle_trail();
+        }
         if is_key_pressed(KeyCode::F) {
             if let Some((lat, lng, _)) = selection.and_then(|selected| {
                 selection_position(selected, &data, &satellite_state.positions)
@@ -2972,10 +3675,16 @@ async fn main() {
             camera_target = None;
             distance = (distance - wheel * 0.42).clamp(2.8, 9.5);
         }
+        let mut pending_pick_mouse: Option<Vec2> = None;
+
         if is_mouse_button_pressed(MouseButton::Left) {
             camera_target = None;
-            dragging = true;
+            let mouse = vec2(mouse_position().0, mouse_position().1);
+            playback_mouse_action = playback_hit_action(mouse, height);
             drag_distance = 0.0;
+            if playback_mouse_action.is_none() && !playback_point_in_panel(mouse, height) {
+                dragging = true;
+            }
         }
         if dragging {
             let delta = mouse_delta_position();
@@ -2986,31 +3695,78 @@ async fn main() {
         if is_mouse_button_released(MouseButton::Left) {
             let was_click = drag_distance < 7.0;
             dragging = false;
-            if was_click {
-                let mouse = vec2(mouse_position().0, mouse_position().1);
-                let camera = Camera3D {
-                    position: camera_position(yaw, pitch, distance),
-                    target: vec3(0.0, 0.0, 0.0),
-                    up: vec3(0.0, 1.0, 0.0),
-                    fovy: 45f32.to_radians(),
-                    ..Default::default()
-                };
-                selection = pick_entity(
-                    &camera,
-                    mouse,
-                    &data,
-                    &satellite_state.positions,
-                    distance,
-                    show_military,
-                    show_civil,
-                    show_maritime,
-                    show_environment,
-                    show_orbital,
-                    show_outages,
-                    show_gdelt,
-                    show_gps,
-                );
+            let mouse = vec2(mouse_position().0, mouse_position().1);
+            if let Some(pressed_action) = playback_mouse_action.take() {
+                if playback_hit_action(mouse, height) == Some(pressed_action) {
+                    apply_playback_click_action(&mut playback, pressed_action);
+                }
+            } else if was_click && !playback_point_in_panel(mouse, height) {
+                pending_pick_mouse = Some(mouse);
             }
+        }
+
+        playback.advance(dt as f64);
+        playback.refresh_extraction();
+        if playback.active() {
+            let current_version = playback.extraction_version();
+            let needs_rebuild = playback_visual_cache
+                .as_ref()
+                .is_none_or(|cache| cache.extraction_version != current_version);
+            if needs_rebuild {
+                playback_visual_cache = playback.extraction().map(|extraction| {
+                    build_playback_visual_cache(&data.incidents, extraction, current_version)
+                });
+            }
+        } else {
+            playback_visual_cache = None;
+        }
+        let playback_extraction_snapshot = if playback.active() {
+            playback.extraction()
+        } else {
+            None
+        };
+        let playback_visible_mask = playback_visual_cache
+            .as_ref()
+            .map(|cache| cache.visible_mask.as_slice());
+        // Selection is evidence inspection, not a playback exemption. When the deterministic lens
+        // moves past an incident, stale out-of-window selection is cleared instead of implying
+        // that the incident remains visible in the frame.
+        if let (Some(extraction), Some(Selection::Incident(index))) =
+            (playback_extraction_snapshot, selection)
+        {
+            if !playback_index_visible_at_detail(
+                &data.incidents,
+                extraction,
+                index,
+                detail_level(distance),
+            ) {
+                selection = None;
+            }
+        }
+        if let Some(mouse) = pending_pick_mouse {
+            let camera = Camera3D {
+                position: camera_position(yaw, pitch, distance),
+                target: vec3(0.0, 0.0, 0.0),
+                up: vec3(0.0, 1.0, 0.0),
+                fovy: 45f32.to_radians(),
+                ..Default::default()
+            };
+            selection = pick_entity(
+                &camera,
+                mouse,
+                &data,
+                &satellite_state.positions,
+                distance,
+                show_military,
+                show_civil,
+                show_maritime,
+                show_environment,
+                show_orbital,
+                show_outages,
+                show_gdelt,
+                show_gps,
+                playback_extraction_snapshot,
+            );
         }
 
         clear_background(Color::new(0.001, 0.004, 0.009, 1.0));
@@ -3046,7 +3802,13 @@ async fn main() {
 
         let level = detail_level(distance);
         if level == 0 {
-            draw_meshes(&scene.incident_far_priority);
+            if let Some(cache) = playback_visual_cache.as_ref() {
+                draw_meshes(&cache.far_priority);
+            } else {
+                draw_meshes(&scene.incident_far_priority);
+            }
+        } else if let Some(cache) = playback_visual_cache.as_ref() {
+            draw_meshes(&cache.near);
         } else {
             draw_meshes(&scene.incident_near);
         }
@@ -3079,8 +3841,6 @@ async fn main() {
         }
 
         set_default_camera();
-        let width = screen_width();
-        let height = screen_height();
         draw_rectangle(0.0, 0.0, width, 58.0, Color::new(0.004, 0.008, 0.012, 0.92));
         draw_text_mono(
             "GOD'S EYE",
@@ -3118,7 +3878,7 @@ async fn main() {
             Color::new(0.86, 0.82, 0.66, 0.9),
         );
 
-        draw_panel(18.0, 78.0, 292.0, height - 168.0);
+        draw_panel(18.0, 78.0, 292.0, (height - 450.0).max(210.0));
         draw_text_mono(
             "PRIORITY INCIDENTS",
             34.0,
@@ -3130,10 +3890,17 @@ async fn main() {
         for event in data
             .incidents
             .iter()
-            .filter(|event| matches!(event.severity.as_str(), "critical" | "high"))
+            .enumerate()
+            .filter(|(index, event)| {
+                playback_visible_mask
+                    .and_then(|mask| mask.get(*index).copied())
+                    .unwrap_or(true)
+                    && matches!(event.severity.as_str(), "critical" | "high")
+            })
+            .map(|(_, event)| event)
         {
             let y = 132.0 + list_index as f32 * 30.0;
-            if y > height - 105.0 || list_index >= 18 {
+            if y > 78.0 + (height - 450.0).max(210.0) - 28.0 || list_index >= 18 {
                 break;
             }
             let color = severity_color(&event.severity);
@@ -3211,6 +3978,8 @@ async fn main() {
             }
         }
 
+        draw_playback_panel(&playback, playback_visual_cache.as_ref(), height);
+
         if width > 980.0 {
             let panel_w = 374.0f32.min(width - 340.0);
             let x = width - panel_w - 18.0;
@@ -3218,6 +3987,7 @@ async fn main() {
                 draw_inspector_panel(
                     selected,
                     &data,
+                    playback_extraction_snapshot,
                     &satellite_state.positions,
                     x,
                     78.0,
@@ -3288,14 +4058,14 @@ async fn main() {
 
         draw_panel(18.0, height - 78.0, 1040.0, 58.0);
         draw_text_mono(
-            "CLICK inspect  ·  F focus  ·  T tour  ·  SPACE drift  ·  R refresh  ·  S sources",
+            "CLICK inspect  ·  F focus  ·  T tour  ·  SPACE drift  ·  R refresh  ·  S sources  ·  P playback  ·  K play",
             34.0,
             height - 52.0,
             12.5,
             Color::new(0.72, 0.66, 0.5, 0.84),
         );
         draw_text_mono(
-            "A military  C civil  M maritime  O orbital  E env  I outages  N media  G GPS  B borders  ESC close",
+            "←/→ frame (Shift ×10)  [/] speed  Z mode  Y resolution  U trail  ·  A C M O E I N G B layers  ESC close",
             34.0,
             height - 32.0,
             11.5,
