@@ -241,15 +241,255 @@ export interface OsintLaunch {
 }
 
 
+export type CyberEnrichmentServiceStatus = "ok" | "partial" | "preserved" | "unavailable" | "not-attempted";
+export type CyberVulnerabilitySnapshotStatus = "ok" | "partial" | "preserved" | "unavailable";
+export type NvdCvssMetricSet = "cvssMetricV40" | "cvssMetricV31" | "cvssMetricV30" | "cvssMetricV2";
+
+export interface NvdDescription {
+  lang: string;
+  value: string;
+}
+
+export interface NvdCvssMetric {
+  metricSet: NvdCvssMetricSet;
+  source: string | null;
+  type: string | null;
+  vectorString: string | null;
+  baseScore: number | null;
+  baseSeverity: string | null;
+  exploitabilityScore: number | null;
+  impactScore: number | null;
+}
+
+export interface NvdWeakness {
+  id: string;
+  source: string | null;
+  type: string | null;
+}
+
+export interface NvdReference {
+  url: string;
+  source: string | null;
+  tags: string[];
+}
+
+export interface NvdCpeMatch {
+  criteria: string;
+  vulnerable: boolean | null;
+  matchCriteriaId: string | null;
+  versionStartIncluding: string | null;
+  versionStartExcluding: string | null;
+  versionEndIncluding: string | null;
+  versionEndExcluding: string | null;
+}
+
+export interface NvdConfigurationNode {
+  operator: string | null;
+  negate: boolean | null;
+  cpeMatch: NvdCpeMatch[];
+  nodes: NvdConfigurationNode[];
+}
+
+export interface NvdConfiguration {
+  operator: string | null;
+  nodes: NvdConfigurationNode[];
+}
+
+export interface NvdAffectedVersion {
+  version: string | null;
+  status: string | null;
+  versionType: string | null;
+  lessThan: string | null;
+  lessThanOrEqual: string | null;
+  changes: { at: string; status: string }[];
+}
+
+export interface NvdAffectedProduct {
+  source: string | null;
+  vendor: string | null;
+  product: string | null;
+  collectionUrl: string | null;
+  packageName: string | null;
+  defaultStatus: string | null;
+  platforms: string[];
+  cpes: string[];
+  modules: string[];
+  versions: NvdAffectedVersion[];
+}
+
+export interface NvdEvidenceTruncation {
+  descriptionsOmitted: number;
+  referencesOmitted: number;
+  referenceTagsOmitted: number;
+  configurationsOmitted: number;
+  cpeMatchesOmitted: number;
+  affectedProductsOmitted: number;
+  affectedVersionsOmitted: number;
+  affectedFieldValuesOmitted: number;
+  nonCweWeaknessValuesOmitted: number;
+  invalidFieldCount: number;
+}
+
+export interface NvdCveEvidence {
+  id: string;
+  sourceIdentifier: string | null;
+  vulnStatus: string | null;
+  published: string | null;
+  lastModified: string | null;
+  descriptions: NvdDescription[];
+  metrics: NvdCvssMetric[];
+  weaknesses: NvdWeakness[];
+  references: NvdReference[];
+  configurations: NvdConfiguration[];
+  affectedProducts: NvdAffectedProduct[];
+  /** Original NVD API retrieval time. Cache/prior preservation never rewrites this timestamp. */
+  retrievedAt: string;
+  truncation: NvdEvidenceTruncation;
+}
+
+export interface EpssEvidence {
+  cve: string;
+  /** FIRST EPSS probability estimate for exploitation in the next 30 days; not observed exploitation evidence. */
+  score: number;
+  percentile: number;
+  /** FIRST's supplied score date. */
+  date: string | null;
+  /** Original EPSS API retrieval time. Cache/prior preservation never rewrites this timestamp. */
+  retrievedAt: string;
+}
+
 export interface OsintCyberVulnerability {
   cveId: string;
   vendor: string | null;
   product: string | null;
-  name: string;
+  name: string | null;
   dateAdded: string | null;
   dueDate: string | null;
-  ransomwareUse: string;
+  ransomwareUse: string | null;
   requiredAction: string | null;
+  nvd: NvdCveEvidence | null;
+  epss: EpssEvidence | null;
+}
+
+export interface CyberRateLimitCounters {
+  requestAttemptCount: number;
+  successfulRequestCount: number;
+  retryCount: number;
+  throttledResponseCount: number;
+  retryDelayMsTotal: number;
+  retryDelayMsMax: number;
+}
+
+export interface CyberKevProvenance {
+  status: CyberEnrichmentServiceStatus;
+  provider: string;
+  apiUrl: string;
+  requestUrl: string;
+  retrievedAt: string | null;
+  title: string | null;
+  catalogVersion: string | null;
+  dateReleased: string | null;
+  reportedCount: number;
+  fetchedRecordCount: number;
+  validRecordCount: number;
+  selectedRecordCount: number;
+  maxSelectedRecords: number;
+  omittedRecordCount: number;
+  omittedByReason: {
+    invalidRecord: number;
+    duplicateCveId: number;
+    selectionCap: number;
+  };
+}
+
+export interface CyberNvdProvenance extends CyberRateLimitCounters {
+  status: CyberEnrichmentServiceStatus;
+  provider: string;
+  apiBaseUrl: string;
+  apiVersion: "2.0";
+  /** Presence only; the build-time secret value is never serialized. */
+  apiKeyConfigured: boolean;
+  batchParameter: "cveIds";
+  maxBatchSize: number;
+  maxConcurrency: 1;
+  configuredMinRequestIntervalMs: number;
+  documentedPublicRequestsPerRolling30Seconds: number;
+  documentedAuthenticatedRequestsPerRolling30Seconds: number;
+  maxAttemptsPerBatch: number;
+  retryFallbackDelayMs: number;
+  maxRetryDelayMs: number;
+  cacheTtlMs: number;
+  negativeCacheTtlMs: number;
+  requestedCveCount: number;
+  fetchedCveCount: number;
+  freshCacheHitCount: number;
+  negativeCacheHitCount: number;
+  staleCacheHitCount: number;
+  priorSnapshotHitCount: number;
+  enrichedCveCount: number;
+  omittedCveCount: number;
+  omittedByReason: {
+    missingNvdRecord: number;
+    invalidNvdRecord: number;
+    requestFailed: number;
+    notAttempted: number;
+  };
+  requestUrls: string[];
+  retrievedAt: string | null;
+  statusDetail?: string | null;
+}
+
+export interface CyberEpssProvenance extends CyberRateLimitCounters {
+  status: CyberEnrichmentServiceStatus;
+  provider: string;
+  apiBaseUrl: string;
+  scope: "public";
+  maxCveParameterChars: number;
+  maxCvesPerBatch: number;
+  maxConcurrency: 1;
+  configuredMinRequestIntervalMs: number;
+  maxAttemptsPerBatch: number;
+  retryFallbackDelayMs: number;
+  maxRetryDelayMs: number;
+  cacheTtlMs: number;
+  negativeCacheTtlMs: number;
+  requestedCveCount: number;
+  fetchedCveCount: number;
+  freshCacheHitCount: number;
+  negativeCacheHitCount: number;
+  staleCacheHitCount: number;
+  priorSnapshotHitCount: number;
+  enrichedCveCount: number;
+  omittedCveCount: number;
+  omittedByReason: {
+    missingEpssRecord: number;
+    invalidEpssRecord: number;
+    requestFailed: number;
+    notAttempted: number;
+  };
+  requestUrls: string[];
+  retrievedAt: string | null;
+  statusDetail?: string | null;
+}
+
+export interface CyberVulnerabilityMeta {
+  status: CyberVulnerabilitySnapshotStatus;
+  provider: string;
+  selection: string;
+  caveat: string;
+  statusDetail: string | null;
+  preservedAt: string | null;
+  kev: CyberKevProvenance;
+  nvd: CyberNvdProvenance;
+  epss: CyberEpssProvenance;
+  cache: {
+    status: "ok" | "empty" | "unavailable" | "write-failed";
+    path: string;
+    version: number;
+    loaded: boolean;
+    written: boolean;
+    detail: string | null;
+  };
 }
 
 export type IodaEntityType = "country" | "region";
@@ -473,6 +713,7 @@ export interface OsintSnapshot {
   mapOfWarsEvents: MapOfWarsRawEvent[];
   webcams: OsintWebcam[];
   cyberVulnerabilities: OsintCyberVulnerability[];
+  cyberVulnerabilityMeta: CyberVulnerabilityMeta | null;
   internetOutages: IodaInternetOutage[];
   internetOutageMeta: IodaInternetOutageMeta | null;
   ucdpMeta: UcdpIngestionMeta | null;

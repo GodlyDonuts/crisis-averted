@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
@@ -474,6 +474,1013 @@ async function collectGdeltGeoNews() {
   meta.status = 'ok';
   for (const mention of selected) delete mention.slotEpochMs;
   return { mentions: selected, meta };
+}
+
+// Authoritative cyber-vulnerability enrichment. NVD documents the CVE 2.0 API at
+// services.nvd.nist.gov/rest/json/cves/2.0, apiKey as a request header, 5 requests per
+// rolling 30 seconds without a key and 50 per rolling 30 seconds with one. The pipeline
+// is deliberately more conservative than either quota: serial requests only, cveIds
+// batching, a minimum 6.5 second gap when more than one NVD request is needed, one
+// bounded retry for transient/rate-limit responses, and six-hour positive caching.
+const CISA_KEV_API_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
+const CISA_KEV_MAX_RECORDS = 30;
+const NVD_CVE_API_URL = 'https://services.nvd.nist.gov/rest/json/cves/2.0';
+const NVD_CVE_IDS_MAX_BATCH = 100;
+const NVD_MIN_REQUEST_INTERVAL_MS = 6500;
+const NVD_MAX_ATTEMPTS_PER_BATCH = 2;
+const NVD_RETRY_FALLBACK_DELAY_MS = 31000;
+const NVD_MAX_RETRY_DELAY_MS = 75000;
+const NVD_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const NVD_NEGATIVE_CACHE_TTL_MS = 60 * 60 * 1000;
+const NVD_MAX_DESCRIPTIONS_PER_CVE = 4;
+const NVD_MAX_REFERENCES_PER_CVE = 12;
+const NVD_MAX_REFERENCE_TAGS_PER_REFERENCE = 8;
+const NVD_MAX_CONFIGURATIONS_PER_CVE = 12;
+const NVD_MAX_CPE_MATCHES_PER_CVE = 40;
+const NVD_MAX_AFFECTED_PRODUCTS_PER_CVE = 12;
+const NVD_MAX_AFFECTED_VERSIONS_PER_PRODUCT = 10;
+const NVD_MAX_AFFECTED_CHANGES_PER_VERSION = 8;
+const NVD_MAX_AFFECTED_STRINGS_PER_FIELD = 12;
+const EPSS_API_URL = 'https://api.first.org/data/v1/epss';
+const EPSS_CVE_PARAMETER_MAX_CHARS = 2000;
+const EPSS_MAX_CVES_PER_BATCH = 100;
+const EPSS_MIN_REQUEST_INTERVAL_MS = 600;
+const EPSS_MAX_ATTEMPTS_PER_BATCH = 2;
+const EPSS_RETRY_FALLBACK_DELAY_MS = 5000;
+const EPSS_MAX_RETRY_DELAY_MS = 60000;
+const EPSS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const EPSS_NEGATIVE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const VULNERABILITY_CACHE_VERSION = 3;
+const VULNERABILITY_CACHE_PATH = 'scripts/.cache/nvd-cve-enrichment.json';
+const VULNERABILITY_CACHE_FILE = join(root, 'scripts', '.cache', 'nvd-cve-enrichment.json');
+const CYBER_VULNERABILITY_CAVEAT = 'CISA KEV presence is authoritative evidence that CISA knows the vulnerability has been exploited; it is not a complete exploitation inventory. NVD fields are NVD/CNA-supplied vulnerability metadata, not independent confirmation of exploitation, and absent NVD or EPSS fields are explicit gaps rather than zero risk. EPSS is FIRST\'s current probability estimate for exploitation in the next 30 days, not observed exploitation evidence. Bounded references, affected-product entries, configurations, and CPE matches are build-size caps; per-record truncation counts disclose what was omitted. Cached or preserved evidence retains its original retrieval timestamp and is never represented as a fresh authoritative lookup.';
+const CYBER_VULNERABILITY_SELECTION = `Selects the ${CISA_KEV_MAX_RECORDS} most recently added valid unique CISA KEV records, enriches those CVE IDs with the NVD CVE 2.0 cveIds batch API (maximum ${NVD_CVE_IDS_MAX_BATCH} IDs/request, serial concurrency), and queries FIRST EPSS public scores in length-bounded batches (maximum ${EPSS_CVE_PARAMETER_MAX_CHARS} characters of CVE parameter, serial concurrency). NVD descriptions are capped at ${NVD_MAX_DESCRIPTIONS_PER_CVE}, references at ${NVD_MAX_REFERENCES_PER_CVE}, configurations at ${NVD_MAX_CONFIGURATIONS_PER_CVE}, CPE matches at ${NVD_MAX_CPE_MATCHES_PER_CVE}, and affected products at ${NVD_MAX_AFFECTED_PRODUCTS_PER_CVE} per CVE.`;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(value) {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+  const dateMs = Date.parse(value);
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : null;
+}
+
+async function getJsonWithMetadata(url, timeout = 20000, extraHeaders = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'GodseyeOSINT/1.0 (+https://github.com/GodlyDonuts/crisis-averted)', ...extraHeaders },
+    });
+    const text = await response.text();
+    let payload = null;
+    if (text.trim()) {
+      try { payload = JSON.parse(text); } catch { payload = null; }
+    }
+    if (!response.ok) {
+      const upstreamMessage = response.headers.get('message');
+      const error = new Error(`${response.status}${upstreamMessage ? ` ${upstreamMessage}` : ''}`);
+      error.status = response.status;
+      error.retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
+      throw error;
+    }
+    if (!payload || typeof payload !== 'object') throw new Error('invalid JSON response contract');
+    return { payload, status: response.status, retrievedAt: new Date().toISOString() };
+  } finally { clearTimeout(timer); }
+}
+
+async function fetchJsonWithBoundedRetry(url, timeout, extraHeaders, behavior, counters, state) {
+  for (let attempt = 1; attempt <= behavior.maxAttempts; attempt += 1) {
+    const wait = behavior.minIntervalMs - (Date.now() - state.lastRequestAt);
+    if (wait > 0) await sleep(wait);
+    state.lastRequestAt = Date.now();
+    counters.requestAttemptCount += 1;
+    try {
+      const result = await getJsonWithMetadata(url, timeout, extraHeaders);
+      counters.successfulRequestCount += 1;
+      return result;
+    } catch (error) {
+      if (error.status === 429) counters.throttledResponseCount += 1;
+      const retryable = error.status === undefined || [408, 429, 500, 502, 503, 504].includes(error.status);
+      if (!retryable || attempt >= behavior.maxAttempts) throw error;
+      if (error.retryAfterMs !== null && error.retryAfterMs !== undefined && error.retryAfterMs > behavior.maxRetryDelayMs) throw error;
+      counters.retryCount += 1;
+      const retryDelayMs = Math.min(error.retryAfterMs ?? behavior.retryFallbackDelayMs, behavior.maxRetryDelayMs);
+      counters.retryDelayMsTotal += retryDelayMs;
+      counters.retryDelayMsMax = Math.max(counters.retryDelayMsMax, retryDelayMs);
+      await sleep(retryDelayMs);
+    }
+  }
+  throw new Error('bounded retry loop exhausted unexpectedly');
+}
+
+function createCyberKevOmissionCounts() {
+  return {
+    invalidRecord: 0,
+    duplicateCveId: 0,
+    selectionCap: 0,
+  };
+}
+
+function createCyberNvdOmissionCounts() {
+  return {
+    missingNvdRecord: 0,
+    invalidNvdRecord: 0,
+    requestFailed: 0,
+    notAttempted: 0,
+  };
+}
+
+function createCyberEpssOmissionCounts() {
+  return {
+    missingEpssRecord: 0,
+    invalidEpssRecord: 0,
+    requestFailed: 0,
+    notAttempted: 0,
+  };
+}
+
+function createCyberRateLimitCounters() {
+  return {
+    requestAttemptCount: 0,
+    successfulRequestCount: 0,
+    retryCount: 0,
+    throttledResponseCount: 0,
+    retryDelayMsTotal: 0,
+    retryDelayMsMax: 0,
+  };
+}
+
+function createCyberVulnerabilityMeta(status = 'unavailable') {
+  return {
+    status,
+    provider: 'CISA Known Exploited Vulnerabilities + NIST NVD CVE API 2.0 + FIRST EPSS API',
+    selection: CYBER_VULNERABILITY_SELECTION,
+    caveat: CYBER_VULNERABILITY_CAVEAT,
+    statusDetail: null,
+    preservedAt: null,
+    kev: {
+      status: 'unavailable',
+      provider: 'CISA Known Exploited Vulnerabilities catalog',
+      apiUrl: CISA_KEV_API_URL,
+      requestUrl: CISA_KEV_API_URL,
+      retrievedAt: null,
+      title: null,
+      catalogVersion: null,
+      dateReleased: null,
+      reportedCount: 0,
+      fetchedRecordCount: 0,
+      validRecordCount: 0,
+      selectedRecordCount: 0,
+      maxSelectedRecords: CISA_KEV_MAX_RECORDS,
+      omittedRecordCount: 0,
+      omittedByReason: createCyberKevOmissionCounts(),
+    },
+    nvd: {
+      status: 'not-attempted',
+      provider: 'NIST National Vulnerability Database CVE API',
+      apiBaseUrl: NVD_CVE_API_URL,
+      apiVersion: '2.0',
+      apiKeyConfigured: false,
+      batchParameter: 'cveIds',
+      maxBatchSize: NVD_CVE_IDS_MAX_BATCH,
+      maxConcurrency: 1,
+      configuredMinRequestIntervalMs: NVD_MIN_REQUEST_INTERVAL_MS,
+      documentedPublicRequestsPerRolling30Seconds: 5,
+      documentedAuthenticatedRequestsPerRolling30Seconds: 50,
+      maxAttemptsPerBatch: NVD_MAX_ATTEMPTS_PER_BATCH,
+      retryFallbackDelayMs: NVD_RETRY_FALLBACK_DELAY_MS,
+      maxRetryDelayMs: NVD_MAX_RETRY_DELAY_MS,
+      cacheTtlMs: NVD_CACHE_TTL_MS,
+      negativeCacheTtlMs: NVD_NEGATIVE_CACHE_TTL_MS,
+      requestedCveCount: 0,
+      fetchedCveCount: 0,
+      freshCacheHitCount: 0,
+      negativeCacheHitCount: 0,
+      staleCacheHitCount: 0,
+      priorSnapshotHitCount: 0,
+      enrichedCveCount: 0,
+      omittedCveCount: 0,
+      omittedByReason: createCyberNvdOmissionCounts(),
+      requestUrls: [],
+      retrievedAt: null,
+      ...createCyberRateLimitCounters(),
+    },
+    epss: {
+      status: 'not-attempted',
+      provider: 'FIRST Exploit Prediction Scoring System (EPSS) API v1',
+      apiBaseUrl: EPSS_API_URL,
+      scope: 'public',
+      maxCveParameterChars: EPSS_CVE_PARAMETER_MAX_CHARS,
+      maxCvesPerBatch: EPSS_MAX_CVES_PER_BATCH,
+      maxConcurrency: 1,
+      configuredMinRequestIntervalMs: EPSS_MIN_REQUEST_INTERVAL_MS,
+      maxAttemptsPerBatch: EPSS_MAX_ATTEMPTS_PER_BATCH,
+      retryFallbackDelayMs: EPSS_RETRY_FALLBACK_DELAY_MS,
+      maxRetryDelayMs: EPSS_MAX_RETRY_DELAY_MS,
+      cacheTtlMs: EPSS_CACHE_TTL_MS,
+      negativeCacheTtlMs: EPSS_NEGATIVE_CACHE_TTL_MS,
+      requestedCveCount: 0,
+      fetchedCveCount: 0,
+      freshCacheHitCount: 0,
+      negativeCacheHitCount: 0,
+      staleCacheHitCount: 0,
+      priorSnapshotHitCount: 0,
+      enrichedCveCount: 0,
+      omittedCveCount: 0,
+      omittedByReason: createCyberEpssOmissionCounts(),
+      requestUrls: [],
+      retrievedAt: null,
+      ...createCyberRateLimitCounters(),
+    },
+    cache: {
+      status: 'empty',
+      path: VULNERABILITY_CACHE_PATH,
+      version: VULNERABILITY_CACHE_VERSION,
+      loaded: false,
+      written: false,
+      detail: null,
+    },
+  };
+}
+
+function createEmptyVulnerabilityCache() {
+  return {
+    version: VULNERABILITY_CACHE_VERSION,
+    updatedAt: null,
+    nvd: {},
+    epss: {},
+  };
+}
+
+function loadVulnerabilityCache(meta) {
+  if (!existsSync(VULNERABILITY_CACHE_FILE)) return createEmptyVulnerabilityCache();
+  try {
+    const parsed = JSON.parse(readFileSync(VULNERABILITY_CACHE_FILE, 'utf8'));
+    if (parsed?.version !== VULNERABILITY_CACHE_VERSION || typeof parsed.nvd !== 'object' || typeof parsed.epss !== 'object') {
+      meta.cache.status = 'unavailable';
+      meta.cache.detail = 'cache schema/version mismatch; starting with an empty cache';
+      return createEmptyVulnerabilityCache();
+    }
+    meta.cache.status = 'ok';
+    meta.cache.loaded = true;
+    return {
+      version: VULNERABILITY_CACHE_VERSION,
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : null,
+      nvd: parsed.nvd && !Array.isArray(parsed.nvd) ? parsed.nvd : {},
+      epss: parsed.epss && !Array.isArray(parsed.epss) ? parsed.epss : {},
+    };
+  } catch (error) {
+    meta.cache.status = 'unavailable';
+    meta.cache.detail = `cache unreadable: ${error.message}`;
+    return createEmptyVulnerabilityCache();
+  }
+}
+
+function writeVulnerabilityCache(cache, meta) {
+  try {
+    mkdirSync(dirname(VULNERABILITY_CACHE_FILE), { recursive: true });
+    const tmpFile = `${VULNERABILITY_CACHE_FILE}.tmp`;
+    writeFileSync(tmpFile, JSON.stringify({ ...cache, version: VULNERABILITY_CACHE_VERSION, updatedAt: new Date().toISOString() }));
+    renameSync(tmpFile, VULNERABILITY_CACHE_FILE);
+    meta.cache.written = true;
+    meta.cache.status = 'ok';
+    return true;
+  } catch (error) {
+    meta.cache.status = 'write-failed';
+    meta.cache.detail = `cache write failed: ${error.message}`;
+    return false;
+  }
+}
+
+function normalizeCveId(value) {
+  if (typeof value !== 'string') return null;
+  const cveId = value.trim().toUpperCase();
+  return /^CVE-\d{4}-\d{4,}$/.test(cveId) ? cveId : null;
+}
+
+function uniqueValidCveIds(values) {
+  return [...new Set((values ?? []).map(normalizeCveId).filter(Boolean))];
+}
+
+function validIsoDateTimeString(value) {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+function plausibleNvdEvidence(evidence, cveId) {
+  return evidence && typeof evidence === 'object'
+    && evidence.id === cveId
+    && validIsoDateTimeString(evidence.retrievedAt)
+    && Array.isArray(evidence.descriptions)
+    && Array.isArray(evidence.metrics)
+    && Array.isArray(evidence.weaknesses)
+    && Array.isArray(evidence.references)
+    && Array.isArray(evidence.configurations)
+    && Array.isArray(evidence.affectedProducts)
+    && evidence.truncation && typeof evidence.truncation === 'object'
+    && Object.keys(createNvdEvidenceTruncation()).every((key) => Number.isInteger(evidence.truncation[key]) && evidence.truncation[key] >= 0);
+}
+
+function plausibleEpssEvidence(evidence, cveId) {
+  return evidence && typeof evidence === 'object'
+    && evidence.cve === cveId
+    && Number.isFinite(evidence.score)
+    && Number.isFinite(evidence.percentile)
+    && validIsoDateTimeString(evidence.retrievedAt);
+}
+
+function createNvdEvidenceTruncation() {
+  return {
+    descriptionsOmitted: 0,
+    referencesOmitted: 0,
+    referenceTagsOmitted: 0,
+    configurationsOmitted: 0,
+    cpeMatchesOmitted: 0,
+    affectedProductsOmitted: 0,
+    affectedVersionsOmitted: 0,
+    affectedFieldValuesOmitted: 0,
+    nonCweWeaknessValuesOmitted: 0,
+    invalidFieldCount: 0,
+  };
+}
+
+function normalizeNvdDescriptions(value, truncation) {
+  const valid = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    const lang = textOrNull(item?.lang);
+    const description = textOrNull(item?.value);
+    if (lang && description) valid.push({ lang, value: description });
+    else truncation.invalidFieldCount += 1;
+  }
+  truncation.descriptionsOmitted += Math.max(0, valid.length - NVD_MAX_DESCRIPTIONS_PER_CVE);
+  return valid.slice(0, NVD_MAX_DESCRIPTIONS_PER_CVE);
+}
+
+function normalizeNvdMetrics(metrics) {
+  const normalized = [];
+  for (const metricSet of ['cvssMetricV40', 'cvssMetricV31', 'cvssMetricV30', 'cvssMetricV2']) {
+    for (const item of Array.isArray(metrics?.[metricSet]) ? metrics[metricSet] : []) {
+      const cvssData = item?.cvssData && typeof item.cvssData === 'object' ? item.cvssData : {};
+      normalized.push({
+        metricSet,
+        source: textOrNull(item?.source),
+        type: textOrNull(item?.type),
+        vectorString: textOrNull(cvssData.vectorString),
+        baseScore: numberOrNull(cvssData.baseScore),
+        baseSeverity: textOrNull(cvssData.baseSeverity ?? item?.baseSeverity),
+        exploitabilityScore: numberOrNull(item?.exploitabilityScore),
+        impactScore: numberOrNull(item?.impactScore),
+      });
+    }
+  }
+  return normalized;
+}
+
+function normalizeNvdWeaknesses(value, truncation) {
+  const weaknesses = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    const source = textOrNull(item?.source);
+    const type = textOrNull(item?.type);
+    const descriptions = Array.isArray(item?.description) ? item.description : [];
+    if (descriptions.length === 0) truncation.invalidFieldCount += 1;
+    for (const description of descriptions) {
+      const id = textOrNull(description?.value);
+      if (id && /^CWE-\d+$/.test(id)) weaknesses.push({ id, source, type });
+      else if (id) truncation.nonCweWeaknessValuesOmitted += 1;
+      else truncation.invalidFieldCount += 1;
+    }
+  }
+  return weaknesses;
+}
+
+function normalizeHttpUrl(value) {
+  const text = textOrNull(value);
+  if (!text) return null;
+  try {
+    const url = new URL(text);
+    return ['http:', 'https:'].includes(url.protocol) ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeNvdReferences(value, truncation) {
+  const references = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    if (references.length >= NVD_MAX_REFERENCES_PER_CVE) {
+      truncation.referencesOmitted += 1;
+      continue;
+    }
+    const url = normalizeHttpUrl(item?.url);
+    if (!url) {
+      truncation.invalidFieldCount += 1;
+      continue;
+    }
+    const tags = (Array.isArray(item?.tags) ? item.tags : []).filter((tag) => typeof tag === 'string' && tag.trim()).map((tag) => tag.trim());
+    truncation.referenceTagsOmitted += Math.max(0, tags.length - NVD_MAX_REFERENCE_TAGS_PER_REFERENCE);
+    references.push({
+      url,
+      source: textOrNull(item?.source),
+      tags: tags.slice(0, NVD_MAX_REFERENCE_TAGS_PER_REFERENCE),
+    });
+  }
+  return references;
+}
+
+function normalizeNvdCpeMatch(value) {
+  const criteria = textOrNull(value?.criteria);
+  if (!criteria || !criteria.startsWith('cpe:2.3:')) return null;
+  return {
+    criteria,
+    vulnerable: typeof value?.vulnerable === 'boolean' ? value.vulnerable : null,
+    matchCriteriaId: textOrNull(value?.matchCriteriaId),
+    versionStartIncluding: textOrNull(value?.versionStartIncluding),
+    versionStartExcluding: textOrNull(value?.versionStartExcluding),
+    versionEndIncluding: textOrNull(value?.versionEndIncluding),
+    versionEndExcluding: textOrNull(value?.versionEndExcluding),
+  };
+}
+
+function countRawConfigurationCpeMatches(value) {
+  if (!value || typeof value !== 'object') return 0;
+  const own = Array.isArray(value.cpeMatch) ? value.cpeMatch.length : 0;
+  return own + (Array.isArray(value.nodes) ? value.nodes : []).reduce((sum, node) => sum + countRawConfigurationCpeMatches(node), 0);
+}
+
+function nvdConfigurationNodeHasEvidence(node) {
+  return node.cpeMatch.length > 0 || node.nodes.some(nvdConfigurationNodeHasEvidence);
+}
+
+function normalizeNvdConfigurationNode(rawNode, cpeBudget, truncation) {
+  const node = {
+    operator: textOrNull(rawNode?.operator),
+    negate: typeof rawNode?.negate === 'boolean' ? rawNode.negate : null,
+    cpeMatch: [],
+    nodes: [],
+  };
+  for (const rawMatch of Array.isArray(rawNode?.cpeMatch) ? rawNode.cpeMatch : []) {
+    if (cpeBudget.remaining <= 0) {
+      truncation.cpeMatchesOmitted += 1;
+      continue;
+    }
+    const match = normalizeNvdCpeMatch(rawMatch);
+    if (!match) {
+      truncation.invalidFieldCount += 1;
+      continue;
+    }
+    cpeBudget.remaining -= 1;
+    node.cpeMatch.push(match);
+  }
+  for (const rawChild of Array.isArray(rawNode?.nodes) ? rawNode.nodes : []) {
+    const child = normalizeNvdConfigurationNode(rawChild, cpeBudget, truncation);
+    if (nvdConfigurationNodeHasEvidence(child)) node.nodes.push(child);
+  }
+  return node;
+}
+
+function normalizeNvdConfigurations(value, truncation) {
+  const configurations = [];
+  for (const rawConfiguration of Array.isArray(value) ? value : []) {
+    if (configurations.length >= NVD_MAX_CONFIGURATIONS_PER_CVE) {
+      truncation.configurationsOmitted += 1;
+      truncation.cpeMatchesOmitted += countRawConfigurationCpeMatches(rawConfiguration);
+      continue;
+    }
+    const cpeBudget = { remaining: Math.max(0, NVD_MAX_CPE_MATCHES_PER_CVE - configurations.reduce((sum, item) => sum + countNvdConfigurationCpeMatches(item), 0)) };
+    const nodes = (Array.isArray(rawConfiguration?.nodes) ? rawConfiguration.nodes : [])
+      .map((node) => normalizeNvdConfigurationNode(node, cpeBudget, truncation))
+      .filter(nvdConfigurationNodeHasEvidence);
+    if (nodes.length === 0) {
+      if (countRawConfigurationCpeMatches(rawConfiguration) === 0) truncation.invalidFieldCount += 1;
+      continue;
+    }
+    configurations.push({
+      operator: textOrNull(rawConfiguration?.operator),
+      nodes,
+    });
+  }
+  return configurations;
+}
+
+function countNvdConfigurationCpeMatches(configuration) {
+  const countNode = (node) => node.cpeMatch.length + node.nodes.reduce((sum, child) => sum + countNode(child), 0);
+  return (configuration?.nodes ?? []).reduce((sum, node) => sum + countNode(node), 0);
+}
+
+function normalizeStringList(value, cap, truncation) {
+  const strings = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    const text = textOrNull(item);
+    if (text) strings.push(text);
+    else truncation.invalidFieldCount += 1;
+  }
+  truncation.affectedFieldValuesOmitted += Math.max(0, strings.length - cap);
+  return strings.slice(0, cap);
+}
+
+function normalizeNvdAffectedVersion(rawVersion, truncation) {
+  const rawChanges = Array.isArray(rawVersion?.changes) ? rawVersion.changes : [];
+  const changes = [];
+  for (const rawChange of rawChanges.slice(0, NVD_MAX_AFFECTED_CHANGES_PER_VERSION)) {
+    const at = textOrNull(rawChange?.at);
+    const status = textOrNull(rawChange?.status);
+    if (at && status) changes.push({ at, status });
+    else truncation.invalidFieldCount += 1;
+  }
+  truncation.affectedFieldValuesOmitted += Math.max(0, rawChanges.length - NVD_MAX_AFFECTED_CHANGES_PER_VERSION);
+  return {
+    version: textOrNull(rawVersion?.version),
+    status: textOrNull(rawVersion?.status),
+    versionType: textOrNull(rawVersion?.versionType),
+    lessThan: textOrNull(rawVersion?.lessThan),
+    lessThanOrEqual: textOrNull(rawVersion?.lessThanOrEqual),
+    changes,
+  };
+}
+
+function normalizeNvdAffectedProducts(value, truncation) {
+  const products = [];
+  for (const group of Array.isArray(value) ? value : []) {
+    const source = textOrNull(group?.source);
+    const affectedData = Array.isArray(group?.affectedData)
+      ? group.affectedData
+      : (group && typeof group === 'object' && (group.vendor || group.product || Array.isArray(group.versions)) ? [group] : []);
+    if (affectedData.length === 0) truncation.invalidFieldCount += 1;
+    for (const rawProduct of affectedData) {
+      if (products.length >= NVD_MAX_AFFECTED_PRODUCTS_PER_CVE) {
+        truncation.affectedProductsOmitted += 1;
+        continue;
+      }
+      const rawVersions = Array.isArray(rawProduct?.versions) ? rawProduct.versions : [];
+      truncation.affectedVersionsOmitted += Math.max(0, rawVersions.length - NVD_MAX_AFFECTED_VERSIONS_PER_PRODUCT);
+      const cpes = [];
+      for (const cpe of normalizeStringList(rawProduct?.cpes, NVD_MAX_AFFECTED_STRINGS_PER_FIELD, truncation)) {
+        if (cpe.startsWith('cpe:')) cpes.push(cpe);
+        else truncation.invalidFieldCount += 1;
+      }
+      products.push({
+        source,
+        vendor: textOrNull(rawProduct?.vendor),
+        product: textOrNull(rawProduct?.product),
+        collectionUrl: normalizeHttpUrl(rawProduct?.collectionURL),
+        packageName: textOrNull(rawProduct?.packageName),
+        defaultStatus: textOrNull(rawProduct?.defaultStatus),
+        platforms: normalizeStringList(rawProduct?.platforms, NVD_MAX_AFFECTED_STRINGS_PER_FIELD, truncation),
+        cpes,
+        modules: normalizeStringList(rawProduct?.modules, NVD_MAX_AFFECTED_STRINGS_PER_FIELD, truncation),
+        versions: rawVersions.slice(0, NVD_MAX_AFFECTED_VERSIONS_PER_PRODUCT).map((version) => normalizeNvdAffectedVersion(version, truncation)),
+      });
+    }
+  }
+  return products;
+}
+
+function normalizeNvdEvidence(cve, retrievedAt) {
+  const id = normalizeCveId(cve?.id);
+  if (!id || !validIsoDateTimeString(retrievedAt)) return null;
+  const truncation = createNvdEvidenceTruncation();
+  return {
+    id,
+    sourceIdentifier: textOrNull(cve?.sourceIdentifier),
+    vulnStatus: textOrNull(cve?.vulnStatus),
+    published: textOrNull(cve?.published),
+    lastModified: textOrNull(cve?.lastModified),
+    descriptions: normalizeNvdDescriptions(cve?.descriptions, truncation),
+    metrics: normalizeNvdMetrics(cve?.metrics),
+    weaknesses: normalizeNvdWeaknesses(cve?.weaknesses, truncation),
+    references: normalizeNvdReferences(cve?.references, truncation),
+    configurations: normalizeNvdConfigurations(cve?.configurations, truncation),
+    affectedProducts: normalizeNvdAffectedProducts(cve?.affected, truncation),
+    retrievedAt,
+    truncation,
+  };
+}
+
+function normalizeEpssEvidence(entry, retrievedAt) {
+  const cve = normalizeCveId(entry?.cve);
+  const score = Number(entry?.epss);
+  const percentile = Number(entry?.percentile);
+  const date = textOrNull(entry?.date);
+  if (!cve || !Number.isFinite(score) || score < 0 || score > 1 || !Number.isFinite(percentile) || percentile < 0 || percentile > 1) return null;
+  if (date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  return { cve, score, percentile, date, retrievedAt };
+}
+
+function buildNvdCveRequestUrl(cveIds) {
+  const url = new URL(NVD_CVE_API_URL);
+  url.searchParams.set('cveIds', cveIds.join(','));
+  url.searchParams.set('resultsPerPage', String(cveIds.length));
+  return url;
+}
+
+function buildEpssRequestUrl(cveIds) {
+  const url = new URL(EPSS_API_URL);
+  url.searchParams.set('cve', cveIds.join(','));
+  url.searchParams.set('limit', String(cveIds.length));
+  return url;
+}
+
+function chunkCveIds(values, maxCount, maxJoinedLength = null) {
+  const chunks = [];
+  let current = [];
+  for (const cveId of values) {
+    const nextJoinedLength = [...current, cveId].join(',').length;
+    if (current.length > 0 && (current.length >= maxCount || (maxJoinedLength !== null && nextJoinedLength > maxJoinedLength))) {
+      chunks.push(current);
+      current = [];
+    }
+    current.push(cveId);
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+function cacheEntryIsFresh(entry, ttlMs, nowMs) {
+  const retrievedMs = Date.parse(entry?.retrievedAt ?? '');
+  return Number.isFinite(retrievedMs) && nowMs - retrievedMs >= 0 && nowMs - retrievedMs < ttlMs;
+}
+
+function isSafeHttpHeaderToken(value) {
+  return typeof value === 'string' && value.length > 0 && [...value].every((character) => {
+    const code = character.charCodeAt(0);
+    return code >= 33 && code <= 126;
+  });
+}
+
+const nvdRequestState = { lastRequestAt: 0 };
+const epssRequestState = { lastRequestAt: 0 };
+
+async function collectNvdEnrichment(cveIds, cache, priorByCve, meta) {
+  const evidenceByCve = new Map();
+  const uniqueIds = uniqueValidCveIds(cveIds);
+  const nvdMeta = meta.nvd;
+  nvdMeta.requestedCveCount = uniqueIds.length;
+  const configuredApiKey = process.env.NVD_API_KEY?.trim();
+  const apiKey = configuredApiKey && isSafeHttpHeaderToken(configuredApiKey) ? configuredApiKey : null;
+  nvdMeta.apiKeyConfigured = Boolean(configuredApiKey);
+  if (configuredApiKey && !apiKey) nvdMeta.statusDetail = 'NVD_API_KEY contains characters invalid for an HTTP header; key withheld from requests';
+  if (uniqueIds.length === 0) return evidenceByCve;
+
+  const nowMs = Date.now();
+  const idsToFetch = [];
+  for (const cveId of uniqueIds) {
+    const entry = cache.nvd?.[cveId];
+    if (cacheEntryIsFresh(entry, NVD_CACHE_TTL_MS, nowMs) && plausibleNvdEvidence(entry.evidence, cveId)) {
+      evidenceByCve.set(cveId, entry.evidence);
+      nvdMeta.freshCacheHitCount += 1;
+    } else if (entry?.evidence === null && cacheEntryIsFresh(entry, NVD_NEGATIVE_CACHE_TTL_MS, nowMs)) {
+      nvdMeta.negativeCacheHitCount += 1;
+    } else {
+      idsToFetch.push(cveId);
+    }
+  }
+
+  const requestFailedIds = new Set();
+  const invalidEvidenceIds = new Set();
+  for (const chunk of chunkCveIds(idsToFetch, NVD_CVE_IDS_MAX_BATCH)) {
+    const url = buildNvdCveRequestUrl(chunk);
+    nvdMeta.requestUrls.push(url.toString());
+    try {
+      const { payload, retrievedAt } = await fetchJsonWithBoundedRetry(
+        url,
+        30000,
+        apiKey ? { apiKey } : {},
+        {
+          minIntervalMs: NVD_MIN_REQUEST_INTERVAL_MS,
+          maxAttempts: NVD_MAX_ATTEMPTS_PER_BATCH,
+          retryFallbackDelayMs: NVD_RETRY_FALLBACK_DELAY_MS,
+          maxRetryDelayMs: NVD_MAX_RETRY_DELAY_MS,
+        },
+        nvdMeta,
+        nvdRequestState,
+      );
+      if (payload.version !== '2.0' || !Array.isArray(payload.vulnerabilities)) throw new Error('unexpected NVD CVE 2.0 response contract');
+      if (Number.isFinite(payload.totalResults) && payload.totalResults > chunk.length) throw new Error(`unexpected NVD pagination contract: ${payload.totalResults} results for ${chunk.length} requested CVE IDs`);
+      nvdMeta.retrievedAt = retrievedAt;
+      const returnedIds = new Set();
+      for (const wrapper of payload.vulnerabilities) {
+        const evidence = normalizeNvdEvidence(wrapper?.cve, retrievedAt);
+        if (!evidence || !chunk.includes(evidence.id)) {
+          const invalidId = normalizeCveId(wrapper?.cve?.id);
+          if (invalidId && chunk.includes(invalidId)) invalidEvidenceIds.add(invalidId);
+          continue;
+        }
+        returnedIds.add(evidence.id);
+        evidenceByCve.set(evidence.id, evidence);
+        cache.nvd[evidence.id] = { retrievedAt, evidence };
+        nvdMeta.fetchedCveCount += 1;
+      }
+      for (const cveId of chunk) {
+        if (!returnedIds.has(cveId) && !invalidEvidenceIds.has(cveId)) cache.nvd[cveId] = { retrievedAt, evidence: null };
+      }
+    } catch (error) {
+      for (const cveId of chunk) requestFailedIds.add(cveId);
+      nvdMeta.statusDetail = error.message;
+    }
+  }
+
+  for (const cveId of uniqueIds) {
+    if (evidenceByCve.has(cveId) || !requestFailedIds.has(cveId)) continue;
+    const staleEntry = cache.nvd?.[cveId];
+    if (plausibleNvdEvidence(staleEntry?.evidence, cveId)) {
+      evidenceByCve.set(cveId, staleEntry.evidence);
+      nvdMeta.staleCacheHitCount += 1;
+      continue;
+    }
+    const prior = priorByCve.get(cveId)?.nvd;
+    if (plausibleNvdEvidence(prior, cveId)) {
+      evidenceByCve.set(cveId, prior);
+      nvdMeta.priorSnapshotHitCount += 1;
+    }
+  }
+
+  for (const cveId of uniqueIds) {
+    if (evidenceByCve.has(cveId)) continue;
+    if (requestFailedIds.has(cveId)) nvdMeta.omittedByReason.requestFailed += 1;
+    else if (invalidEvidenceIds.has(cveId)) nvdMeta.omittedByReason.invalidNvdRecord += 1;
+    else nvdMeta.omittedByReason.missingNvdRecord += 1;
+  }
+  nvdMeta.omittedCveCount = Object.values(nvdMeta.omittedByReason).reduce((sum, value) => sum + value, 0);
+  nvdMeta.enrichedCveCount = evidenceByCve.size;
+  if (requestFailedIds.size > 0) nvdMeta.status = evidenceByCve.size > 0 ? 'partial' : 'unavailable';
+  else nvdMeta.status = evidenceByCve.size === uniqueIds.length ? 'ok' : 'partial';
+  return evidenceByCve;
+}
+
+async function collectEpssEnrichment(cveIds, cache, priorByCve, meta) {
+  const evidenceByCve = new Map();
+  const uniqueIds = uniqueValidCveIds(cveIds);
+  const epssMeta = meta.epss;
+  epssMeta.requestedCveCount = uniqueIds.length;
+  if (uniqueIds.length === 0) return evidenceByCve;
+
+  const nowMs = Date.now();
+  const idsToFetch = [];
+  for (const cveId of uniqueIds) {
+    const entry = cache.epss?.[cveId];
+    if (cacheEntryIsFresh(entry, EPSS_CACHE_TTL_MS, nowMs) && plausibleEpssEvidence(entry.evidence, cveId)) {
+      evidenceByCve.set(cveId, entry.evidence);
+      epssMeta.freshCacheHitCount += 1;
+    } else if (entry?.evidence === null && cacheEntryIsFresh(entry, EPSS_NEGATIVE_CACHE_TTL_MS, nowMs)) {
+      epssMeta.negativeCacheHitCount += 1;
+    } else {
+      idsToFetch.push(cveId);
+    }
+  }
+
+  const requestFailedIds = new Set();
+  const invalidEvidenceIds = new Set();
+  for (const chunk of chunkCveIds(idsToFetch, EPSS_MAX_CVES_PER_BATCH, EPSS_CVE_PARAMETER_MAX_CHARS)) {
+    const url = buildEpssRequestUrl(chunk);
+    epssMeta.requestUrls.push(url.toString());
+    try {
+      const { payload, retrievedAt } = await fetchJsonWithBoundedRetry(
+        url,
+        24000,
+        {},
+        {
+          minIntervalMs: EPSS_MIN_REQUEST_INTERVAL_MS,
+          maxAttempts: EPSS_MAX_ATTEMPTS_PER_BATCH,
+          retryFallbackDelayMs: EPSS_RETRY_FALLBACK_DELAY_MS,
+          maxRetryDelayMs: EPSS_MAX_RETRY_DELAY_MS,
+        },
+        epssMeta,
+        epssRequestState,
+      );
+      if (payload.status !== 'OK' || !Array.isArray(payload.data)) throw new Error('unexpected FIRST EPSS response contract');
+      epssMeta.retrievedAt = retrievedAt;
+      const returnedIds = new Set();
+      for (const entry of payload.data) {
+        const evidence = normalizeEpssEvidence(entry, retrievedAt);
+        if (!evidence || !chunk.includes(evidence.cve)) {
+          const invalidId = normalizeCveId(entry?.cve);
+          if (invalidId && chunk.includes(invalidId)) invalidEvidenceIds.add(invalidId);
+          continue;
+        }
+        returnedIds.add(evidence.cve);
+        evidenceByCve.set(evidence.cve, evidence);
+        cache.epss[evidence.cve] = { retrievedAt, evidence };
+        epssMeta.fetchedCveCount += 1;
+      }
+      for (const cveId of chunk) {
+        if (!returnedIds.has(cveId) && !invalidEvidenceIds.has(cveId)) cache.epss[cveId] = { retrievedAt, evidence: null };
+      }
+    } catch (error) {
+      for (const cveId of chunk) requestFailedIds.add(cveId);
+      epssMeta.statusDetail = error.message;
+    }
+  }
+
+  for (const cveId of uniqueIds) {
+    if (evidenceByCve.has(cveId) || !requestFailedIds.has(cveId)) continue;
+    const staleEntry = cache.epss?.[cveId];
+    if (plausibleEpssEvidence(staleEntry?.evidence, cveId)) {
+      evidenceByCve.set(cveId, staleEntry.evidence);
+      epssMeta.staleCacheHitCount += 1;
+      continue;
+    }
+    const prior = priorByCve.get(cveId)?.epss;
+    if (plausibleEpssEvidence(prior, cveId)) {
+      evidenceByCve.set(cveId, prior);
+      epssMeta.priorSnapshotHitCount += 1;
+    }
+  }
+
+  for (const cveId of uniqueIds) {
+    if (evidenceByCve.has(cveId)) continue;
+    if (requestFailedIds.has(cveId)) epssMeta.omittedByReason.requestFailed += 1;
+    else if (invalidEvidenceIds.has(cveId)) epssMeta.omittedByReason.invalidEpssRecord += 1;
+    else epssMeta.omittedByReason.missingEpssRecord += 1;
+  }
+  epssMeta.omittedCveCount = Object.values(epssMeta.omittedByReason).reduce((sum, value) => sum + value, 0);
+  epssMeta.enrichedCveCount = evidenceByCve.size;
+  if (requestFailedIds.size > 0) epssMeta.status = evidenceByCve.size > 0 ? 'partial' : 'unavailable';
+  else epssMeta.status = evidenceByCve.size === uniqueIds.length ? 'ok' : 'partial';
+  return evidenceByCve;
+}
+
+function normalizeCyberRecordDefaults(item) {
+  return {
+    ...item,
+    nvd: item?.nvd && typeof item.nvd === 'object' ? item.nvd : null,
+    epss: item?.epss && typeof item.epss === 'object' ? item.epss : null,
+  };
+}
+
+function buildPriorCyberEnrichmentMap(previousSnapshot) {
+  const prior = new Map();
+  for (const item of Array.isArray(previousSnapshot?.cyberVulnerabilities) ? previousSnapshot.cyberVulnerabilities : []) {
+    const cveId = normalizeCveId(item?.cveId);
+    if (!cveId) continue;
+    prior.set(cveId, {
+      nvd: plausibleNvdEvidence(item?.nvd, cveId) ? item.nvd : null,
+      epss: plausibleEpssEvidence(item?.epss, cveId) ? item.epss : null,
+    });
+  }
+  return prior;
+}
+
+function createPreservedCyberMeta(previousSnapshot, detail) {
+  const priorMeta = previousSnapshot?.cyberVulnerabilityMeta && typeof previousSnapshot.cyberVulnerabilityMeta === 'object'
+    ? previousSnapshot.cyberVulnerabilityMeta
+    : null;
+  const records = Array.isArray(previousSnapshot?.cyberVulnerabilities) ? previousSnapshot.cyberVulnerabilities.map(normalizeCyberRecordDefaults) : [];
+  const meta = createCyberVulnerabilityMeta('preserved');
+  if (priorMeta?.kev && typeof priorMeta.kev === 'object') meta.kev = { ...meta.kev, ...priorMeta.kev };
+  if (priorMeta?.nvd && typeof priorMeta.nvd === 'object') meta.nvd = { ...meta.nvd, ...priorMeta.nvd };
+  if (priorMeta?.epss && typeof priorMeta.epss === 'object') meta.epss = { ...meta.epss, ...priorMeta.epss };
+  if (priorMeta?.cache && typeof priorMeta.cache === 'object') meta.cache = { ...meta.cache, ...priorMeta.cache, written: false };
+  meta.cache.path = VULNERABILITY_CACHE_PATH;
+  meta.cache.version = VULNERABILITY_CACHE_VERSION;
+  meta.status = 'preserved';
+  meta.statusDetail = detail;
+  meta.preservedAt = new Date().toISOString();
+  meta.kev.status = 'preserved';
+  meta.kev.selectedRecordCount = records.length;
+  meta.nvd.status = records.some((item) => item.nvd) ? 'preserved' : 'unavailable';
+  meta.epss.status = records.some((item) => item.epss) ? 'preserved' : 'unavailable';
+  meta.nvd.requestedCveCount = records.length;
+  meta.nvd.enrichedCveCount = records.filter((item) => item.nvd).length;
+  meta.nvd.omittedCveCount = records.length - meta.nvd.enrichedCveCount;
+  meta.nvd.omittedByReason = createCyberNvdOmissionCounts();
+  meta.nvd.omittedByReason.notAttempted = meta.nvd.omittedCveCount;
+  meta.epss.requestedCveCount = records.length;
+  meta.epss.enrichedCveCount = records.filter((item) => item.epss).length;
+  meta.epss.omittedCveCount = records.length - meta.epss.enrichedCveCount;
+  meta.epss.omittedByReason = createCyberEpssOmissionCounts();
+  meta.epss.omittedByReason.notAttempted = meta.epss.omittedCveCount;
+  return meta;
+}
+
+function finalizeCyberVulnerabilityMeta(meta) {
+  const detailParts = [];
+  if (meta.nvd.statusDetail) detailParts.push(`NVD: ${meta.nvd.statusDetail}`);
+  if (meta.epss.statusDetail) detailParts.push(`EPSS: ${meta.epss.statusDetail}`);
+  meta.statusDetail = detailParts.length > 0 ? detailParts.join('; ') : null;
+  const degraded = ['partial', 'unavailable'].includes(meta.nvd.status) || ['partial', 'unavailable'].includes(meta.epss.status);
+  meta.status = degraded ? 'partial' : 'ok';
+}
+
+async function collectCyberVulnerabilityIntelligence(previousSnapshot) {
+  const meta = createCyberVulnerabilityMeta('unavailable');
+  const cache = loadVulnerabilityCache(meta);
+  const errors = [];
+  const priorByCve = buildPriorCyberEnrichmentMap(previousSnapshot);
+
+  try {
+    const { payload, retrievedAt } = await getJsonWithMetadata(CISA_KEV_API_URL, 18000);
+    if (!Array.isArray(payload.vulnerabilities)) throw new Error('unexpected CISA KEV response contract');
+    meta.kev.status = 'ok';
+    meta.kev.retrievedAt = retrievedAt;
+    meta.kev.title = textOrNull(payload.title);
+    meta.kev.catalogVersion = textOrNull(payload.catalogVersion);
+    meta.kev.dateReleased = textOrNull(payload.dateReleased);
+    meta.kev.reportedCount = Number.isInteger(payload.count) ? payload.count : 0;
+    meta.kev.fetchedRecordCount = payload.vulnerabilities.length;
+
+    const sorted = payload.vulnerabilities.slice().sort((a, b) => String(b.dateAdded || '').localeCompare(String(a.dateAdded || '')));
+    const seen = new Set();
+    const selected = [];
+    for (const item of sorted) {
+      const cveId = normalizeCveId(item?.cveID);
+      if (!cveId) {
+        meta.kev.omittedByReason.invalidRecord += 1;
+        continue;
+      }
+      meta.kev.validRecordCount += 1;
+      if (seen.has(cveId)) {
+        meta.kev.omittedByReason.duplicateCveId += 1;
+        continue;
+      }
+      seen.add(cveId);
+      if (selected.length >= CISA_KEV_MAX_RECORDS) {
+        meta.kev.omittedByReason.selectionCap += 1;
+        continue;
+      }
+      selected.push(normalizeCyberRecordDefaults({
+        cveId,
+        vendor: item.vendorProject || null,
+        product: item.product || null,
+        name: item.vulnerabilityName || null,
+        dateAdded: item.dateAdded || null,
+        dueDate: item.dueDate || null,
+        ransomwareUse: item.knownRansomwareCampaignUse || null,
+        requiredAction: item.requiredAction || null,
+      }));
+    }
+    meta.kev.selectedRecordCount = selected.length;
+    meta.kev.omittedRecordCount = Object.values(meta.kev.omittedByReason).reduce((sum, value) => sum + value, 0);
+    if (selected.length === 0) throw new Error('CISA KEV response contained no valid unique CVE records');
+
+    const cveIds = selected.map((item) => item.cveId);
+    let nvdByCve = new Map();
+    try {
+      nvdByCve = await collectNvdEnrichment(cveIds, cache, priorByCve, meta);
+    } catch (error) {
+      const count = uniqueValidCveIds(cveIds).length;
+      meta.nvd.status = 'unavailable';
+      meta.nvd.statusDetail = `enrichment failure: ${error.message}`;
+      meta.nvd.requestedCveCount = count;
+      meta.nvd.enrichedCveCount = 0;
+      meta.nvd.omittedCveCount = count;
+      meta.nvd.omittedByReason = createCyberNvdOmissionCounts();
+      meta.nvd.omittedByReason.requestFailed = count;
+    }
+    let epssByCve = new Map();
+    try {
+      epssByCve = await collectEpssEnrichment(cveIds, cache, priorByCve, meta);
+    } catch (error) {
+      const count = uniqueValidCveIds(cveIds).length;
+      meta.epss.status = 'unavailable';
+      meta.epss.statusDetail = `enrichment failure: ${error.message}`;
+      meta.epss.requestedCveCount = count;
+      meta.epss.enrichedCveCount = 0;
+      meta.epss.omittedCveCount = count;
+      meta.epss.omittedByReason = createCyberEpssOmissionCounts();
+      meta.epss.omittedByReason.requestFailed = count;
+    }
+    const records = selected.map((item) => ({
+      ...item,
+      nvd: nvdByCve.get(item.cveId) ?? null,
+      epss: epssByCve.get(item.cveId) ?? null,
+    }));
+
+    writeVulnerabilityCache(cache, meta);
+    finalizeCyberVulnerabilityMeta(meta);
+    for (const detail of [meta.nvd.statusDetail ? `NVD: ${meta.nvd.statusDetail}` : null, meta.epss.statusDetail ? `EPSS: ${meta.epss.statusDetail}` : null, meta.cache.status === 'write-failed' ? meta.cache.detail : null].filter(Boolean)) errors.push(detail);
+    return {
+      records,
+      meta,
+      errors,
+      sourceDescription: `CISA KEV catalog ${meta.kev.catalogVersion || 'version unavailable'} + NVD CVE 2.0 (${meta.nvd.enrichedCveCount}/${meta.nvd.requestedCveCount} enriched) + FIRST EPSS (${meta.epss.enrichedCveCount}/${meta.epss.requestedCveCount} scored)`,
+    };
+  } catch (error) {
+    const detail = `CISA KEV request failed: ${error.message}`;
+    errors.push(`CISA KEV: ${error.message}`);
+    const priorRecords = Array.isArray(previousSnapshot?.cyberVulnerabilities) ? previousSnapshot.cyberVulnerabilities.map(normalizeCyberRecordDefaults) : [];
+    if (priorRecords.length > 0) {
+      const preservedMeta = createPreservedCyberMeta(previousSnapshot, `${detail}; prior snapshot evidence retained without altering original retrieval timestamps`);
+      writeVulnerabilityCache(cache, preservedMeta);
+      return {
+        records: priorRecords,
+        meta: preservedMeta,
+        errors,
+        sourceDescription: `CISA KEV prior catalog preserved (${priorRecords.length} records); current ingest unavailable`,
+      };
+    }
+    meta.statusDetail = detail;
+    meta.cache.written = writeVulnerabilityCache(cache, meta);
+    return {
+      records: [],
+      meta,
+      errors,
+      sourceDescription: 'CISA KEV collection unavailable',
+    };
+  }
 }
 
 const IODA_EVENTS_API_URL = 'https://api.ioda.inetintel.cc.gatech.edu/v2/outages/events';
@@ -1084,7 +2091,7 @@ let previousSnapshot = {};
 try { if (existsSync(outFile)) previousSnapshot = JSON.parse(readFileSync(outFile, 'utf8')); } catch {}
 
 const iodaQueryWindow = createIodaQueryWindow();
-const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], aircraft: [], vessels: [], satellites: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], cyberVulnerabilities: [], internetOutages: [], internetOutageMeta: createIodaUnavailableMeta(iodaQueryWindow), ucdpMeta: createUcdpMeta('unconfigured'), gdeltGeoNews: [], gdeltGeoMeta: createGdeltGeoMeta('unavailable'), errors: [] };
+const result = { fetchedAt: new Date().toISOString(), sources: {}, militaryAircraft: [], aircraft: [], vessels: [], satellites: [], news: [], launches: [], naturalEvents: [], gpsInterference: [], mapOfWarsEvents: [], webcams: [], cyberVulnerabilities: [], cyberVulnerabilityMeta: createCyberVulnerabilityMeta('unavailable'), internetOutages: [], internetOutageMeta: createIodaUnavailableMeta(iodaQueryWindow), ucdpMeta: createUcdpMeta('unconfigured'), gdeltGeoNews: [], gdeltGeoMeta: createGdeltGeoMeta('unavailable'), errors: [] };
 
 try {
   const ioda = await collectIodaOutages(iodaQueryWindow);
@@ -1632,25 +2639,11 @@ try {
 } catch (error) { result.errors.push(`gpsjam.org: ${error.message}`); }
 
 
-try {
-  const payload = await getJson('https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json', 18000);
-  result.cyberVulnerabilities = (payload.vulnerabilities ?? [])
-    .slice()
-    .sort((a, b) => String(b.dateAdded || '').localeCompare(String(a.dateAdded || '')))
-    .slice(0, 30)
-    .map((item) => ({
-      cveId: item.cveID,
-      vendor: item.vendorProject || null,
-      product: item.product || null,
-      name: item.vulnerabilityName || 'Known exploited vulnerability',
-      dateAdded: item.dateAdded || null,
-      dueDate: item.dueDate || null,
-      ransomwareUse: item.knownRansomwareCampaignUse || 'Unknown',
-      requiredAction: item.requiredAction || null,
-    }))
-    .filter((item) => item.cveId);
-  result.sources.cyberVulnerabilities = 'CISA Known Exploited Vulnerabilities catalog';
-} catch (error) { result.errors.push(`CISA KEV: ${error.message}`); }
+const cyberIntelligence = await collectCyberVulnerabilityIntelligence(previousSnapshot);
+result.cyberVulnerabilities = cyberIntelligence.records;
+result.cyberVulnerabilityMeta = cyberIntelligence.meta;
+result.sources.cyberVulnerabilities = cyberIntelligence.sourceDescription;
+for (const error of cyberIntelligence.errors) result.errors.push(error);
 
 if (process.env.WINDY_WEBCAMS_KEY) {
   try {
@@ -1703,6 +2696,241 @@ function validateIsoDateOnly(value) {
 
 function validateNullableString(value) {
   return value === null || typeof value === 'string';
+}
+
+function validateIsoDateTime(value) {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+function validateNullableIsoDateTime(value) {
+  return value === null || validateIsoDateTime(value);
+}
+
+function validateCyberServiceStatus(value) {
+  return ['ok', 'partial', 'preserved', 'unavailable', 'not-attempted'].includes(value);
+}
+
+function validateNvdConfigurationNode(node, label, errors, depth = 0) {
+  if (depth > 12) {
+    errors.push(`${label} configuration tree exceeds bounded depth`);
+    return;
+  }
+  if (!validateNullableString(node.operator) || !(node.negate === null || typeof node.negate === 'boolean')) errors.push(`${label} invalid configuration operator/negate contract`);
+  if (!Array.isArray(node.cpeMatch) || !Array.isArray(node.nodes)) {
+    errors.push(`${label} invalid configuration node arrays`);
+    return;
+  }
+  for (const match of node.cpeMatch) {
+    if (typeof match?.criteria !== 'string' || !match.criteria.startsWith('cpe:2.3:')) errors.push(`${label} invalid CPE criteria`);
+    if (!(match?.vulnerable === null || typeof match?.vulnerable === 'boolean')) errors.push(`${label} invalid CPE vulnerable flag`);
+    for (const key of ['matchCriteriaId', 'versionStartIncluding', 'versionStartExcluding', 'versionEndIncluding', 'versionEndExcluding']) {
+      if (!validateNullableString(match?.[key])) errors.push(`${label} invalid CPE ${key}`);
+    }
+  }
+  node.nodes.forEach((child) => validateNvdConfigurationNode(child, label, errors, depth + 1));
+}
+
+function validateNvdEvidence(nvd, cveId, label, errors) {
+  if (!nvd || typeof nvd !== 'object') {
+    errors.push(`${label} invalid NVD evidence object`);
+    return;
+  }
+  if (nvd.id !== cveId) errors.push(`${label} NVD evidence/CVE id mismatch`);
+  for (const key of ['sourceIdentifier', 'vulnStatus']) {
+    if (!validateNullableString(nvd[key])) errors.push(`${label} invalid NVD ${key}`);
+  }
+  if (!validateNullableIsoDateTime(nvd.published) || !validateNullableIsoDateTime(nvd.lastModified)) errors.push(`${label} invalid NVD publication chronology`);
+  if (!validateIsoDateTime(nvd.retrievedAt)) errors.push(`${label} missing NVD retrieval timestamp`);
+  for (const key of ['descriptions', 'metrics', 'weaknesses', 'references', 'configurations', 'affectedProducts']) {
+    if (!Array.isArray(nvd[key])) errors.push(`${label} missing NVD ${key} array`);
+  }
+  if ((nvd.descriptions ?? []).length > NVD_MAX_DESCRIPTIONS_PER_CVE) errors.push(`${label} exceeds bounded NVD description cap`);
+  for (const description of nvd.descriptions ?? []) {
+    if (typeof description?.lang !== 'string' || typeof description?.value !== 'string' || description.value.length === 0) errors.push(`${label} invalid NVD description contract`);
+  }
+  for (const metric of nvd.metrics ?? []) {
+    if (!['cvssMetricV40', 'cvssMetricV31', 'cvssMetricV30', 'cvssMetricV2'].includes(metric?.metricSet)) errors.push(`${label} invalid CVSS metric-set provenance`);
+    for (const key of ['source', 'type', 'vectorString', 'baseSeverity']) {
+      if (!validateNullableString(metric?.[key])) errors.push(`${label} invalid CVSS ${key}`);
+    }
+    for (const key of ['baseScore', 'exploitabilityScore', 'impactScore']) {
+      if (!(metric?.[key] === null || (Number.isFinite(metric[key]) && metric[key] >= 0 && metric[key] <= 10))) errors.push(`${label} invalid CVSS ${key}`);
+    }
+  }
+  for (const weakness of nvd.weaknesses ?? []) {
+    if (!/^CWE-\d+$/.test(weakness?.id ?? '') || !validateNullableString(weakness?.source) || !validateNullableString(weakness?.type)) errors.push(`${label} invalid CWE weakness contract`);
+  }
+  if ((nvd.references ?? []).length > NVD_MAX_REFERENCES_PER_CVE) errors.push(`${label} exceeds bounded NVD reference cap`);
+  for (const reference of nvd.references ?? []) {
+    if (!/^https?:\/\//.test(reference?.url ?? '') || !validateNullableString(reference?.source) || !Array.isArray(reference?.tags) || reference.tags.length > NVD_MAX_REFERENCE_TAGS_PER_REFERENCE || reference.tags.some((tag) => typeof tag !== 'string')) errors.push(`${label} invalid NVD reference contract`);
+  }
+  if ((nvd.configurations ?? []).length > NVD_MAX_CONFIGURATIONS_PER_CVE) errors.push(`${label} exceeds bounded NVD configuration cap`);
+  for (const configuration of nvd.configurations ?? []) {
+    if (!validateNullableString(configuration?.operator) || !Array.isArray(configuration?.nodes)) errors.push(`${label} invalid NVD configuration contract`);
+    else configuration.nodes.forEach((node) => validateNvdConfigurationNode(node, label, errors));
+  }
+  if ((nvd.affectedProducts ?? []).length > NVD_MAX_AFFECTED_PRODUCTS_PER_CVE) errors.push(`${label} exceeds bounded affected-product cap`);
+  for (const product of nvd.affectedProducts ?? []) {
+    for (const key of ['source', 'vendor', 'product', 'collectionUrl', 'packageName', 'defaultStatus']) {
+      if (!validateNullableString(product?.[key])) errors.push(`${label} invalid affected-product ${key}`);
+    }
+    for (const key of ['platforms', 'cpes', 'modules', 'versions']) {
+      if (!Array.isArray(product?.[key])) errors.push(`${label} invalid affected-product ${key} array`);
+    }
+    if ((product?.cpes ?? []).some((cpe) => typeof cpe !== 'string' || !cpe.startsWith('cpe:'))) errors.push(`${label} invalid affected-product CPE`);
+    for (const version of product?.versions ?? []) {
+      for (const key of ['version', 'status', 'versionType', 'lessThan', 'lessThanOrEqual']) {
+        if (!validateNullableString(version?.[key])) errors.push(`${label} invalid affected-version ${key}`);
+      }
+      if (!Array.isArray(version?.changes) || version.changes.some((change) => typeof change?.at !== 'string' || typeof change?.status !== 'string')) errors.push(`${label} invalid affected-version changes`);
+    }
+  }
+  const truncation = nvd.truncation;
+  if (!truncation || typeof truncation !== 'object') {
+    errors.push(`${label} missing NVD truncation accounting`);
+  } else {
+    for (const key of ['descriptionsOmitted', 'referencesOmitted', 'referenceTagsOmitted', 'configurationsOmitted', 'cpeMatchesOmitted', 'affectedProductsOmitted', 'affectedVersionsOmitted', 'affectedFieldValuesOmitted', 'nonCweWeaknessValuesOmitted', 'invalidFieldCount']) {
+      if (!validateNonNegativeInteger(truncation[key])) errors.push(`${label} invalid NVD truncation ${key}`);
+    }
+  }
+}
+
+function validateEpssEvidence(epss, cveId, label, errors) {
+  if (!epss || typeof epss !== 'object') {
+    errors.push(`${label} invalid EPSS evidence object`);
+    return;
+  }
+  if (epss.cve !== cveId) errors.push(`${label} EPSS evidence/CVE id mismatch`);
+  if (!Number.isFinite(epss.score) || epss.score < 0 || epss.score > 1) errors.push(`${label} invalid EPSS score`);
+  if (!Number.isFinite(epss.percentile) || epss.percentile < 0 || epss.percentile > 1) errors.push(`${label} invalid EPSS percentile`);
+  if (!(epss.date === null || validateIsoDateOnly(epss.date))) errors.push(`${label} invalid EPSS score date`);
+  if (!validateIsoDateTime(epss.retrievedAt)) errors.push(`${label} missing EPSS retrieval timestamp`);
+}
+
+function validateCyberVulnerabilityRecord(item, errors) {
+  const label = `cyberVulnerabilities:${item?.cveId || 'unknown'}`;
+  if (!normalizeCveId(item?.cveId)) errors.push(`${label} invalid CVE identifier`);
+  for (const key of ['vendor', 'product', 'name', 'dateAdded', 'dueDate', 'ransomwareUse', 'requiredAction']) {
+    if (!validateNullableString(item?.[key])) errors.push(`${label} invalid KEV ${key}`);
+  }
+  if (item?.dateAdded !== null && item?.dateAdded !== undefined && !validateIsoDateOnly(item.dateAdded)) errors.push(`${label} invalid KEV dateAdded`);
+  if (item?.dueDate !== null && item?.dueDate !== undefined && !validateIsoDateOnly(item.dueDate)) errors.push(`${label} invalid KEV dueDate`);
+  if (!(item?.nvd === null || (item?.nvd && typeof item.nvd === 'object'))) errors.push(`${label} NVD evidence must be an object or explicit null`);
+  else if (item.nvd) validateNvdEvidence(item.nvd, item.cveId, label, errors);
+  if (!(item?.epss === null || (item?.epss && typeof item.epss === 'object'))) errors.push(`${label} EPSS evidence must be an object or explicit null`);
+  else if (item.epss) validateEpssEvidence(item.epss, item.cveId, label, errors);
+}
+
+function validateCyberRateLimitCounters(meta, label, errors) {
+  for (const key of ['requestAttemptCount', 'successfulRequestCount', 'retryCount', 'throttledResponseCount', 'retryDelayMsTotal', 'retryDelayMsMax']) {
+    if (!validateNonNegativeInteger(meta[key])) errors.push(`${label} invalid rate-limit counter ${key}`);
+  }
+  if (meta.successfulRequestCount > meta.requestAttemptCount) errors.push(`${label} successful requests exceed attempts`);
+  if (meta.throttledResponseCount > meta.requestAttemptCount) errors.push(`${label} throttled responses exceed attempts`);
+  if (meta.retryDelayMsMax > meta.retryDelayMsTotal) errors.push(`${label} maximum retry delay exceeds total`);
+}
+
+function validateCyberVulnerabilityMeta(snapshot, errors) {
+  const meta = snapshot.cyberVulnerabilityMeta;
+  if (!meta || typeof meta !== 'object') {
+    errors.push('cyberVulnerabilityMeta missing or not an object');
+    return;
+  }
+  if (!['ok', 'partial', 'preserved', 'unavailable'].includes(meta.status)) errors.push('cyberVulnerabilityMeta invalid status');
+  if (!validateCyberServiceStatus(meta.kev?.status) || !validateCyberServiceStatus(meta.nvd?.status) || !validateCyberServiceStatus(meta.epss?.status)) errors.push('cyberVulnerabilityMeta invalid service status');
+  if (!validateNullableIsoDateTime(meta.preservedAt) && meta.preservedAt !== null) errors.push('cyberVulnerabilityMeta invalid preservedAt');
+  if (!String(meta.selection || '').includes('NVD CVE 2.0') || !String(meta.caveat || '').includes('not observed exploitation evidence')) errors.push('cyberVulnerabilityMeta missing selection/caveat provenance');
+
+  const kev = meta.kev;
+  if (!kev || typeof kev !== 'object') {
+    errors.push('cyberVulnerabilityMeta missing KEV provenance');
+  } else {
+    if (kev.apiUrl !== CISA_KEV_API_URL || kev.requestUrl !== CISA_KEV_API_URL) errors.push('cyberVulnerabilityMeta invalid KEV endpoint provenance');
+    if (!validateNullableIsoDateTime(kev.retrievedAt) && kev.retrievedAt !== null) errors.push('cyberVulnerabilityMeta invalid KEV retrieval timestamp');
+    for (const key of ['title', 'catalogVersion', 'dateReleased']) {
+      if (!validateNullableString(kev[key])) errors.push(`cyberVulnerabilityMeta invalid KEV ${key}`);
+    }
+    for (const key of ['reportedCount', 'fetchedRecordCount', 'validRecordCount', 'selectedRecordCount', 'maxSelectedRecords', 'omittedRecordCount']) {
+      if (!validateNonNegativeInteger(kev[key])) errors.push(`cyberVulnerabilityMeta invalid KEV ${key}`);
+    }
+    if (kev.maxSelectedRecords !== CISA_KEV_MAX_RECORDS) errors.push('cyberVulnerabilityMeta invalid KEV selection cap');
+    if (kev.selectedRecordCount !== (snapshot.cyberVulnerabilities ?? []).length) errors.push('cyberVulnerabilityMeta KEV selected count does not match snapshot records');
+    if (kev.status === 'ok') {
+      if (kev.reportedCount !== kev.fetchedRecordCount) errors.push('cyberVulnerabilityMeta KEV reported/fetched count mismatch');
+      if (kev.fetchedRecordCount !== kev.validRecordCount + (kev.omittedByReason?.invalidRecord ?? -1)) errors.push('cyberVulnerabilityMeta KEV validity accounting mismatch');
+      if (kev.validRecordCount !== kev.selectedRecordCount + (kev.omittedByReason?.duplicateCveId ?? -1) + (kev.omittedByReason?.selectionCap ?? -1)) errors.push('cyberVulnerabilityMeta KEV selection accounting mismatch');
+    }
+    if (!kev.omittedByReason || typeof kev.omittedByReason !== 'object') errors.push('cyberVulnerabilityMeta missing KEV omission accounting');
+    else {
+      for (const key of ['invalidRecord', 'duplicateCveId', 'selectionCap']) {
+        if (!validateNonNegativeInteger(kev.omittedByReason[key])) errors.push(`cyberVulnerabilityMeta invalid KEV omission ${key}`);
+      }
+      if (Object.values(kev.omittedByReason).every(validateNonNegativeInteger) && kev.omittedRecordCount !== Object.values(kev.omittedByReason).reduce((sum, value) => sum + value, 0)) errors.push('cyberVulnerabilityMeta KEV omitted count does not equal reasons');
+    }
+  }
+
+  const nvd = meta.nvd;
+  if (!nvd || typeof nvd !== 'object') {
+    errors.push('cyberVulnerabilityMeta missing NVD provenance');
+  } else {
+    if (nvd.apiBaseUrl !== NVD_CVE_API_URL || nvd.apiVersion !== '2.0' || nvd.batchParameter !== 'cveIds') errors.push('cyberVulnerabilityMeta invalid NVD endpoint/version provenance');
+    if (typeof nvd.apiKeyConfigured !== 'boolean') errors.push('cyberVulnerabilityMeta invalid NVD apiKeyConfigured provenance');
+    if (nvd.maxBatchSize > NVD_CVE_IDS_MAX_BATCH || nvd.maxConcurrency !== 1 || nvd.configuredMinRequestIntervalMs < 6000) errors.push('cyberVulnerabilityMeta violates bounded NVD rate-limit policy');
+    for (const key of ['requestedCveCount', 'fetchedCveCount', 'freshCacheHitCount', 'negativeCacheHitCount', 'staleCacheHitCount', 'priorSnapshotHitCount', 'enrichedCveCount', 'omittedCveCount', 'maxBatchSize', 'maxAttemptsPerBatch', 'retryFallbackDelayMs', 'maxRetryDelayMs', 'cacheTtlMs', 'negativeCacheTtlMs', 'configuredMinRequestIntervalMs', 'documentedPublicRequestsPerRolling30Seconds', 'documentedAuthenticatedRequestsPerRolling30Seconds']) {
+      if (!validateNonNegativeInteger(nvd[key])) errors.push(`cyberVulnerabilityMeta invalid NVD ${key}`);
+    }
+    validateCyberRateLimitCounters(nvd, 'cyberVulnerabilityMeta NVD', errors);
+    if (!validateNullableIsoDateTime(nvd.retrievedAt) && nvd.retrievedAt !== null) errors.push('cyberVulnerabilityMeta invalid NVD retrieval timestamp');
+    if (!Array.isArray(nvd.requestUrls)) errors.push('cyberVulnerabilityMeta missing NVD request URLs');
+    else for (const url of nvd.requestUrls) {
+      if (!url.startsWith(`${NVD_CVE_API_URL}?`) || !url.includes('cveIds=') || url.toLowerCase().includes('apikey')) errors.push('cyberVulnerabilityMeta invalid or secret-bearing NVD request URL');
+    }
+    if (!nvd.omittedByReason || typeof nvd.omittedByReason !== 'object') errors.push('cyberVulnerabilityMeta missing NVD omission accounting');
+    else {
+      for (const key of ['missingNvdRecord', 'invalidNvdRecord', 'requestFailed', 'notAttempted']) {
+        if (!validateNonNegativeInteger(nvd.omittedByReason[key])) errors.push(`cyberVulnerabilityMeta invalid NVD omission ${key}`);
+      }
+      if (Object.values(nvd.omittedByReason).every(validateNonNegativeInteger) && nvd.omittedCveCount !== Object.values(nvd.omittedByReason).reduce((sum, value) => sum + value, 0)) errors.push('cyberVulnerabilityMeta NVD omitted count does not equal reasons');
+    }
+    if (nvd.enrichedCveCount + nvd.omittedCveCount !== nvd.requestedCveCount) errors.push('cyberVulnerabilityMeta NVD coverage accounting mismatch');
+    if (nvd.enrichedCveCount !== (snapshot.cyberVulnerabilities ?? []).filter((item) => item.nvd).length) errors.push('cyberVulnerabilityMeta NVD enriched count does not match records');
+  }
+
+  const epss = meta.epss;
+  if (!epss || typeof epss !== 'object') {
+    errors.push('cyberVulnerabilityMeta missing EPSS provenance');
+  } else {
+    if (epss.apiBaseUrl !== EPSS_API_URL || epss.scope !== 'public') errors.push('cyberVulnerabilityMeta invalid EPSS endpoint/scope provenance');
+    if (epss.maxConcurrency !== 1 || epss.configuredMinRequestIntervalMs < 500 || epss.maxCveParameterChars > EPSS_CVE_PARAMETER_MAX_CHARS) errors.push('cyberVulnerabilityMeta violates bounded EPSS rate-limit policy');
+    for (const key of ['requestedCveCount', 'fetchedCveCount', 'freshCacheHitCount', 'negativeCacheHitCount', 'staleCacheHitCount', 'priorSnapshotHitCount', 'enrichedCveCount', 'omittedCveCount', 'maxCveParameterChars', 'maxCvesPerBatch', 'maxAttemptsPerBatch', 'retryFallbackDelayMs', 'maxRetryDelayMs', 'cacheTtlMs', 'negativeCacheTtlMs', 'configuredMinRequestIntervalMs']) {
+      if (!validateNonNegativeInteger(epss[key])) errors.push(`cyberVulnerabilityMeta invalid EPSS ${key}`);
+    }
+    validateCyberRateLimitCounters(epss, 'cyberVulnerabilityMeta EPSS', errors);
+    if (!validateNullableIsoDateTime(epss.retrievedAt) && epss.retrievedAt !== null) errors.push('cyberVulnerabilityMeta invalid EPSS retrieval timestamp');
+    if (!Array.isArray(epss.requestUrls)) errors.push('cyberVulnerabilityMeta missing EPSS request URLs');
+    else for (const url of epss.requestUrls) {
+      if (!url.startsWith(`${EPSS_API_URL}?`) || !url.includes('cve=')) errors.push('cyberVulnerabilityMeta invalid EPSS request URL');
+    }
+    if (!epss.omittedByReason || typeof epss.omittedByReason !== 'object') errors.push('cyberVulnerabilityMeta missing EPSS omission accounting');
+    else {
+      for (const key of ['missingEpssRecord', 'invalidEpssRecord', 'requestFailed', 'notAttempted']) {
+        if (!validateNonNegativeInteger(epss.omittedByReason[key])) errors.push(`cyberVulnerabilityMeta invalid EPSS omission ${key}`);
+      }
+      if (Object.values(epss.omittedByReason).every(validateNonNegativeInteger) && epss.omittedCveCount !== Object.values(epss.omittedByReason).reduce((sum, value) => sum + value, 0)) errors.push('cyberVulnerabilityMeta EPSS omitted count does not equal reasons');
+    }
+    if (epss.enrichedCveCount + epss.omittedCveCount !== epss.requestedCveCount) errors.push('cyberVulnerabilityMeta EPSS coverage accounting mismatch');
+    if (epss.enrichedCveCount !== (snapshot.cyberVulnerabilities ?? []).filter((item) => item.epss).length) errors.push('cyberVulnerabilityMeta EPSS enriched count does not match records');
+  }
+
+  const cache = meta.cache;
+  if (!cache || typeof cache !== 'object') {
+    errors.push('cyberVulnerabilityMeta missing cache provenance');
+  } else {
+    if (!['ok', 'empty', 'unavailable', 'write-failed'].includes(cache.status)) errors.push('cyberVulnerabilityMeta invalid cache status');
+    if (cache.path !== VULNERABILITY_CACHE_PATH || cache.version !== VULNERABILITY_CACHE_VERSION) errors.push('cyberVulnerabilityMeta invalid cache path/version');
+    if (typeof cache.loaded !== 'boolean' || typeof cache.written !== 'boolean') errors.push('cyberVulnerabilityMeta invalid cache booleans');
+    if (!validateNullableString(cache.detail)) errors.push('cyberVulnerabilityMeta invalid cache detail');
+  }
 }
 
 function validateUcdpOfficialRecord(item, label, errors) {
@@ -1899,6 +3127,8 @@ function validateSnapshot(snapshot) {
     if (item.ucdp !== undefined) validateUcdpOfficialRecord(item, label, errors);
   }
   validateUcdpMeta(snapshot, errors);
+  for (const item of snapshot.cyberVulnerabilities ?? []) validateCyberVulnerabilityRecord(item, errors);
+  validateCyberVulnerabilityMeta(snapshot, errors);
   const gdeltMentionKeys = new Set();
   const gdeltArticleLocationKeys = new Set();
   for (const item of snapshot.gdeltGeoNews ?? []) {
@@ -1967,14 +3197,15 @@ function validateSnapshot(snapshot) {
   if (errors.length > 0) throw new Error(`Snapshot contract validation failed: ${errors.slice(0, 8).join('; ')}`);
 }
 
-for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents', 'cyberVulnerabilities']) {
+for (const key of ['militaryAircraft', 'aircraft', 'vessels', 'satellites', 'news', 'launches', 'naturalEvents', 'gpsInterference', 'mapOfWarsEvents']) {
   if (result[key].length === 0 && Array.isArray(previousSnapshot[key]) && previousSnapshot[key].length > 0) {
     result[key] = previousSnapshot[key];
     result.errors.push(`${key}: transiently empty; preserved previous snapshot`);
   }
 }
+result.cyberVulnerabilities = result.cyberVulnerabilities.map(normalizeCyberRecordDefaults);
 
 validateSnapshot(result);
 writeFileSync(outFile, JSON.stringify(result));
 const ucdpConsoleSuffix = result.ucdpMeta.preservedPriorEventCount > 0 ? `, ${result.ucdpMeta.preservedPriorEventCount} preserved` : '';
-console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.ucdpMeta.mergedEventCount} UCDP official records (${result.ucdpMeta.status}${ucdpConsoleSuffix}), ${result.webcams.length} webcams, ${result.internetOutages.length} IODA outage detections (${result.internetOutageMeta.status}), ${result.gdeltGeoNews.length} GDELT geo-news mentions (${result.gdeltGeoMeta.status}, ${result.gdeltGeoMeta.titleEnrichedArticleCount} title-enriched)`);
+console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.ucdpMeta.mergedEventCount} UCDP official records (${result.ucdpMeta.status}${ucdpConsoleSuffix}), ${result.webcams.length} webcams, ${result.internetOutages.length} IODA outage detections (${result.internetOutageMeta.status}), ${result.cyberVulnerabilities.length} KEV records (${result.cyberVulnerabilityMeta.nvd.enrichedCveCount}/${result.cyberVulnerabilityMeta.nvd.requestedCveCount} NVD, ${result.cyberVulnerabilityMeta.epss.enrichedCveCount}/${result.cyberVulnerabilityMeta.epss.requestedCveCount} EPSS, ${result.cyberVulnerabilityMeta.status}), ${result.gdeltGeoNews.length} GDELT geo-news mentions (${result.gdeltGeoMeta.status}, ${result.gdeltGeoMeta.titleEnrichedArticleCount} title-enriched)`);

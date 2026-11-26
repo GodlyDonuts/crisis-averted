@@ -1,7 +1,7 @@
 "use client";
 
 import { Activity, AlertTriangle, Database, X } from "lucide-react";
-import type { OsintSnapshot } from "@/types/conflict";
+import type { NvdConfiguration, NvdCvssMetric, OsintSnapshot } from "@/types/conflict";
 import { formatRelativeTime } from "@/lib/conflictData";
 
 interface SourceStatusPanelProps {
@@ -19,6 +19,58 @@ function newestAge(values: Array<string | null | undefined>): string {
     return Number.isFinite(time) && time > latest ? time : latest;
   }, 0);
   return newest ? formatRelativeTime(newest) : "no timestamps";
+}
+
+const CVSS_VERSION_RANK: Record<NvdCvssMetric["metricSet"], number> = {
+  cvssMetricV40: 4,
+  cvssMetricV31: 3,
+  cvssMetricV30: 2,
+  cvssMetricV2: 1,
+};
+
+const CVSS_VERSION_LABEL: Record<NvdCvssMetric["metricSet"], string> = {
+  cvssMetricV40: "4.0",
+  cvssMetricV31: "3.1",
+  cvssMetricV30: "3.0",
+  cvssMetricV2: "2.0",
+};
+
+function selectDisplayCvssMetric(metrics: NvdCvssMetric[] | undefined): NvdCvssMetric | null {
+  if (!metrics?.length) return null;
+  return metrics.slice().sort((a, b) => {
+    const primaryDelta = Number(b.type === "Primary") - Number(a.type === "Primary");
+    if (primaryDelta !== 0) return primaryDelta;
+    const versionDelta = CVSS_VERSION_RANK[b.metricSet] - CVSS_VERSION_RANK[a.metricSet];
+    if (versionDelta !== 0) return versionDelta;
+    return (b.baseScore ?? -1) - (a.baseScore ?? -1);
+  })[0] ?? null;
+}
+
+function collectCpeCriteria(configurations: NvdConfiguration[] | undefined, cap = 3): string[] {
+  const criteria: string[] = [];
+  const visit = (node: NvdConfiguration["nodes"][number]) => {
+    for (const match of node.cpeMatch) {
+      if (criteria.length < cap) criteria.push(match.criteria);
+    }
+    node.nodes.forEach(visit);
+  };
+  for (const configuration of configurations ?? []) {
+    configuration.nodes.forEach(visit);
+  }
+  return criteria;
+}
+
+function countCpeMatches(configurations: NvdConfiguration[] | undefined): number {
+  const countNode = (node: NvdConfiguration["nodes"][number]): number => node.cpeMatch.length + node.nodes.reduce((sum, child) => sum + countNode(child), 0);
+  return (configurations ?? []).reduce((sum, configuration) => sum + configuration.nodes.reduce((nodeSum, node) => nodeSum + countNode(node), 0), 0);
+}
+
+function urlHostname(url: string): string {
+  try { return new URL(url).hostname; } catch { return "reference"; }
+}
+
+function apiAge(value: string | null): string {
+  return value ? formatRelativeTime(Date.parse(value)) : "no live retrieval";
 }
 
 function Row({ label, value, warn = false }: { label: string; value: string; warn?: boolean }) {
@@ -53,6 +105,13 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
         ? `${snapshot.gdeltGeoNews.length} preserved · ${gdeltGeoMeta.status}`
         : gdeltGeoMeta.status
     : `${snapshot.gdeltGeoNews.length} mapped · metadata unavailable`;
+  const cyberMeta = snapshot.cyberVulnerabilityMeta;
+  const cyberValue = cyberMeta
+    ? `${snapshot.cyberVulnerabilities.length} KEV · NVD ${cyberMeta.nvd.enrichedCveCount}/${cyberMeta.nvd.requestedCveCount} · ${cyberMeta.status}`
+    : `${snapshot.cyberVulnerabilities.length} · metadata unavailable`;
+  const epssValue = cyberMeta
+    ? `${cyberMeta.epss.enrichedCveCount}/${cyberMeta.epss.requestedCveCount} scored · ${cyberMeta.epss.status}`
+    : "metadata unavailable";
   return (
     <aside className="godseye-panel godseye-scrollbar pointer-events-auto absolute right-4 top-[4.5rem] z-50 hidden max-h-[calc(100vh-5.5rem)] w-[360px] overflow-y-auto xl:block">
       <div className="flex items-center justify-between border-b border-white/8 px-4 py-3">
@@ -86,7 +145,8 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
         <Row label="GDELT geo omissions" value={gdeltGeoMeta ? `${gdeltGeoMeta.omittedMentionCount} accounted · ${gdeltGeoMeta.uniqueArticleCount} articles/${gdeltGeoMeta.uniqueLocationCount} locations` : "not loaded"} />
         <Row label="UCDP official events" value={ucdpValue} warn={ucdpMeta?.status !== "ok"} />
         <Row label="UCDP release" value={ucdpMeta ? `${ucdpMeta.version} · ${ucdpMeta.datasetRelease}` : "not loaded"} />
-        <Row label="Known exploited CVEs" value={String(snapshot.cyberVulnerabilities.length)} />
+        <Row label="Known exploited CVEs" value={cyberValue} warn={cyberMeta?.status !== "ok"} />
+        <Row label="EPSS scoring" value={epssValue} warn={cyberMeta?.epss.status !== "ok"} />
         <Row label="Webcam metadata" value={snapshot.webcams.length > 0 ? String(snapshot.webcams.length) : "key not configured"} warn={snapshot.webcams.length === 0} />
       </div>
 
@@ -94,13 +154,81 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
         <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/34">
           <Activity className="h-3.5 w-3.5" /> Cyber exploitation watch
         </div>
-        <div className="mt-2 space-y-1.5">
-          {snapshot.cyberVulnerabilities.slice(0, 3).map((item) => (
-            <div key={item.cveId} className="text-[11px] leading-snug text-white/58">
-              <span className="font-mono text-amber-100/70">{item.cveId}</span> · {item.vendor || "Unknown vendor"} {item.product || ""} · {item.dateAdded || "date unavailable"}
-            </div>
-          ))}
+        <div className="mt-2 space-y-2">
+          {snapshot.cyberVulnerabilities.slice(0, 3).map((item) => {
+            const metric = selectDisplayCvssMetric(item.nvd?.metrics);
+            const description = item.nvd?.descriptions.find((entry) => entry.lang === "en") ?? item.nvd?.descriptions[0] ?? null;
+            const cweIds = [...new Set((item.nvd?.weaknesses ?? []).map((weakness) => weakness.id))].slice(0, 4);
+            const cpeSamples = collectCpeCriteria(item.nvd?.configurations, 2);
+            const cpeCount = countCpeMatches(item.nvd?.configurations);
+            const omittedEvidence = item.nvd ? [
+              item.nvd.truncation.referencesOmitted > 0 ? `+${item.nvd.truncation.referencesOmitted} refs` : null,
+              item.nvd.truncation.cpeMatchesOmitted > 0 ? `+${item.nvd.truncation.cpeMatchesOmitted} CPEs` : null,
+              item.nvd.truncation.configurationsOmitted > 0 ? `+${item.nvd.truncation.configurationsOmitted} configs` : null,
+            ].filter(Boolean).join(" · ") : "";
+            return (
+              <div key={item.cveId} className="rounded-sm border border-white/7 bg-white/[0.018] px-2 py-1.5 text-[11px] leading-snug text-white/58">
+                <div>
+                  <span className="font-mono text-amber-100/70">{item.cveId}</span> · {item.vendor || "vendor not supplied"} {item.product || ""} · KEV {item.dateAdded || "date unavailable"}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {metric ? (
+                    <span className="rounded-sm border border-red-200/15 bg-red-300/[0.055] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-red-100/70">
+                      CVSS {CVSS_VERSION_LABEL[metric.metricSet]} {metric.baseScore?.toFixed(1) ?? "score n/a"}{metric.baseSeverity ? ` ${metric.baseSeverity}` : ""}
+                    </span>
+                  ) : <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-white/28">NVD metrics not supplied</span>}
+                  {item.epss ? (
+                    <span className="rounded-sm border border-cyan-200/15 bg-cyan-300/[0.045] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-cyan-100/68">
+                      EPSS {(item.epss.score * 100).toFixed(1)}% · p{Math.round(item.epss.percentile * 100)}
+                    </span>
+                  ) : <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-white/28">EPSS not supplied</span>}
+                  {cweIds.map((cwe) => <span key={cwe} className="rounded-sm border border-white/10 px-1.5 py-0.5 font-mono text-[9px] text-white/44">{cwe}</span>)}
+                </div>
+                {item.nvd ? (
+                  <details className="mt-1.5">
+                    <summary className="cursor-pointer font-mono text-[9px] uppercase tracking-[0.13em] text-white/38 hover:text-white/62">
+                      NVD evidence · retrieved {apiAge(item.nvd.retrievedAt)}
+                    </summary>
+                    <div className="mt-1.5 space-y-1.5 border-l border-white/8 pl-2">
+                      {description ? <p className="leading-relaxed text-white/52">{description.value}</p> : <p className="text-white/34">NVD supplied no English or alternate-language description in the retained evidence.</p>}
+                      {metric?.vectorString ? <p className="break-all font-mono text-[9px] leading-relaxed text-white/36">{metric.vectorString}</p> : null}
+                      <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-white/30">
+                        Published {item.nvd.published ? apiAge(item.nvd.published) : "not supplied"} · modified {item.nvd.lastModified ? apiAge(item.nvd.lastModified) : "not supplied"} · {cpeCount} bounded CPE matches
+                      </p>
+                      {item.nvd.references.length > 0 ? (
+                        <div className="flex flex-wrap gap-x-2 gap-y-1">
+                          {item.nvd.references.slice(0, 2).map((reference) => (
+                            <a key={reference.url} href={reference.url} target="_blank" rel="noreferrer" className="font-mono text-[9px] uppercase tracking-[0.1em] text-cyan-100/46 underline decoration-cyan-100/20 underline-offset-2 hover:text-cyan-100/75">
+                              {urlHostname(reference.url)}
+                            </a>
+                          ))}
+                        </div>
+                      ) : null}
+                      {cpeSamples.map((cpe, index) => <p key={`${cpe}-${index}`} className="break-all font-mono text-[9px] text-white/28">{cpe}</p>)}
+                      {omittedEvidence ? <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-amber-100/40">Bounded omissions: {omittedEvidence}</p> : null}
+                    </div>
+                  </details>
+                ) : <p className="mt-1 text-[10px] text-white/34">No authoritative NVD evidence retained for this CVE; absence is explicit, not zero risk.</p>}
+              </div>
+            );
+          })}
           {snapshot.cyberVulnerabilities.length === 0 && <p className="text-[11px] text-white/34">CISA KEV collection unavailable.</p>}
+          {cyberMeta ? (
+            <details className="rounded-sm border border-white/8 bg-white/[0.025] px-2 py-1.5">
+              <summary className="cursor-pointer font-mono text-[9px] uppercase tracking-[0.14em] text-white/38 hover:text-white/62">Cyber provenance, cache, omissions</summary>
+              <div className="mt-2 space-y-1.5 text-[10px] leading-relaxed text-white/48">
+                <p>
+                  KEV catalog {cyberMeta.kev.catalogVersion || "version not supplied"} retrieved {apiAge(cyberMeta.kev.retrievedAt)}; {cyberMeta.kev.selectedRecordCount}/{cyberMeta.kev.validRecordCount} valid records selected with {cyberMeta.kev.omittedRecordCount} bounded omissions ({cyberMeta.kev.omittedByReason.selectionCap} selection cap, {cyberMeta.kev.omittedByReason.invalidRecord} invalid, {cyberMeta.kev.omittedByReason.duplicateCveId} duplicates).
+                </p>
+                <p>
+                  NVD CVE 2.0 uses cveIds batches at serial concurrency 1 with a {Math.round(cyberMeta.nvd.configuredMinRequestIntervalMs / 100) / 10}s minimum inter-request gap; API key configured: {cyberMeta.nvd.apiKeyConfigured ? "yes (secret never serialized)" : "no"}. Requests {cyberMeta.nvd.successfulRequestCount}/{cyberMeta.nvd.requestAttemptCount} successful, {cyberMeta.nvd.retryCount} retries, {cyberMeta.nvd.throttledResponseCount} throttled responses. Cache: {cyberMeta.nvd.freshCacheHitCount} fresh hits, {cyberMeta.nvd.negativeCacheHitCount} negative hits, {cyberMeta.nvd.staleCacheHitCount} stale fallbacks, {cyberMeta.nvd.priorSnapshotHitCount} prior-snapshot fallbacks; live retrieval {apiAge(cyberMeta.nvd.retrievedAt)}. NVD omissions: {cyberMeta.nvd.omittedByReason.missingNvdRecord} missing, {cyberMeta.nvd.omittedByReason.invalidNvdRecord} invalid, {cyberMeta.nvd.omittedByReason.requestFailed} request failures, {cyberMeta.nvd.omittedByReason.notAttempted} not attempted.
+                </p>
+                <p>
+                  EPSS is FIRST&apos;s probability estimate, not exploitation evidence: {cyberMeta.epss.enrichedCveCount}/{cyberMeta.epss.requestedCveCount} scored, {cyberMeta.epss.omittedCveCount} omissions ({cyberMeta.epss.omittedByReason.missingEpssRecord} missing, {cyberMeta.epss.omittedByReason.invalidEpssRecord} invalid, {cyberMeta.epss.omittedByReason.requestFailed} request failures, {cyberMeta.epss.omittedByReason.notAttempted} not attempted). Cache file status {cyberMeta.cache.status}; original retrieval timestamps are preserved whenever cached or prior evidence is used.
+                </p>
+              </div>
+            </details>
+          ) : null}
         </div>
       </div>
 
@@ -157,7 +285,7 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
 
       <div className="border-t border-white/8 px-4 py-3">
         <p className="font-mono text-[9px] uppercase leading-relaxed tracking-[0.12em] text-white/30">
-          Attribution and licensing: WarHeatMap is CC BY 4.0; UCDP/Map of Wars, NASA, USGS, ADSB.lol, gpsjam.org, Launch Library, CISA, and other public feeds retain their own terms. Geolocated news mentions are courtesy of{" "}
+          Attribution and licensing: WarHeatMap is CC BY 4.0; UCDP/Map of Wars, NASA, USGS, ADSB.lol, gpsjam.org, Launch Library, CISA, NIST NVD, FIRST EPSS, and other public feeds retain their own terms. Geolocated news mentions are courtesy of{" "}
           <a href="https://www.gdeltproject.org/" target="_blank" rel="noreferrer" className="text-white/46 underline decoration-white/20 underline-offset-2 hover:text-white/70">The GDELT Project</a>{" "}
           (citation required by GDELT terms of use). Reports are unverified operational leads, not confirmed facts.
         </p>

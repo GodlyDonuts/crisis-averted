@@ -18,6 +18,7 @@ const EMPTY_SNAPSHOT: OsintSnapshot = {
   mapOfWarsEvents: [],
   webcams: [],
   cyberVulnerabilities: [],
+  cyberVulnerabilityMeta: null,
   internetOutages: [],
   internetOutageMeta: null,
   ucdpMeta: null,
