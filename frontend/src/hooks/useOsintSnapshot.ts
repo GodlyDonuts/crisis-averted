@@ -8,12 +8,15 @@ const EMPTY_SNAPSHOT: OsintSnapshot = {
   fetchedAt: "",
   sources: {},
   militaryAircraft: [],
+  aircraft: [],
+  vessels: [],
   news: [],
   launches: [],
   naturalEvents: [],
   gpsInterference: [],
   mapOfWarsEvents: [],
   webcams: [],
+  cyberVulnerabilities: [],
   errors: [],
 };
 

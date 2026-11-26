@@ -1,4 +1,4 @@
-import { Plane, Signal, Leaf, Circle } from "lucide-react";
+import { Plane, Radar, Ship, Signal, Leaf, Circle } from "lucide-react";
 import { SEVERITY_META } from "@/lib/conflictData";
 
 export function MapLegend() {
@@ -15,6 +15,14 @@ export function MapLegend() {
         <div className="flex items-center gap-2 text-[#b8c29a]">
           <Plane className="h-3 w-3" />
           <span>Military aircraft</span>
+        </div>
+        <div className="flex items-center gap-2 text-[#9fb7a8]">
+          <Radar className="h-3 w-3" />
+          <span>Civil aviation</span>
+        </div>
+        <div className="flex items-center gap-2 text-[#7da6a1]">
+          <Ship className="h-3 w-3" />
+          <span>AIS vessels</span>
         </div>
         <div className="flex items-center gap-2 text-orange-200/78">
           <Signal className="h-3 w-3" />

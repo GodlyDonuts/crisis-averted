@@ -42,11 +42,29 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
         <Row label="Conflict feeds" value={conflictSource === "live" ? `Live · ${lastUpdated ? formatRelativeTime(lastUpdated) : "syncing"}` : "Cached fallback"} warn={conflictSource !== "live"} />
         <Row label="Snapshot age" value={snapshotAge} />
         <Row label="Military aircraft" value={String(snapshot.militaryAircraft.length)} />
+        <Row label="Civil aviation tracks" value={String(snapshot.aircraft.length)} />
+        <Row label="AIS vessels" value={String(snapshot.vessels.length)} />
         <Row label="News articles" value={String(snapshot.news.length)} />
         <Row label="Launch pads" value={String(snapshot.launches.length)} />
         <Row label="Natural events" value={String(snapshot.naturalEvents.length)} />
         <Row label="GPS interference cells" value={String(snapshot.gpsInterference.length)} />
+        <Row label="Map of Wars records" value={String(snapshot.mapOfWarsEvents.length)} />
+        <Row label="Known exploited CVEs" value={String(snapshot.cyberVulnerabilities.length)} />
         <Row label="Webcam metadata" value={snapshot.webcams.length > 0 ? String(snapshot.webcams.length) : "key not configured"} warn={snapshot.webcams.length === 0} />
+      </div>
+
+      <div className="border-t border-white/8 px-4 py-3">
+        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.18em] text-white/34">
+          <Activity className="h-3.5 w-3.5" /> Cyber exploitation watch
+        </div>
+        <div className="mt-2 space-y-1.5">
+          {snapshot.cyberVulnerabilities.slice(0, 3).map((item) => (
+            <div key={item.cveId} className="text-[11px] leading-snug text-white/58">
+              <span className="font-mono text-amber-100/70">{item.cveId}</span> · {item.vendor || "Unknown vendor"} {item.product || ""} · {item.dateAdded || "date unavailable"}
+            </div>
+          ))}
+          {snapshot.cyberVulnerabilities.length === 0 && <p className="text-[11px] text-white/34">CISA KEV collection unavailable.</p>}
+        </div>
       </div>
 
       <div className="border-t border-white/8 px-4 py-3">
@@ -61,6 +79,12 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="border-t border-white/8 px-4 py-3">
+        <p className="font-mono text-[9px] uppercase leading-relaxed tracking-[0.12em] text-white/30">
+          Attribution and licensing: WarHeatMap is CC BY 4.0; UCDP/Map of Wars, GDELT, NASA, USGS, ADSB.lol, gpsjam.org, Launch Library, CISA, and other public feeds retain their own terms. Reports are unverified operational leads, not confirmed facts.
+        </p>
       </div>
 
       {(snapshot.errors.length > 0 || conflictError) && (

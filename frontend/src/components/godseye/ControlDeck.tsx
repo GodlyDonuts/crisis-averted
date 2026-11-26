@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Cloud, Compass, Download, Hexagon, Orbit, Pause, Plane, Play, Leaf, Radio, ScanLine, Signal, SlidersHorizontal, Tags, Waypoints } from "lucide-react";
+import { Cloud, Compass, Download, Hexagon, Orbit, Pause, Plane, Play, Ship, Leaf, Radio, ScanLine, Signal, Radar, SlidersHorizontal, Tags, Waypoints } from "lucide-react";
 import type { CategoryGroup, ConflictEvent, SeverityKey, TimelineBucket, TimeWindowKey } from "@/types/conflict";
 import type { GodEyeLayerToggles } from "./GodEyeGlobe";
 import { CATEGORY_GROUP_META, SEVERITY_META } from "@/lib/conflictData";
@@ -37,7 +37,9 @@ const LAYER_CONTROLS: { key: keyof GodEyeLayerToggles; label: string; icon: type
   { key: "theaterLabels", label: "Labels", icon: Tags },
   { key: "clouds", label: "Clouds", icon: Cloud },
   { key: "orbitalAssets", label: "Orbital", icon: Orbit },
-  { key: "aircraft", label: "Air", icon: Plane },
+  { key: "aircraft", label: "Mil air", icon: Plane },
+  { key: "civilAviation", label: "Civil air", icon: Radar },
+  { key: "maritime", label: "Ships", icon: Ship },
   { key: "environmental", label: "Env", icon: Leaf },
   { key: "gpsInterference", label: "GPS", icon: Signal },
 ];

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
-import type { CategoryGroup, ConflictEvent, ConflictFilters, ConflictTheater, MilitaryAircraft, SeverityKey } from "@/types/conflict";
+import type { CategoryGroup, ConflictEvent, ConflictFilters, ConflictTheater, MilitaryAircraft, OsintAircraft, OsintVessel, SeverityKey } from "@/types/conflict";
 import {
   aggregateTheaters,
   buildTimeline,
@@ -23,7 +23,9 @@ import { MobileIntelSheet } from "./MobileIntelSheet";
 import { MapLegend } from "./MapLegend";
 import { TargetLockOverlay } from "./TargetLockOverlay";
 import { AircraftDetailPanel } from "./AircraftDetailPanel";
+import { TransportDetailPanel } from "./TransportDetailPanel";
 import { SourceStatusPanel } from "./SourceStatusPanel";
+import { GlobeFallback } from "./GlobeFallback";
 import BootSequence from "./BootSequence";
 import type { GodEyeFocusTarget, GodEyeLayerToggles, GodEyeVisualMode } from "./GodEyeGlobe";
 
@@ -49,6 +51,8 @@ const DEFAULT_LAYERS: GodEyeLayerToggles = {
   clouds: true,
   orbitalAssets: false,
   aircraft: true,
+  civilAviation: true,
+  maritime: true,
   environmental: false,
   gpsInterference: true,
 };
@@ -63,11 +67,14 @@ export default function GodEyeCommandCenter() {
   const [filters, setFilters] = useState<ConflictFilters>(() => createDefaultFilters());
   const [layers, setLayers] = useState<GodEyeLayerToggles>(DEFAULT_LAYERS);
   const [visualMode, setVisualMode] = useState<GodEyeVisualMode>("cinematic");
-  const [autoRotate, setAutoRotate] = useState(true);
+  const [autoRotate, setAutoRotate] = useState(() => typeof window === "undefined" || !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const [tourActive, setTourActive] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [selectedAircraft, setSelectedAircraft] = useState<MilitaryAircraft | null>(null);
+  const [selectedCivilAircraft, setSelectedCivilAircraft] = useState<OsintAircraft | null>(null);
+  const [selectedVessel, setSelectedVessel] = useState<OsintVessel | null>(null);
   const [sourcePanelOpen, setSourcePanelOpen] = useState(false);
+  const [globeUnavailable, setGlobeUnavailable] = useState(false);
   const [theaterPanelOpen, setTheaterPanelOpen] = useState(true);
   const [incidentPanelOpen, setIncidentPanelOpen] = useState(true);
   const [selectedTheaterSlug, setSelectedTheaterSlug] = useState<string | null>(null);
@@ -113,9 +120,13 @@ export default function GodEyeCommandCenter() {
     return theaters.find((theater) => theater.slug === selectedTheaterSlug) ?? null;
   }, [theaters, selectedTheaterSlug]);
 
+  const handleGlobeRenderFailure = useCallback(() => setGlobeUnavailable(true), []);
+
   const handleEventSelect = useCallback((event: ConflictEvent) => {
     setAutoRotate(false);
     setSelectedAircraft(null);
+    setSelectedCivilAircraft(null);
+    setSelectedVessel(null);
     setSelectedEventId(event.id);
     setFocusTarget({
       lat: event.lat,
@@ -128,6 +139,8 @@ export default function GodEyeCommandCenter() {
   const handleAircraftSelect = useCallback((aircraft: MilitaryAircraft) => {
     setAutoRotate(false);
     setSelectedEventId(null);
+    setSelectedCivilAircraft(null);
+    setSelectedVessel(null);
     setSelectedAircraft(aircraft);
     setFocusTarget({
       lat: aircraft.lat,
@@ -135,6 +148,24 @@ export default function GodEyeCommandCenter() {
       altitude: 1.05,
       key: `aircraft-${aircraft.id}-${Date.now()}`,
     });
+  }, []);
+
+  const handleCivilAircraftSelect = useCallback((aircraft: OsintAircraft) => {
+    setAutoRotate(false);
+    setSelectedEventId(null);
+    setSelectedAircraft(null);
+    setSelectedVessel(null);
+    setSelectedCivilAircraft(aircraft);
+    setFocusTarget({ lat: aircraft.lat, lng: aircraft.lng, altitude: 1.0, key: `civil-${aircraft.id}-${Date.now()}` });
+  }, []);
+
+  const handleVesselSelect = useCallback((vessel: OsintVessel) => {
+    setAutoRotate(false);
+    setSelectedEventId(null);
+    setSelectedAircraft(null);
+    setSelectedCivilAircraft(null);
+    setSelectedVessel(vessel);
+    setFocusTarget({ lat: vessel.lat, lng: vessel.lng, altitude: 0.72, key: `vessel-${vessel.id}-${Date.now()}` });
   }, []);
 
   const handleTheaterSelect = useCallback((theater: ConflictTheater) => {
@@ -250,24 +281,40 @@ export default function GodEyeCommandCenter() {
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-[#01040a] text-white">
-      <GodEyeGlobe
-        key={visualMode}
-        events={visibleEvents}
-        theaters={theaters}
-        militaryAircraft={osintSnapshot.militaryAircraft}
-        launches={osintSnapshot.launches}
-        naturalEvents={osintSnapshot.naturalEvents}
-        gpsInterference={osintSnapshot.gpsInterference}
-        selectedEvent={selectedEvent}
-        selectedTheater={selectedTheater}
-        focusTarget={focusTarget}
-        layers={layers}
-        visualMode={visualMode}
-        autoRotate={autoRotate}
-        onEventSelect={handleEventSelect}
-        onAircraftSelect={handleAircraftSelect}
-        onTheaterSelect={handleTheaterSelect}
-      />
+      {globeUnavailable ? (
+        <GlobeFallback
+          events={visibleEvents}
+          theaters={theaters}
+          militaryAircraft={osintSnapshot.militaryAircraft}
+          naturalEvents={osintSnapshot.naturalEvents}
+          selectedEvent={selectedEvent}
+          onEventSelect={handleEventSelect}
+        />
+      ) : (
+        <GodEyeGlobe
+          key={visualMode}
+          events={visibleEvents}
+          theaters={theaters}
+          militaryAircraft={osintSnapshot.militaryAircraft}
+          aircraft={osintSnapshot.aircraft}
+          vessels={osintSnapshot.vessels}
+          launches={osintSnapshot.launches}
+          naturalEvents={osintSnapshot.naturalEvents}
+          gpsInterference={osintSnapshot.gpsInterference}
+          selectedEvent={selectedEvent}
+          selectedTheater={selectedTheater}
+          focusTarget={focusTarget}
+          layers={layers}
+          visualMode={visualMode}
+          autoRotate={autoRotate}
+          onEventSelect={handleEventSelect}
+          onAircraftSelect={handleAircraftSelect}
+          onCivilAircraftSelect={handleCivilAircraftSelect}
+          onVesselSelect={handleVesselSelect}
+          onTheaterSelect={handleTheaterSelect}
+          onRenderFailure={handleGlobeRenderFailure}
+        />
+      )}
 
       <div className="pointer-events-none absolute inset-0 z-20">
         <TopCommandBar
@@ -319,6 +366,14 @@ export default function GodEyeCommandCenter() {
 
         {selectedAircraft && !selectedEvent ? (
           <AircraftDetailPanel aircraft={selectedAircraft} onClose={() => setSelectedAircraft(null)} />
+        ) : null}
+
+        {(selectedCivilAircraft || selectedVessel) && !selectedEvent ? (
+          <TransportDetailPanel
+            aircraft={selectedCivilAircraft}
+            vessel={selectedVessel}
+            onClose={() => { setSelectedCivilAircraft(null); setSelectedVessel(null); }}
+          />
         ) : null}
 
         {incidentPanelOpen ? (

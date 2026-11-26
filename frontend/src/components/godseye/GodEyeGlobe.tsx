@@ -27,8 +27,8 @@ import {
 } from "three";
 import { assetPath } from "@/lib/assets";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import type { ConflictEvent, ConflictTheater, MilitaryAircraft, OsintLaunch, OsintNaturalEvent, GpsInterferenceCell, SeverityKey } from "@/types/conflict";
-import { escapeHtml, formatRelativeTime, normalizeCategory, normalizeTheaterName, SEVERITY_META } from "@/lib/conflictData";
+import type { ConflictEvent, ConflictTheater, MilitaryAircraft, OsintAircraft, OsintLaunch, OsintNaturalEvent, OsintVessel, GpsInterferenceCell, SeverityKey } from "@/types/conflict";
+import { classifyAircraftRole, escapeHtml, formatRelativeTime, naturalEventColor, normalizeCategory, normalizeTheaterName, SEVERITY_META } from "@/lib/conflictData";
 
 export type GodEyeVisualMode = "cinematic" | "satellite";
 
@@ -41,6 +41,8 @@ export interface GodEyeLayerToggles {
   clouds: boolean;
   orbitalAssets: boolean;
   aircraft: boolean;
+  civilAviation: boolean;
+  maritime: boolean;
   environmental: boolean;
   gpsInterference: boolean;
 }
@@ -56,6 +58,8 @@ interface GodEyeGlobeProps {
   events: ConflictEvent[];
   theaters: ConflictTheater[];
   militaryAircraft: MilitaryAircraft[];
+  aircraft: OsintAircraft[];
+  vessels: OsintVessel[];
   launches: OsintLaunch[];
   naturalEvents: OsintNaturalEvent[];
   gpsInterference: GpsInterferenceCell[];
@@ -67,7 +71,10 @@ interface GodEyeGlobeProps {
   autoRotate: boolean;
   onEventSelect: (event: ConflictEvent) => void;
   onAircraftSelect: (aircraft: MilitaryAircraft) => void;
+  onCivilAircraftSelect: (aircraft: OsintAircraft) => void;
+  onVesselSelect: (vessel: OsintVessel) => void;
   onTheaterSelect: (theater: ConflictTheater) => void;
+  onRenderFailure?: () => void;
 }
 
 interface CountryFeature {
@@ -84,6 +91,8 @@ interface CountryFeature {
 type GlobePointObject =
   | (ConflictEvent & { objectKind: "event" })
   | (MilitaryAircraft & { objectKind: "aircraft" })
+  | (OsintAircraft & { objectKind: "civilAircraft" })
+  | (OsintVessel & { objectKind: "vessel" })
   | (OsintLaunch & { objectKind: "launch" })
   | (OsintNaturalEvent & { objectKind: "natural" });
 
@@ -353,6 +362,8 @@ export default function GodEyeGlobe({
   events,
   theaters,
   militaryAircraft,
+  aircraft,
+  vessels,
   launches,
   naturalEvents,
   gpsInterference,
@@ -364,7 +375,10 @@ export default function GodEyeGlobe({
   autoRotate,
   onEventSelect,
   onAircraftSelect,
+  onCivilAircraftSelect,
+  onVesselSelect,
   onTheaterSelect,
+  onRenderFailure,
 }: GodEyeGlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const globeRef = useRef<GlobeInstance | null>(null);
@@ -484,6 +498,13 @@ export default function GodEyeGlobe({
     if (!containerRef.current) return;
 
     const container = containerRef.current;
+    const probe = document.createElement("canvas");
+    const hasWebgl = Boolean(probe.getContext("webgl2") || probe.getContext("webgl"));
+    if (!hasWebgl) {
+      onRenderFailure?.();
+      return;
+    }
+
     const globe = new Globe(container, {
       animateIn: false,
       rendererConfig: {
@@ -740,7 +761,7 @@ export default function GodEyeGlobe({
     };
     // The globe is intentionally recreated only when the rendering mode changes.
     // Data layers are applied in separate effects below.
-  }, [visualMode]);
+  }, [visualMode, onRenderFailure]);
 
   useEffect(() => {
     layersRef.current = layers;
@@ -930,22 +951,33 @@ export default function GodEyeGlobe({
     globe
       .pointsData([
         ...interactiveEvents.map((event) => ({ ...event, objectKind: "event" as const })),
-        ...(layers.aircraft ? militaryAircraft.slice(0, detailLevel === 2 ? 240 : detailLevel === 1 ? 190 : 120).map((aircraft) => ({ ...aircraft, objectKind: "aircraft" as const })) : []),
+        ...(layers.aircraft ? militaryAircraft.slice(0, detailLevel === 2 ? 240 : detailLevel === 1 ? 190 : 120).map((item) => ({ ...item, objectKind: "aircraft" as const })) : []),
+        ...(layers.civilAviation ? aircraft.slice(0, detailLevel === 2 ? 700 : detailLevel === 1 ? 480 : 260).map((item) => ({ ...item, objectKind: "civilAircraft" as const })) : []),
+        ...(layers.maritime ? vessels.slice(0, detailLevel === 2 ? 900 : detailLevel === 1 ? 650 : 380).map((vessel) => ({ ...vessel, objectKind: "vessel" as const })) : []),
         ...(layers.orbitalAssets ? launches.slice(0, 24).map((launch) => ({ ...launch, objectKind: "launch" as const })) : []),
         ...(layers.environmental ? naturalEvents.slice(0, 70).map((event) => ({ ...event, objectKind: "natural" as const })) : []),
       ] as GlobePointObject[])
       .pointLat("lat")
       .pointLng("lng")
-      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "launch" ? 0.015 : (point as GlobePointObject).objectKind === "natural" ? 0.014 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
-      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? "#b8c29a" : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "natural" ? "#30d158" : pointColor(point as ConflictEvent))
-      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
+      .pointAltitude((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.018 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.016 : (point as GlobePointObject).objectKind === "vessel" ? 0.007 : (point as GlobePointObject).objectKind === "launch" ? 0.015 : (point as GlobePointObject).objectKind === "natural" ? 0.014 : GLOBE_RADIUS_ALTITUDE + ((point as ConflictEvent).intensity * 0.006))
+      .pointColor((point: object) => (point as GlobePointObject).objectKind === "aircraft" ? classifyAircraftRole((point as MilitaryAircraft).aircraftType).color : (point as GlobePointObject).objectKind === "civilAircraft" ? ((point as OsintAircraft).operatorClass.includes("cargo") ? "#f0a84f" : "#9fb7a8") : (point as GlobePointObject).objectKind === "vessel" ? ((point as OsintVessel).vesselClass === "Tanker" ? "#d59b6a" : (point as OsintVessel).vesselClass === "Cargo" ? "#7da6a1" : "#8f9b7d") : (point as GlobePointObject).objectKind === "launch" ? "#bf5af2" : (point as GlobePointObject).objectKind === "natural" ? naturalEventColor(point as OsintNaturalEvent) : pointColor(point as ConflictEvent))
+      .pointRadius((point) => (point as GlobePointObject).objectKind === "aircraft" ? 0.052 : (point as GlobePointObject).objectKind === "civilAircraft" ? 0.035 : (point as GlobePointObject).objectKind === "vessel" ? 0.038 : (point as GlobePointObject).objectKind === "launch" ? 0.074 : (point as GlobePointObject).objectKind === "natural" ? 0.062 : severityPointRadius(point as ConflictEvent, selectedEvent?.id === (point as ConflictEvent).id))
       .pointResolution(9)
       .pointsMerge(false)
       .pointsTransitionDuration(320)
       .pointLabel((point) => {
         if ((point as GlobePointObject).objectKind === "aircraft") {
           const aircraft = point as MilitaryAircraft;
-          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#b8c29a">MILITARY AIRCRAFT</div><div class="godseye-tooltip__title">${escapeHtml(aircraft.callsign)}</div><div class="godseye-tooltip__meta">${escapeHtml(aircraft.aircraftType || "Unknown type")} · ${aircraft.altitude ? `${aircraft.altitude.toLocaleString()} ft` : "altitude unknown"} · ADSB.lol</div></div>`;
+          const role = classifyAircraftRole(aircraft.aircraftType);
+          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:${role.color}">${role.label.toUpperCase()}</div><div class="godseye-tooltip__title">${escapeHtml(aircraft.callsign)}</div><div class="godseye-tooltip__meta">${escapeHtml(aircraft.aircraftType || "Unknown type")} · ${aircraft.altitude ? `${aircraft.altitude.toLocaleString()} ft` : "altitude unknown"} · ADSB.lol</div></div>`;
+        }
+        if ((point as GlobePointObject).objectKind === "civilAircraft") {
+          const item = point as OsintAircraft;
+          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#9fb7a8">${escapeHtml(item.operatorClass.toUpperCase())}</div><div class="godseye-tooltip__title">${escapeHtml(item.callsign)}</div><div class="godseye-tooltip__meta">${escapeHtml(item.originCountry || "Unknown origin")} · ${item.altitude ? `${item.altitude.toLocaleString()} ft` : "altitude unknown"} · ${item.speed ? `${item.speed} kt` : "speed unknown"} · OpenSky</div></div>`;
+        }
+        if ((point as GlobePointObject).objectKind === "vessel") {
+          const vessel = point as OsintVessel;
+          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#7da6a1">${escapeHtml(vessel.vesselClass.toUpperCase())}</div><div class="godseye-tooltip__title">${escapeHtml(vessel.name)}</div><div class="godseye-tooltip__meta">MMSI ${vessel.mmsi} · ${vessel.speed != null ? `${vessel.speed.toFixed(1)} kt` : "speed unknown"} · ${escapeHtml(vessel.destination || "destination unavailable")} · Digitraffic AIS</div></div>`;
         }
         if ((point as GlobePointObject).objectKind === "launch") {
           const launch = point as OsintLaunch;
@@ -953,7 +985,9 @@ export default function GodEyeGlobe({
         }
         if ((point as GlobePointObject).objectKind === "natural") {
           const naturalEvent = point as OsintNaturalEvent;
-          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:#30d158">${escapeHtml(naturalEvent.category.toUpperCase())}</div><div class="godseye-tooltip__title">${escapeHtml(naturalEvent.title)}</div><div class="godseye-tooltip__meta">${naturalEvent.magnitude ? `${naturalEvent.magnitude}${naturalEvent.magnitudeUnit || ""} · ` : ""}NASA EONET / USGS</div></div>`;
+          const color = naturalEventColor(naturalEvent);
+          const sourceLabel = naturalEvent.id.startsWith("gdacs-") ? "GDACS" : naturalEvent.id.startsWith("usgs-") ? "USGS" : "NASA EONET";
+          return `<div class="godseye-tooltip"><div class="godseye-tooltip__eyebrow" style="color:${color}">${escapeHtml(naturalEvent.category.toUpperCase())}</div><div class="godseye-tooltip__title">${escapeHtml(naturalEvent.title)}</div><div class="godseye-tooltip__meta">${naturalEvent.magnitude ? `${naturalEvent.magnitude}${naturalEvent.magnitudeUnit || ""} · ` : ""}${sourceLabel}</div></div>`;
         }
         const conflictEvent = point as ConflictEvent;
         const severity = SEVERITY_META[conflictEvent.severity];
@@ -968,6 +1002,8 @@ export default function GodEyeGlobe({
       .onPointClick((event) => {
         if ((event as GlobePointObject).objectKind === "event") onEventSelect(event as ConflictEvent);
         if ((event as GlobePointObject).objectKind === "aircraft") onAircraftSelect(event as MilitaryAircraft);
+        if ((event as GlobePointObject).objectKind === "civilAircraft") onCivilAircraftSelect(event as OsintAircraft);
+        if ((event as GlobePointObject).objectKind === "vessel") onVesselSelect(event as OsintVessel);
       });
 
     if (layers.beacons) {

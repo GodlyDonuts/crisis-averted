@@ -126,6 +126,41 @@ export interface MilitaryAircraft {
   squawk: string | null;
 }
 
+
+export interface OsintAircraft {
+  id: string;
+  callsign: string;
+  originCountry: string | null;
+  lat: number;
+  lng: number;
+  altitude: number | null;
+  speed: number | null;
+  track: number | null;
+  verticalRate: number | null;
+  squawk: string | null;
+  operatorClass: string;
+  lastContact: string | null;
+}
+
+export interface OsintVessel {
+  id: string;
+  mmsi: number;
+  imo: number | null;
+  name: string;
+  callSign: string | null;
+  destination: string | null;
+  shipType: number | null;
+  vesselClass: string;
+  navigationStatus: string;
+  lat: number;
+  lng: number;
+  speed: number | null;
+  course: number | null;
+  heading: number | null;
+  timestamp: string | null;
+  source: string;
+}
+
 export interface OsintNewsArticle {
   title: string;
   url: string;
@@ -144,16 +179,31 @@ export interface OsintLaunch {
   url: string | null;
 }
 
+
+export interface OsintCyberVulnerability {
+  cveId: string;
+  vendor: string | null;
+  product: string | null;
+  name: string;
+  dateAdded: string | null;
+  dueDate: string | null;
+  ransomwareUse: string;
+  requiredAction: string | null;
+}
+
 export interface OsintSnapshot {
   fetchedAt: string;
   sources: Record<string, string>;
   militaryAircraft: MilitaryAircraft[];
+  aircraft: OsintAircraft[];
+  vessels: OsintVessel[];
   news: OsintNewsArticle[];
   launches: OsintLaunch[];
   naturalEvents: OsintNaturalEvent[];
   gpsInterference: GpsInterferenceCell[];
   mapOfWarsEvents: MapOfWarsRawEvent[];
   webcams: OsintWebcam[];
+  cyberVulnerabilities: OsintCyberVulnerability[];
   errors: string[];
 }
 
