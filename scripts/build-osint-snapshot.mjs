@@ -11,12 +11,16 @@ import {
   validateSnapshotGovernance,
   validateSourceRegistry,
 } from './lib/source-governance.mjs';
+import { buildChunkedPublication, writeChunkedPublication } from './lib/osint-chunked-publication.mjs';
+import { OSINT_CHUNK_LAYOUT } from './lib/osint-chunk-layout.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const outFile = join(root, 'frontend/public/data/osint-snapshot.json');
-const registryOutFile = join(root, 'frontend/public/data/source-registry.json');
-const provenanceOutFile = join(root, 'frontend/public/data/provenance-ledger.json');
-mkdirSync(dirname(outFile), { recursive: true });
+const dataOutDir = join(root, 'frontend/public/data');
+const outFile = join(dataOutDir, 'osint-snapshot.json');
+const registryOutFile = join(dataOutDir, 'source-registry.json');
+const provenanceOutFile = join(dataOutDir, 'provenance-ledger.json');
+mkdirSync(dataOutDir, { recursive: true });
+mkdirSync(join(dataOutDir, 'osint'), { recursive: true });
 
 const { registry: sourceRegistry, text: sourceRegistryText } = loadSourceRegistry(join(root, 'scripts', 'source-registry.json'));
 const registryValidation = validateSourceRegistry(sourceRegistry);
@@ -3343,6 +3347,9 @@ function writeTextAtomic(path, text) {
 }
 writeTextAtomic(registryOutFile, sourceRegistryText.endsWith('\n') ? sourceRegistryText : `${sourceRegistryText}\n`);
 writeTextAtomic(provenanceOutFile, JSON.stringify(masterLedger));
-writeTextAtomic(outFile, JSON.stringify(result));
+const chunkedPublication = buildChunkedPublication(result);
+const publicationWrites = writeChunkedPublication({ publication: chunkedPublication, dataDir: dataOutDir, writeTextAtomic });
+const chunkBytes = publicationWrites.filter((write) => write.role === 'domain-chunk').reduce((sum, write) => sum + write.bytes, 0);
 const ucdpConsoleSuffix = result.ucdpMeta.preservedPriorEventCount > 0 ? `, ${result.ucdpMeta.preservedPriorEventCount} preserved` : '';
 console.log(`osint snapshot: ${result.militaryAircraft.length} military aircraft, ${result.aircraft.length} civil aircraft, ${result.vessels.length} vessels, ${result.satellites.length} satellites, ${result.news.length} articles, ${result.launches.length} launches, ${result.naturalEvents.length} natural events, ${result.gpsInterference.length} gps interference cells, ${result.mapOfWarsEvents.length} map-of-wars events, ${result.ucdpMeta.mergedEventCount} UCDP official records (${result.ucdpMeta.status}${ucdpConsoleSuffix}), ${result.webcams.length} webcams, ${result.internetOutages.length} IODA outage detections (${result.internetOutageMeta.status}), ${result.cyberVulnerabilities.length} KEV records (${result.cyberVulnerabilityMeta.nvd.enrichedCveCount}/${result.cyberVulnerabilityMeta.nvd.requestedCveCount} NVD, ${result.cyberVulnerabilityMeta.epss.enrichedCveCount}/${result.cyberVulnerabilityMeta.epss.requestedCveCount} EPSS, ${result.cyberVulnerabilityMeta.status}), ${result.gdeltGeoNews.length} GDELT geo-news mentions (${result.gdeltGeoMeta.status}, ${result.gdeltGeoMeta.titleEnrichedArticleCount} title-enriched)`);
+console.log(`osint chunks: ${OSINT_CHUNK_LAYOUT.length} domain chunks/${chunkBytes} bytes + manifest cursor; compatibility monolith retained at data/osint-snapshot.json (${chunkedPublication.legacyBytes} bytes)`);

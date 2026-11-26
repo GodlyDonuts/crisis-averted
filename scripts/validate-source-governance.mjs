@@ -12,7 +12,7 @@
  *
  * It also runs a no-network adversarial self-test before inspecting the real artifacts.
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -30,6 +30,7 @@ import {
   validateSnapshotGovernance,
   validateSourceRegistry,
 } from './lib/source-governance.mjs';
+import { validateChunkedPublicationDirectory, validateChunkedPublicationObjects } from './lib/osint-chunked-publication.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const args = new Set(process.argv.slice(2));
@@ -54,6 +55,80 @@ function checkSelfTest(name, condition, detail = '') {
 function readJson(path, label) {
   try { return JSON.parse(readFileSync(path, 'utf8')); }
   catch (error) { fail(`${label} unreadable or invalid JSON: ${error.message}`); return null; }
+}
+
+function collectFilesRelative(rootDir, prefix = '', output = []) {
+  if (!existsSync(rootDir)) return output;
+  for (const entry of readdirSync(rootDir).sort()) {
+    const absolute = join(rootDir, entry);
+    const relativePath = prefix ? `${prefix}/${entry}` : entry;
+    if (statSync(absolute).isDirectory()) collectFilesRelative(absolute, relativePath, output);
+    else if (statSync(absolute).isFile()) output.push({ relativePath, absolutePath: absolute });
+  }
+  return output;
+}
+
+/**
+ * Hash every public data artifact and require the exported data tree to be an exact
+ * copy. source-governance-report.json is the single intentional out-only artifact;
+ * any other extra file is treated as a stale publication leftover.
+ */
+function comparePublicOutDataTrees(publicRoot, outDataRoot) {
+  const errors = [];
+  const hashInventory = [];
+  if (!existsSync(outDataRoot)) return { errors: ['frontend/out/data missing'], hashInventory };
+  const publicFiles = collectFilesRelative(publicRoot);
+  const outFiles = collectFilesRelative(outDataRoot);
+  const outByPath = new Map(outFiles.map((file) => [file.relativePath, file]));
+  const publicPaths = new Set(publicFiles.map((file) => file.relativePath));
+
+  for (const publicFile of publicFiles) {
+    const publicBuffer = readFileSync(publicFile.absolutePath);
+    const publicSha = sha256Buffer(publicBuffer);
+    const artifactFile = outByPath.get(publicFile.relativePath);
+    const inventory = {
+      path: `data/${publicFile.relativePath}`,
+      publicBytes: publicBuffer.length,
+      publicSha256: publicSha,
+      outPresent: Boolean(artifactFile),
+      outBytes: null,
+      outSha256: null,
+      status: 'missing-out-copy',
+    };
+    if (!artifactFile) {
+      errors.push(`frontend/out is missing data/${publicFile.relativePath}`);
+    } else {
+      const outBuffer = readFileSync(artifactFile.absolutePath);
+      const outSha = sha256Buffer(outBuffer);
+      inventory.outBytes = outBuffer.length;
+      inventory.outSha256 = outSha;
+      if (outSha !== publicSha) {
+        inventory.status = 'stale-or-divergent';
+        errors.push(`frontend/out data/${publicFile.relativePath} is stale or diverges from frontend/public/data/${publicFile.relativePath}`);
+      } else {
+        inventory.status = 'identical';
+      }
+    }
+    hashInventory.push(inventory);
+  }
+
+  for (const artifactFile of outFiles) {
+    if (publicPaths.has(artifactFile.relativePath)) continue;
+    if (artifactFile.relativePath === 'source-governance-report.json') continue;
+    errors.push(`frontend/out contains stale unmirrored data/${artifactFile.relativePath}`);
+    const buffer = readFileSync(artifactFile.absolutePath);
+    hashInventory.push({
+      path: `data/${artifactFile.relativePath}`,
+      publicBytes: null,
+      publicSha256: null,
+      outPresent: true,
+      outBytes: buffer.length,
+      outSha256: sha256Buffer(buffer),
+      status: 'stale-unmirrored-extra',
+    });
+  }
+  hashInventory.sort((a, b) => a.path.localeCompare(b.path));
+  return { errors, hashInventory };
 }
 
 function runSelfTests(registry, snapshot) {
@@ -135,6 +210,47 @@ function runSelfTests(registry, snapshot) {
       const prohibitedValidation = validateSnapshotGovernance(snapshot, prohibitedRegistry);
       checkSelfTest('explicitly prohibited bulk export blocks publication when rows exist', prohibitedValidation.errors.some((message) => message.includes('explicitly prohibited bulk export')));
     }
+
+    // 6. Domain chunk schema/hash/count drift and incomplete reassembly are hard failures.
+    const realPublication = validateChunkedPublicationDirectory(publicDataDir);
+    checkSelfTest('committed domain-chunk publication is complete and reassembles to the compatibility monolith', realPublication.errors.length === 0 && realPublication.reassemblyEqual, realPublication.errors.slice(0, 3).join('; '));
+    if (realPublication.manifest && realPublication.reassemblyEqual) {
+      const driftedManifest = structuredClone(realPublication.manifest);
+      driftedManifest.chunks.find((chunk) => chunk.id === 'conflict').sha256 = '0'.repeat(64);
+      const drifted = validateChunkedPublicationObjects({
+        manifest: driftedManifest,
+        chunkPayloads: realPublication.chunks,
+        chunkTexts: realPublication.chunkTexts,
+        legacyText: realPublication.legacyText,
+        legacySnapshot: realPublication.legacySnapshot,
+      });
+      checkSelfTest('manifest/chunk hash drift blocks publication', drifted.errors.some((message) => message.includes('artifact hash drift')));
+      const incompleteChunks = { ...realPublication.chunks };
+      delete incompleteChunks.maritime;
+      const incomplete = validateChunkedPublicationObjects({
+        manifest: realPublication.manifest,
+        chunkPayloads: incompleteChunks,
+        chunkTexts: realPublication.chunkTexts,
+        legacyText: realPublication.legacyText,
+        legacySnapshot: realPublication.legacySnapshot,
+      });
+      checkSelfTest('missing domain chunk prevents silent partial reassembly', incomplete.errors.some((message) => message.includes('domain chunk maritime missing')));
+    }
+
+    // 7. Stale, missing, or extra exported data artifacts are detected by exact hashing.
+    const fixturePublic = join(temp, 'public-data');
+    const fixtureOut = join(temp, 'out-data');
+    mkdirSync(fixturePublic, { recursive: true });
+    mkdirSync(fixtureOut, { recursive: true });
+    writeFileSync(join(fixturePublic, 'same.json'), '{"same":true}');
+    writeFileSync(join(fixtureOut, 'same.json'), '{"same":true}');
+    writeFileSync(join(fixturePublic, 'changed.json'), '{"current":true}');
+    writeFileSync(join(fixtureOut, 'changed.json'), '{"stale":true}');
+    writeFileSync(join(fixturePublic, 'missing.json'), '{}');
+    writeFileSync(join(fixtureOut, 'extra-stale.json'), '{}');
+    const treeComparison = comparePublicOutDataTrees(fixturePublic, fixtureOut);
+    checkSelfTest('stale/missing/extra public-out artifact copies are detected by hash', ['changed.json', 'missing.json', 'extra-stale.json'].every((fragment) => treeComparison.errors.some((message) => message.includes(fragment))), treeComparison.errors.join('; '));
+    checkSelfTest('identical exported artifact remains accepted', treeComparison.hashInventory.some((entry) => entry.path === 'data/same.json' && entry.status === 'identical'));
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
@@ -180,18 +296,20 @@ if (snapshot) {
   warnings.push(...governanceValidation.warnings.map((message) => `snapshot governance review: ${message}`));
 }
 
+const chunkPublication = validateChunkedPublicationDirectory(publicDataDir);
+for (const message of chunkPublication.errors) fail(`chunked publication: ${message}`);
+for (const message of chunkPublication.warnings) warn(`chunked publication review: ${message}`);
+
 if (!existsSync(publicRegistryPath)) fail('public source-registry.json missing beside static data');
 else if (readFileSync(publicRegistryPath, 'utf8').trim() !== canonicalRegistryText.trim()) fail('public source-registry.json differs from canonical scripts/source-registry.json');
 
-// The static export copies rather than transforms data files. Refuse publication if the
-// artifact tree contains stale or divergent governance/data files even when public/ is valid.
+// The static export copies rather than transforms data files. Hash every file in
+// frontend/public/data and require an exact mirrored data tree in frontend/out;
+// extra stale chunk/data files in out are publication failures as well.
+let artifactTreeComparison = { errors: ['frontend/out artifact root absent'], hashInventory: [] };
 if (existsSync(artifactRoot)) {
-  for (const name of ['osint-snapshot.json', 'source-registry.json', 'provenance-ledger.json', 'conflict-fallback.json', 'ne_110m_admin_0_countries.geojson']) {
-    const publicFile = join(publicDataDir, name);
-    const artifactFile = join(artifactRoot, 'data', name);
-    if (!existsSync(artifactFile)) fail(`frontend/out is missing data/${name}`);
-    else if (sha256Buffer(readFileSync(artifactFile)) !== sha256Buffer(readFileSync(publicFile))) fail(`frontend/out data/${name} is stale or diverges from frontend/public/data/${name}`);
-  }
+  artifactTreeComparison = comparePublicOutDataTrees(publicDataDir, join(artifactRoot, 'data'));
+  for (const message of artifactTreeComparison.errors) fail(message);
 }
 
 const master = existsSync(masterLedgerPath) ? readJson(masterLedgerPath, 'master provenance ledger') : null;
@@ -243,6 +361,23 @@ const report = {
     collectionCount: Object.keys(snapshot.provenanceLedger.collections).length,
     summary: snapshot.provenanceLedger.summary,
   } : null,
+  chunkedPublication: {
+    valid: chunkPublication.errors.length === 0,
+    reassemblyEqual: chunkPublication.reassemblyEqual,
+    manifest: chunkPublication.manifest ? {
+      generatedAt: chunkPublication.manifest.generatedAt,
+      chunkCount: chunkPublication.manifest.chunks.length,
+      totalChunkBytes: chunkPublication.manifest.publication.totalChunkBytes,
+      legacyBytes: chunkPublication.manifest.legacyArtifact.bytes,
+      criticalPriorityIds: chunkPublication.manifest.chunks.filter((chunk) => chunk.critical).map((chunk) => chunk.id),
+    } : null,
+    errors: chunkPublication.errors,
+  },
+  artifactTreeComparison: {
+    valid: artifactTreeComparison.errors.length === 0,
+    errors: artifactTreeComparison.errors,
+    hashInventory: artifactTreeComparison.hashInventory,
+  },
   secretScan: {
     filesScanned: secretScan.filesScanned,
     bytesScanned: secretScan.bytesScanned,

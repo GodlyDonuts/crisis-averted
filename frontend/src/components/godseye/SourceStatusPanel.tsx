@@ -6,9 +6,11 @@ import { formatRelativeTime } from "@/lib/conflictData";
 import { assetPath } from "@/lib/assets";
 import { useGlobeRenderStatus } from "@/hooks/useGlobeRenderStatus";
 import type { GlobeRenderStatusStore } from "@/lib/globeRendering";
+import type { OsintChunkDomain, OsintSnapshotRuntime } from "@/lib/osintSnapshotChunks";
 
 interface SourceStatusPanelProps {
   snapshot: OsintSnapshot;
+  snapshotRuntime?: OsintSnapshotRuntime;
   conflictSource: "live" | "fallback" | null;
   conflictError: string | null;
   lastUpdated: number | null;
@@ -97,8 +99,16 @@ function Row({ label, value, warn = false }: { label: string; value: string; war
   );
 }
 
-export function SourceStatusPanel({ snapshot, conflictSource, conflictError, lastUpdated, correlation, renderStatusStore, reducedEffects, onReducedEffectsChange, onClose }: SourceStatusPanelProps) {
+export function SourceStatusPanel({ snapshot, snapshotRuntime, conflictSource, conflictError, lastUpdated, correlation, renderStatusStore, reducedEffects, onReducedEffectsChange, onClose }: SourceStatusPanelProps) {
   const renderStatus = useGlobeRenderStatus(renderStatusStore);
+  const chunkValue = (domain: OsintChunkDomain, loadedValue: string): { value: string; warn: boolean } => {
+    const state = snapshotRuntime?.chunks[domain];
+    if (!state) return { value: loadedValue, warn: false };
+    if (state.status === "pending" || state.status === "loading") return { value: "chunk loading — no coverage claim", warn: false };
+    if (state.status === "error") return { value: "chunk unavailable — not zero coverage", warn: true };
+    if (state.status === "degraded") return { value: `${loadedValue} · retained stale`, warn: true };
+    return { value: loadedValue, warn: state.stale };
+  };
   const snapshotAge = snapshot.fetchedAt ? formatRelativeTime(Date.parse(snapshot.fetchedAt)) : "not loaded";
   const outageMeta = snapshot.internetOutageMeta;
   const outageWindowEnd = outageMeta?.queryWindow.until ? formatRelativeTime(outageMeta.queryWindow.until * 1000) : "unknown";
@@ -153,17 +163,17 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
       <div className="px-2 py-2">
         <Row label="Conflict feeds" value={conflictSource === "live" ? `Live · ${lastUpdated ? formatRelativeTime(lastUpdated) : "syncing"}` : "Cached fallback"} warn={conflictSource !== "live"} />
         <Row label="Snapshot age" value={snapshotAge} />
-        <Row label="Military aircraft" value={String(snapshot.militaryAircraft.length)} />
-        <Row label="Civil aviation tracks" value={`${snapshot.aircraft.length} · newest ${newestAge(snapshot.aircraft.map((item) => item.lastContact))}`} />
-        <Row label="AIS vessels" value={`${snapshot.vessels.length} · newest ${newestAge(snapshot.vessels.map((item) => item.timestamp))}`} />
-        <Row label="Tracked satellites" value={String(snapshot.satellites.length)} />
-        <Row label="News articles" value={String(snapshot.news.length)} />
-        <Row label="Launch pads" value={String(snapshot.launches.length)} />
-        <Row label="Natural events" value={String(snapshot.naturalEvents.length)} />
-        <Row label="GPS interference cells" value={String(snapshot.gpsInterference.length)} />
-        <Row label="IODA outage detections" value={outageValue} warn={outageMeta?.status !== "ok"} />
+        <Row label="Military aircraft" value={chunkValue("transport-aviation", String(snapshot.militaryAircraft.length)).value} warn={chunkValue("transport-aviation", "").warn} />
+        <Row label="Civil aviation tracks" value={chunkValue("transport-aviation", `${snapshot.aircraft.length} · newest ${newestAge(snapshot.aircraft.map((item) => item.lastContact))}`).value} warn={chunkValue("transport-aviation", "").warn} />
+        <Row label="AIS vessels" value={chunkValue("maritime", `${snapshot.vessels.length} · newest ${newestAge(snapshot.vessels.map((item) => item.timestamp))}`).value} warn={chunkValue("maritime", "").warn} />
+        <Row label="Tracked satellites" value={chunkValue("orbital", String(snapshot.satellites.length)).value} warn={chunkValue("orbital", "").warn} />
+        <Row label="News articles" value={chunkValue("media-context", String(snapshot.news.length)).value} warn={chunkValue("media-context", "").warn} />
+        <Row label="Launch pads" value={chunkValue("orbital", String(snapshot.launches.length)).value} warn={chunkValue("orbital", "").warn} />
+        <Row label="Natural events" value={chunkValue("environmental", String(snapshot.naturalEvents.length)).value} warn={chunkValue("environmental", "").warn} />
+        <Row label="GPS interference cells" value={chunkValue("media-context", String(snapshot.gpsInterference.length)).value} warn={chunkValue("media-context", "").warn} />
+        <Row label="IODA outage detections" value={chunkValue("connectivity", outageValue).value} warn={outageMeta?.status !== "ok" || chunkValue("connectivity", "").warn} />
         <Row label="IODA query window" value={`${outageMeta ? `${Math.round(outageMeta.queryWindow.lookbackSeconds / 3600)}h ending ${outageWindowEnd}` : "not loaded"}`} />
-        <Row label="Map of Wars records" value={String(snapshot.mapOfWarsEvents.length)} />
+        <Row label="Map of Wars records" value={chunkValue("conflict", String(snapshot.mapOfWarsEvents.length)).value} warn={chunkValue("conflict", "").warn} />
         {correlation ? (
           <>
             <Row
@@ -181,16 +191,35 @@ export function SourceStatusPanel({ snapshot, conflictSource, conflictError, las
             />
           </>
         ) : null}
-        <Row label="GDELT geo news" value={gdeltGeoValue} warn={gdeltGeoMeta?.status !== "ok"} />
+        <Row label="GDELT geo news" value={chunkValue("media-context", gdeltGeoValue).value} warn={gdeltGeoMeta?.status !== "ok" || chunkValue("media-context", "").warn} />
         <Row label="GDELT geo omissions" value={gdeltGeoMeta ? `${gdeltGeoMeta.omittedMentionCount} accounted · ${gdeltGeoMeta.uniqueArticleCount} articles/${gdeltGeoMeta.uniqueLocationCount} locations` : "not loaded"} />
-        <Row label="UCDP official events" value={ucdpValue} warn={ucdpMeta?.status !== "ok"} />
+        <Row label="UCDP official events" value={chunkValue("conflict", ucdpValue).value} warn={ucdpMeta?.status !== "ok" || chunkValue("conflict", "").warn} />
         <Row label="UCDP release" value={ucdpMeta ? `${ucdpMeta.version} · ${ucdpMeta.datasetRelease}` : "not loaded"} />
-        <Row label="Known exploited CVEs" value={cyberValue} warn={cyberMeta?.status !== "ok"} />
-        <Row label="EPSS scoring" value={epssValue} warn={cyberMeta?.epss.status !== "ok"} />
-        <Row label="Webcam metadata" value={snapshot.webcams.length > 0 ? String(snapshot.webcams.length) : "key not configured"} warn={snapshot.webcams.length === 0} />
+        <Row label="Known exploited CVEs" value={chunkValue("cyber", cyberValue).value} warn={cyberMeta?.status !== "ok" || chunkValue("cyber", "").warn} />
+        <Row label="EPSS scoring" value={chunkValue("cyber", epssValue).value} warn={cyberMeta?.epss.status !== "ok" || chunkValue("cyber", "").warn} />
+        <Row label="Webcam metadata" value={chunkValue("media-context", snapshot.webcams.length > 0 ? String(snapshot.webcams.length) : "key not configured").value} warn={(snapshot.webcams.length === 0 && snapshotRuntime?.chunks["media-context"]?.status === "loaded") || chunkValue("media-context", "").warn} />
         <Row label="License/provenance audit" value={governanceValue} warn={!governance || governance.summary.unknownLicenseCount > 0 || governance.summary.highRiskSourceCount > 0} />
         <Row label="Access/staleness modes" value={accessValue} warn={!governance || governance.summary.staleOrPreservedCollectionCount > 0} />
       </div>
+
+      {snapshotRuntime && snapshotRuntime.totalChunkCount > 0 ? (
+        <div className="border-t border-white/8 px-4 py-3">
+          <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.18em] text-white/34">
+            <span>Domain chunk loading</span>
+            <span className="text-white/54">{snapshotRuntime.usableChunkCount}/{snapshotRuntime.totalChunkCount} usable</span>
+          </div>
+          <div className="mt-2 grid grid-cols-3 gap-1.5">
+            {Object.values(snapshotRuntime.chunks).map((chunk) => (
+              <div key={chunk.id} className={`rounded-sm border px-1.5 py-1 font-mono text-[8.5px] uppercase tracking-[0.08em] ${chunk.status === "loaded" ? chunk.stale ? "border-amber-200/18 bg-amber-300/[0.045] text-amber-100/66" : "border-emerald-200/16 bg-emerald-300/[0.04] text-emerald-100/64" : chunk.status === "error" || chunk.status === "degraded" ? "border-red-300/20 bg-red-400/[0.06] text-red-100/70" : "border-white/8 bg-white/[0.025] text-white/34"}`} title={chunk.error ?? `${chunk.title}: ${chunk.status}; pending chunks make no coverage claim`}>
+                {chunk.id.replace("-", " ")} · {chunk.status === "degraded" ? "stale" : chunk.status}
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 font-mono text-[8.5px] uppercase leading-relaxed tracking-[0.1em] text-white/26">
+            Pending/unavailable chunks are never represented as zero coverage. Degraded rows are prior retained data and are marked stale. Integrity: {snapshotRuntime.integrity}.
+          </p>
+        </div>
+      ) : null}
 
       {governance ? (
         <div className="border-t border-white/8 px-4 py-3">

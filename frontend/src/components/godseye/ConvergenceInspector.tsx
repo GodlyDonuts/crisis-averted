@@ -7,6 +7,8 @@ import { CONVERGENCE_CLASSIFICATION_META } from "./ConvergenceSection";
 
 interface ConvergenceInspectorProps {
   analysis: DomainConvergenceAnalysis;
+  /** True while evidence chunks are still loading; zero cards must not be read as absence. */
+  evidencePending?: boolean;
   /** Cards already scoped to the current filter/playback lens, strongest first. */
   cards: IncidentConvergenceCard[];
   /** Total cards in the full filter scope before the playback lens was applied. */
@@ -22,7 +24,7 @@ interface ConvergenceInspectorProps {
  * scope, exposes classification mix, evidence gaps, and per-card copyable analyst
  * summaries. Selecting a card opens the incident drill-down with full factor rationale.
  */
-export function ConvergenceInspector({ analysis, cards, scopeCardCount, playbackActive, eventsById, onSelectEvent, onClose }: ConvergenceInspectorProps) {
+export function ConvergenceInspector({ analysis, evidencePending = false, cards, scopeCardCount, playbackActive, eventsById, onSelectEvent, onClose }: ConvergenceInspectorProps) {
   const stats = analysis.stats;
   return (
     <aside className="godseye-panel pointer-events-auto absolute bottom-[172px] right-4 top-20 z-30 hidden w-[372px] flex-col overflow-hidden xl:flex">
@@ -34,7 +36,7 @@ export function ConvergenceInspector({ analysis, cards, scopeCardCount, playback
         <div className="flex items-center gap-2">
           <span className="flex items-center gap-1.5 rounded-full border border-sky-300/20 bg-sky-400/10 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-sky-100/78">
             <Network className="h-3 w-3" />
-            {cards.length}{playbackActive && scopeCardCount !== cards.length ? `/${scopeCardCount}` : ""} cards
+            {evidencePending ? "…" : cards.length}{!evidencePending && playbackActive && scopeCardCount !== cards.length ? `/${scopeCardCount}` : ""} cards
           </span>
           <button
             type="button"
@@ -49,11 +51,13 @@ export function ConvergenceInspector({ analysis, cards, scopeCardCount, playback
 
       <div className="border-b border-white/8 px-4 py-2.5">
         <p className="font-mono text-[9px] uppercase leading-relaxed tracking-[0.1em] text-white/30">
-          corroboration {stats.corroborationCount} · correlation {stats.correlationCount} · coincidence {stats.coincidenceCount}
+          {evidencePending
+            ? "evidence chunks in flight — classification counts withheld"
+            : `corroboration ${stats.corroborationCount} · correlation ${stats.correlationCount} · coincidence ${stats.coincidenceCount}`}
           {playbackActive ? " · playback lens active" : ""}
         </p>
         <p className="mt-1 font-mono text-[9px] uppercase leading-relaxed tracking-[0.1em] text-white/24">
-          co-occurrence geometry only — never causality or attribution{analysis.gaps.length > 0 ? ` · ${analysis.gaps.length} domain${analysis.gaps.length === 1 ? "" : "s"} unevaluable (evidence gaps)` : ""}
+          co-occurrence geometry only — never causality or attribution{!evidencePending && analysis.gaps.length > 0 ? ` · ${analysis.gaps.length} domain${analysis.gaps.length === 1 ? "" : "s"} unevaluable (evidence gaps)` : ""}
         </p>
       </div>
 
@@ -61,10 +65,12 @@ export function ConvergenceInspector({ analysis, cards, scopeCardCount, playback
         {cards.length === 0 ? (
           <div className="px-3 py-8 text-center">
             <p className="font-mono text-xs uppercase tracking-[0.16em] text-white/28">
-              No convergence cards in current scope{playbackActive ? " or playback frame" : ""}
+              {evidencePending ? "Evidence chunks still loading" : `No convergence cards in current scope${playbackActive ? " or playback frame" : ""}`}
             </p>
             <p className="mx-auto mt-3 max-w-[280px] font-mono text-[9px] uppercase leading-relaxed tracking-[0.1em] text-white/22">
-              Evidence domains cover the recent snapshot era; older incidents honestly produce no convergence. Absence of convergence is not evidence of absence.
+              {evidencePending
+                ? "Transport, maritime, orbital, environmental, connectivity, and media evidence is still arriving. Zero cards are not a coverage claim until every evidence chunk is terminal."
+                : "Evidence domains cover the recent snapshot era; older incidents honestly produce no convergence. Absence of convergence is not evidence of absence."}
             </p>
           </div>
         ) : cards.map((card) => {

@@ -25,6 +25,10 @@ interface ControlDeckProps {
   convergenceCardCount?: number;
   /** Convergence cards across the full filter scope (export coverage), as opposed to the playback-lens-filtered badge count. */
   convergenceScopeCardCount?: number;
+  convergenceEvidencePending?: boolean;
+  /** Export is enabled only when every domain chunk is usable; otherwise counts/provenance would silently describe partial coverage. */
+  snapshotReadyForExport?: boolean;
+  snapshotStatusLabel?: string | null;
   watchOpen?: boolean;
   watchAlertCount?: number;
   surgeSignalCount?: number;
@@ -93,6 +97,9 @@ export default function ControlDeck({
   convergenceOpen = false,
   convergenceCardCount = 0,
   convergenceScopeCardCount,
+  convergenceEvidencePending = false,
+  snapshotReadyForExport = true,
+  snapshotStatusLabel = null,
   watchOpen = false,
   watchAlertCount = 0,
   surgeSignalCount = 0,
@@ -133,6 +140,10 @@ export default function ControlDeck({
   }, [exportOpen]);
 
   const runExport = (format: "json" | "markdown" | "csv") => {
+    if (!snapshotReadyForExport) {
+      setExportStatus({ kind: "error", message: `export withheld until all OSINT domain chunks are terminal — ${snapshotStatusLabel ?? "snapshot still loading"}; partial counts would be coverage fiction` });
+      return;
+    }
     if (!buildAnalystExport) {
       setExportStatus({ kind: "error", message: "export builder unavailable — workspace still initializing" });
       return;
@@ -258,7 +269,9 @@ export default function ControlDeck({
             >
               <Network className="h-3.5 w-3.5" />
               Conv
-              {convergenceCardCount > 0 ? (
+              {convergenceEvidencePending ? (
+                <span className="rounded-sm bg-white/[0.07] px-1 text-[9px] text-white/52" title="Evidence chunks loading; count withheld">…</span>
+              ) : convergenceCardCount > 0 ? (
                 <span className="rounded-sm bg-white/[0.07] px-1 text-[9px] text-white/52">{convergenceCardCount}</span>
               ) : null}
             </button>

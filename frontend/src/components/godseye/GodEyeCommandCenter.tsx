@@ -60,11 +60,35 @@ function createDefaultFilters(): ConflictFilters {
 }
 
 const DEFAULT_LAYERS: GodEyeLayerToggles = DEFAULT_OPERATOR_LAYERS;
+const EMPTY_SNAPSHOT_CONFLICT_EVENTS: ConflictEvent[] = [];
+
+function describeOsintRuntime(runtime: ReturnType<typeof useOsintSnapshot>["runtime"]): { message: string; tone: "loading" | "warning" | "error" } | null {
+  const progress = `${runtime.usableChunkCount}/${runtime.totalChunkCount || "?"}`;
+  if (runtime.phase === "critical-loading" || runtime.phase === "manifest-loading") {
+    return { message: `OSINT lattice ${progress} — critical conflict/context chunks loading; heavy transport/media not yet requested`, tone: "loading" };
+  }
+  if (runtime.phase === "background-loading") {
+    return { message: `critical conflict/context ready — ${progress} domain chunks usable; pending layers are loading, not zero coverage`, tone: "loading" };
+  }
+  if (runtime.phase === "degraded") {
+    return { message: `OSINT lattice degraded — ${runtime.error ?? "one or more chunks failed"}; retained rows are marked stale, never fresh`, tone: "warning" };
+  }
+  if (runtime.phase === "failed") {
+    return { message: `OSINT lattice unavailable — ${runtime.error ?? "manifest and compatibility artifact failed"}`, tone: "error" };
+  }
+  if (runtime.stale) return { message: "domain chunks complete — source-defined preserved/stale collections disclosed in source status", tone: "warning" };
+  return null;
+}
 
 export default function GodEyeCommandCenter() {
   const osintSnapshot = useOsintSnapshot();
+  const osintRuntime = osintSnapshot.runtime;
   const snapshotConflictEvents = useMemo(
-    () => osintSnapshot.mapOfWarsEvents.map(normalizeMapOfWarsEvent).filter((event): event is ConflictEvent => event !== null),
+    () => {
+      const normalized = osintSnapshot.mapOfWarsEvents.map(normalizeMapOfWarsEvent).filter((event): event is ConflictEvent => event !== null);
+      // Stable empty identity: pending chunk shells must not restart the independent conflict-feed loader.
+      return normalized.length > 0 ? normalized : EMPTY_SNAPSHOT_CONFLICT_EVENTS;
+    },
     [osintSnapshot.mapOfWarsEvents]
   );
   const { events, source, loading, refreshing, error, lastUpdated, correlation, paused, setPaused, refresh } = useConflictEvents(snapshotConflictEvents);
@@ -167,7 +191,7 @@ export default function GodEyeCommandCenter() {
   // frame): the engine's temporal gates already align evidence honestly in time, so a
   // historical playback frame cannot manufacture anachronistic aviation/AIS alignments.
   // The inspector then applies the playback lens as a display filter over card membership.
-  const convergence = useDomainConvergence(visibleEvents, osintSnapshot);
+  const convergence = useDomainConvergence(visibleEvents, osintSnapshot, osintRuntime.evidencePending);
   const eventsById = useMemo(() => {
     const map = new Map<string, ConflictEvent>();
     for (const event of visibleEvents) map.set(event.id, event);
@@ -374,6 +398,7 @@ export default function GodEyeCommandCenter() {
       corpusIncidentCount: events.length,
       feed: { source, lastUpdated, error, correlation },
       snapshot: osintSnapshot,
+      snapshotRuntime: osintRuntime,
       convergence: convergence.analysis,
       convergenceDisclaimer: CONVERGENCE_DISCLAIMER,
       surge: surgeAnalysis,
@@ -388,6 +413,7 @@ export default function GodEyeCommandCenter() {
     events.length,
     filters,
     lastUpdated,
+    osintRuntime,
     osintSnapshot,
     playback.frame,
     playbackActive,
@@ -647,6 +673,9 @@ export default function GodEyeCommandCenter() {
     };
   }, [tourActive, focusCamera]);
 
+  const osintStatus = describeOsintRuntime(osintRuntime);
+  const snapshotReadyForExport = osintRuntime.complete && !osintRuntime.evidencePending;
+
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-[#01040a] text-white">
       {globeUnavailable ? (
@@ -697,6 +726,11 @@ export default function GodEyeCommandCenter() {
       )}
 
       <div className="pointer-events-none absolute inset-0 z-20">
+        {osintStatus ? (
+          <div role="status" className={`pointer-events-auto absolute left-1/2 top-[4.35rem] z-30 w-[min(43rem,calc(100vw-2rem))] -translate-x-1/2 rounded-sm border px-3 py-1.5 text-center font-mono text-[9px] uppercase leading-relaxed tracking-[0.13em] backdrop-blur-md ${osintStatus.tone === "error" ? "border-red-300/24 bg-red-400/10 text-red-100/78" : osintStatus.tone === "warning" ? "border-amber-300/20 bg-amber-400/10 text-amber-100/76" : "border-cyan-300/18 bg-cyan-400/[0.075] text-cyan-100/72"}`}>
+            {osintStatus.message}
+          </div>
+        ) : null}
         <TopCommandBar
           summary={summary}
           source={source}
@@ -719,6 +753,7 @@ export default function GodEyeCommandCenter() {
         {sourcePanelOpen ? (
           <SourceStatusPanel
             snapshot={osintSnapshot}
+            snapshotRuntime={osintRuntime}
             conflictSource={source}
             conflictError={error}
             lastUpdated={lastUpdated}
@@ -794,6 +829,7 @@ export default function GodEyeCommandCenter() {
           ) : convergenceOpen ? (
             <ConvergenceInspector
               analysis={convergence.analysis}
+              evidencePending={convergence.evidencePending}
               cards={convergenceCards}
               scopeCardCount={convergence.analysis.cards.length}
               playbackActive={playback.active}
@@ -835,6 +871,9 @@ export default function GodEyeCommandCenter() {
           convergenceOpen={convergenceOpen}
           convergenceCardCount={convergenceCards.length}
           convergenceScopeCardCount={convergence.analysis.cards.length}
+          convergenceEvidencePending={convergence.evidencePending}
+          snapshotReadyForExport={snapshotReadyForExport}
+          snapshotStatusLabel={osintStatus?.message ?? null}
           watchOpen={watchOpen}
           watchAlertCount={watchEvaluation.stats.triggeredRuleCount}
           surgeSignalCount={surgeSignalCount}

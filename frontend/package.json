@@ -9,6 +9,7 @@
     "start": "node ../scripts/serve-static.mjs",
     "lint": "eslint",
     "validate:url-state": "node ../scripts/validate-operator-url-state.mjs",
+    "validate:osint-chunks": "node ../scripts/validate-osint-chunks.mjs",
     "validate:source-governance": "node ../scripts/validate-source-governance.mjs"
   },
   "dependencies": {

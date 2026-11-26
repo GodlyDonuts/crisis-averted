@@ -13,6 +13,7 @@ import type {
   WatchEvaluationResult,
   WatchRule,
 } from "@/types/conflict";
+import type { OsintSnapshotRuntime } from "@/lib/osintSnapshotChunks";
 import {
   encodeOperatorUrlState,
   looksLikeSecretMaterial,
@@ -135,6 +136,8 @@ export interface AnalystExportInput {
   corpusIncidentCount: number;
   feed: AnalystExportFeedProvenance;
   snapshot: OsintSnapshot;
+  /** Domain-chunk load/completeness/staleness state at export time. Optional only for legacy callers/tests. */
+  snapshotRuntime?: OsintSnapshotRuntime | null;
   convergence: DomainConvergenceAnalysis | null;
   /** Convergence co-occurrence disclaimer verbatim from the engine; cards carry it per-card but the analysis type does not. */
   convergenceDisclaimer?: string | null;
@@ -475,6 +478,7 @@ export interface AnalystExportBundle {
       sources: Record<string, string>;
       errors: string[];
       domainCounts: Record<string, number>;
+      domainChunkCompleteness: unknown;
       ucdpMeta: unknown;
       gdeltGeoMeta: unknown;
       internetOutageMeta: unknown;
@@ -523,8 +527,8 @@ export interface AnalystExportBundle {
   exportContents: string[];
 }
 
-function sortObjectByKeys(record: Record<string, string>): Record<string, string> {
-  const out: Record<string, string> = {};
+function sortObjectByKeys<T>(record: Record<string, T>): Record<string, T> {
+  const out: Record<string, T> = {};
   for (const key of Object.keys(record).sort(compareStrings)) out[key] = record[key];
   return out;
 }
@@ -844,6 +848,39 @@ export function buildAnalystExportBundle(input: AnalystExportInput): AnalystExpo
   const sortedRetrieval: Record<string, string | null> = {};
   for (const key of Object.keys(retrievalTimestamps).sort(compareStrings)) sortedRetrieval[key] = retrievalTimestamps[key];
 
+  const snapshotRuntime = input.snapshotRuntime ?? null;
+  const domainChunkCompleteness = snapshotRuntime ? {
+    phase: snapshotRuntime.phase,
+    complete: snapshotRuntime.complete,
+    criticalReady: snapshotRuntime.criticalReady,
+    criticalComplete: snapshotRuntime.criticalComplete,
+    evidencePending: snapshotRuntime.evidencePending,
+    stale: snapshotRuntime.stale,
+    error: snapshotRuntime.error,
+    integrity: snapshotRuntime.integrity,
+    usableChunkCount: snapshotRuntime.usableChunkCount,
+    totalChunkCount: snapshotRuntime.totalChunkCount,
+    loadedBytes: snapshotRuntime.loadedBytes,
+    totalBytes: snapshotRuntime.totalBytes,
+    chunks: Object.values(snapshotRuntime.chunks)
+      .filter((chunk): chunk is NonNullable<typeof chunk> => Boolean(chunk))
+      .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id))
+      .map((chunk) => ({
+        id: chunk.id,
+        status: chunk.status,
+        critical: chunk.critical,
+        stale: chunk.stale,
+        retainedFromPrevious: chunk.retainedFromPrevious,
+        bytes: chunk.bytes,
+        sha256: chunk.sha256,
+        collections: [...chunk.collections].sort(compareStrings),
+        counts: sortObjectByKeys({ ...chunk.counts }),
+        retrieval: cloneJsonSection(chunk.retrieval),
+        error: chunk.error,
+      })),
+    interpretation: "pending or error chunk states mean absent rows are unknown/unavailable rather than negative coverage; degraded means prior rows were retained and are explicitly stale",
+  } : null;
+
   const algorithmVersions: Record<string, string | number> = {
     exportSchema: ANALYST_EXPORT_SCHEMA_VERSION,
     operatorUrlState: OPERATOR_URL_STATE_VERSION,
@@ -951,6 +988,7 @@ export function buildAnalystExportBundle(input: AnalystExportInput): AnalystExpo
         sources: sortObjectByKeys(typeof snapshot?.sources === "object" && snapshot.sources ? { ...snapshot.sources } : {}),
         errors: Array.isArray(snapshot?.errors) ? snapshot.errors.filter((line): line is string => typeof line === "string").sort(compareStrings) : [],
         domainCounts,
+        domainChunkCompleteness,
         ucdpMeta: cloneMeta(snapshot?.ucdpMeta ?? null, "ucdpMeta"),
         gdeltGeoMeta: cloneMeta(snapshot?.gdeltGeoMeta ?? null, "gdeltGeoMeta"),
         internetOutageMeta: cloneMeta(snapshot?.internetOutageMeta ?? null, "internetOutageMeta"),

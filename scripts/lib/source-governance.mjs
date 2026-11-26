@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, extname, join, relative, resolve } from 'node:path';
+import { OSINT_COLLECTION_TO_CHUNK, chunkJsonPointer, chunkPublicPath } from './osint-chunk-layout.mjs';
 
 export const REGISTRY_SCHEMA_VERSION = 'source-registry/v1';
 export const LEDGER_SCHEMA_VERSION = 'provenance-ledger/v1';
@@ -440,10 +441,11 @@ export function buildSnapshotProvenanceLedger({ registry, snapshot, ingestionEve
       attributionRequirement: entry.attribution.requirement,
       redistributionRisk: entry.redistribution.publicStaticRisk,
     }))));
+    const chunkSpec = OSINT_COLLECTION_TO_CHUNK[collection];
     collections[collection] = {
       collection,
-      artifact: 'data/osint-snapshot.json',
-      jsonPointer: `/${collection}`,
+      artifact: chunkSpec ? chunkPublicPath(chunkSpec) : 'data/osint-snapshot.json',
+      jsonPointer: chunkSpec ? chunkJsonPointer(collection) : `/${collection}`,
       schemaVersion: `${collection}/normalized/v1`,
       recordCount: records.length,
       sourceIds: sourceEntries.map((entry) => entry.sourceId),
@@ -676,7 +678,10 @@ export function validateSnapshotGovernance(snapshot, registry) {
     const ledgerIds = Array.isArray(entry.sourceIds) ? [...entry.sourceIds].sort() : [];
     if (!sameJson(registeredIds, ledgerIds)) errors.push(`${collection} registry coverage drift: registered ${registeredIds.join(',') || 'none'} but ledger ${ledgerIds.join(',') || 'none'}`);
     if (entry.recordCount !== records.length) errors.push(`${collection} ledger recordCount ${entry.recordCount} does not match emitted array length ${records.length}`);
-    if (entry.artifact !== 'data/osint-snapshot.json' || entry.jsonPointer !== `/${collection}`) errors.push(`${collection} invalid artifact/jsonPointer provenance`);
+    const chunkSpec = OSINT_COLLECTION_TO_CHUNK[collection];
+    const expectedArtifact = chunkSpec ? chunkPublicPath(chunkSpec) : 'data/osint-snapshot.json';
+    const expectedPointer = chunkSpec ? chunkJsonPointer(collection) : `/${collection}`;
+    if (entry.artifact !== expectedArtifact || entry.jsonPointer !== expectedPointer) errors.push(`${collection} invalid artifact/jsonPointer provenance`);
     if (!/^[0-9a-f]{64}$/.test(String(entry.normalizationSha256 ?? ''))) errors.push(`${collection} normalization hash malformed`);
     else if (entry.normalizationSha256 !== sha256Text(stableStringify(records))) errors.push(`${collection} normalization hash does not match emitted records`);
     if (!/^[0-9a-f]{64}$/.test(String(entry.provenanceSha256 ?? ''))) errors.push(`${collection} provenance hash malformed`);

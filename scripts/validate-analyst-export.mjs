@@ -468,6 +468,12 @@ console.log('\nscenario 1: schema shape, version metadata, caveats, and UTC time
   check('watch review-aid caveat is carried', typeof bundle.caveats.watchReviewAidOnly === 'string' && bundle.caveats.watchReviewAidOnly.includes('not verified operational warnings'));
   check('attribution/licensing caveat names CC BY 4.0 and GDELT citation', bundle.caveats.attributionLicensing.includes('CC BY 4.0') && bundle.caveats.attributionLicensing.includes('gdeltproject.org'));
   check('algorithm version metadata spans correlation/convergence/surge/watch/url-state', Boolean(bundle.generator.algorithmVersions.incidentCorrelation) && Boolean(bundle.generator.algorithmVersions.domainConvergence) && Boolean(bundle.generator.algorithmVersions.escalationSurge) && Boolean(bundle.generator.algorithmVersions.watchRules) && bundle.generator.algorithmVersions.operatorUrlState === 1, JSON.stringify(bundle.generator.algorithmVersions));
+  const runtimeArtifacts = buildAnalystExportArtifacts(makeInput({ inputOverrides: { snapshotRuntime: {
+    phase: 'complete', complete: true, criticalReady: true, criticalComplete: true, evidencePending: false, stale: false, error: null, integrity: 'verified', usableChunkCount: 1, totalChunkCount: 1, loadedBytes: 10, totalBytes: 10,
+    chunks: { conflict: { id: 'conflict', status: 'loaded', critical: true, stale: false, retainedFromPrevious: false, bytes: 10, sha256: '0'.repeat(64), collections: ['mapOfWarsEvents'], counts: { mapOfWarsEvents: 2 }, retrieval: null, error: null, priority: 0 } },
+  } } }));
+  const chunkCompleteness = runtimeArtifacts.bundle.provenance.snapshot.domainChunkCompleteness;
+  check('domain chunk completeness/staleness/integrity state survives analyst export', chunkCompleteness?.phase === 'complete' && chunkCompleteness?.integrity === 'verified' && chunkCompleteness?.chunks?.[0]?.id === 'conflict' && chunkCompleteness?.interpretation?.includes('rather than negative coverage'), JSON.stringify(chunkCompleteness));
   check('JSON round-trips as a parseable artifact', (() => { try { JSON.parse(artifacts.json); return true; } catch { return false; } })());
   check('markdown states unverified OSINT and no operational authority', artifacts.markdown.includes('UNVERIFIED OSINT') && artifacts.markdown.includes('NO OPERATIONAL AUTHORITY'));
   check('csv preamble states unverified OSINT and no operational authority before the header', artifacts.csv.indexOf('UNVERIFIED OSINT') < artifacts.csv.indexOf('"id","occurred_utc"') && artifacts.csv.includes('NO OPERATIONAL AUTHORITY'));
