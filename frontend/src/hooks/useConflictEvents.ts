@@ -13,6 +13,8 @@ interface ConflictEventsState {
   refreshing: boolean;
   error: string | null;
   lastUpdated: number | null;
+  paused: boolean;
+  setPaused: (paused: boolean) => void;
   refresh: () => Promise<void>;
 }
 
@@ -23,6 +25,7 @@ export function useConflictEvents(snapshotEvents: ConflictEvent[] = []): Conflic
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  const [paused, setPaused] = useState(false);
   const mountedRef = useRef(true);
   const requestSeqRef = useRef(0);
 
@@ -49,13 +52,13 @@ export function useConflictEvents(snapshotEvents: ConflictEvent[] = []): Conflic
   useEffect(() => {
     mountedRef.current = true;
     const initialLoad = window.setTimeout(() => void refresh(), 0);
-    const interval = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
+    const interval = paused ? 0 : window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
     return () => {
       mountedRef.current = false;
       window.clearTimeout(initialLoad);
       window.clearInterval(interval);
     };
-  }, [refresh]);
+  }, [refresh, paused]);
 
-  return { events, source, loading, refreshing, error, lastUpdated, refresh };
+  return { events, source, loading, refreshing, error, lastUpdated, paused, setPaused, refresh };
 }

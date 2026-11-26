@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Activity, Crosshair, Globe2, Radio, RefreshCw, Satellite, Search } from "lucide-react";
+import { Activity, Crosshair, Globe2, Pause, Play, Radio, RefreshCw, Satellite, Search } from "lucide-react";
 import type { ConflictSummary } from "@/types/conflict";
 import type { GodEyeVisualMode } from "./GodEyeGlobe";
 import { formatCompact, formatRelativeTime } from "@/lib/conflictData";
@@ -11,12 +11,14 @@ interface TopCommandBarProps {
   source: "live" | "fallback" | null;
   loading: boolean;
   refreshing: boolean;
+  paused: boolean;
   lastUpdated: number | null;
   query: string;
   visualMode: GodEyeVisualMode;
   onQueryChange: (query: string) => void;
   onVisualModeChange: (mode: GodEyeVisualMode) => void;
   onRefresh: () => void;
+  onTogglePause: () => void;
   sourcePanelOpen: boolean;
   onToggleSourcePanel: () => void;
 }
@@ -40,12 +42,14 @@ export default function TopCommandBar({
   source,
   loading,
   refreshing,
+  paused,
   lastUpdated,
   query,
   visualMode,
   onQueryChange,
   onVisualModeChange,
   onRefresh,
+  onTogglePause,
   sourcePanelOpen,
   onToggleSourcePanel,
 }: TopCommandBarProps) {
@@ -136,6 +140,15 @@ export default function TopCommandBar({
             </button>
           </div>
 
+          <button
+            type="button"
+            onClick={onTogglePause}
+            aria-pressed={paused}
+            aria-label={paused ? "Resume automatic intelligence refresh" : "Pause automatic intelligence refresh"}
+            className={`flex h-10 w-10 items-center justify-center rounded-sm border transition ${paused ? "border-amber-200/30 bg-amber-300/[0.1] text-amber-100" : "border-white/10 bg-white/[0.03] text-white/55 hover:border-amber-200/25 hover:text-amber-100"}`}
+          >
+            {paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+          </button>
           <button
             type="button"
             onClick={onRefresh}
